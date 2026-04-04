@@ -1,0 +1,27 @@
+{
+  "ingested_files": {
+    "/Users/jeff/culinary-engine/docs/research/l0-l2-linking-research.md": "c9b57bc588f94cccdcfa9e12dff3e210",
+    "/Users/jeff/culinary-engine/docs/research/search-grounded-llms-for-ingredient-data.md": "05cdd350dc2c2a6c8356b6e07c4ad8df",
+    "/Users/jeff/culinary-engine/docs/research/architecture-briefing-for-cc-lead.md": "0290ef743f9a74a7fff0e0b2915639fd",
+    "/Users/jeff/culinary-engine/docs/research/exhaustive-food-databases-survey.md": "298e9d8aa8ff71802ede798221e230b2",
+    "/Users/jeff/culinary-engine/docs/research/notebooklm-youtube-food-extraction.md": "a0fb81d368256a85947db34153ba05af",
+    "/Users/jeff/culinary-engine/docs/research/multi-layer-food-knowledge-modeling.md": "728f04ed432100dd846180e2a77436fb",
+    "/Users/jeff/culinary-engine/docs/research/database-availability-audit.md": "46ea528ed276349c7fb14733223448d4",
+    "/Users/jeff/culinary-engine/reports/daily_20260401.md": "fada5c9f246a55a60f45add43b96b78f",
+    "/Users/jeff/culinary-engine/reports/daily_20260331.md": "b0ebc7eaecf97e3073103dd3c3d09e72",
+    "/Users/jeff/culinary-engine/reports/daily_20260325.md": "93151a5c158958a5f6695dd8fc6cad61",
+    "/Users/jeff/culinary-engine/reports/daily_20260324.md": "49f4e64066834fe62706866f805cd1bd",
+    "/Users/jeff/culinary-engine/reports/daily_20260330.md": "b9a75d0cf3f6dcdb6b3f924a584744cf",
+    "/Users/jeff/culinary-engine/reports/daily_20260327.md": "b3b9da8ec5db2f2a350c3a407d1e0946",
+    "/Users/jeff/culinary-engine/reports/book_inventory_20260328.md": "ff7b4c230be1a0da9676f82a2b8ef08d",
+    "/Users/jeff/culinary-engine/reports/daily_20260323.md": "2cbb12b179bd944a2f353ddbf35a97ee",
+    "/Users/jeff/culinary-engine/reports/daily_20260326.md": "6f2c9f0e31fca7b92e333afc0432a78d",
+    "/Users/jeff/culinary-engine/reports/orchestrator_stage4_dashi_umami_result.md": "55bd26cc2393f19c06e53ca548ec04ee",
+    "/Users/jeff/culinary-engine/reports/daily_20260329.md": "fb75bcd028741c2bd48782e9b817e380",
+    "/Users/jeff/culinary-engine/reports/daily_20260402.md": "caeedf79222b938572043392693d55e2",
+    "/Users/jeff/culinary-engine/reports/orchestrator_ocr_stage1_noma_vegetable_result.md": "2e3b22c4b24146862f8a5e53f7105871",
+    "/Users/jeff/culinary-engine/reports/daily_20260328.md": "12b188be419de9213184ab58132f002f",
+    "/Users/jeff/culinary-engine/reports/daily_20260403.md": "82c1f2cfe9a2259ccdb7a613e03d1477"
+  },
+  "last_ingest": "2026-04-04T02:30:10.777995+00:00"
+}
