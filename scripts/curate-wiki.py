@@ -144,8 +144,17 @@ def read_wiki_page(name):
         return parse_frontmatter(f.read())
 
 
+def clean_page_name(name):
+    """Sanitize page name for Obsidian compatibility."""
+    # "Pipeline Status / L0 Knowledge Base" → "Pipeline-Status/L0-Knowledge-Base"
+    name = name.replace(" / ", "/").replace(" - ", "-")
+    parts = name.split("/")
+    return "/".join(p.strip().replace(" ", "-") for p in parts)
+
+
 def write_wiki_page(name, meta, body):
     """Write a wiki page with frontmatter."""
+    name = clean_page_name(name)
     path = os.path.join(WIKI_DIR, name if name.endswith(".md") else f"{name}.md")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     meta["last_updated"] = ts()
