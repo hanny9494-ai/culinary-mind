@@ -216,77 +216,142 @@ def step_ingest(since=""):
 # ── Step 2: EXTRACT ──
 
 def step_extract(raw_data):
-    """Extract meaningful insights from raw data."""
+    """Extract meaningful insights from raw data — processes docs in batches."""
     print("[curator] Step 2: EXTRACT")
 
-    # Build a summary of raw data for the LLM
-    sections = []
+    all_insights = []
 
-    if raw_data.get("conversations"):
-        convs = raw_data["conversations"][-20:]
-        sections.append("## Recent Conversations\n" + "\n".join(
-            f"- [{c.get('agent','?')}]: {c.get('content','')[:200]}" for c in convs
-        ))
+    # Priority docs to process individually (full content)
+    priority_docs = []
+    for r in raw_data.get("reports", []):
+        fname = r.get("filename", "")
+        content = r.get("content", "")
+        if not content or len(content) < 50:
+            continue
+        # CLAUDE.md and STATUS.md get full treatment
+        if fname in ("CLAUDE.md", "STATUS.md"):
+            priority_docs.insert(0, r)
+        # Research and design docs
+        elif any(k in fname.lower() for k in ("research", "architecture", "design", "schema", "routing", "handover", "onboard")):
+            priority_docs.append(r)
+        # Daily reports (batch later)
+        elif "daily" in fname:
+            continue  # handled in batch below
+        else:
+            priority_docs.append(r)
 
-    if raw_data.get("reports"):
-        for r in raw_data["reports"][:5]:
-            sections.append(f"## Report: {r.get('filename','?')}\n{r.get('content','')[:2000]}")
+    # Batch 1: CLAUDE.md — extract architecture, agents, decisions, pipeline
+    claude_docs = [d for d in priority_docs if d.get("filename") == "CLAUDE.md"]
+    if claude_docs:
+        print("  [batch 1/4] CLAUDE.md (architecture + agents + decisions)...")
+        insights = _extract_from_text(
+            f"## CLAUDE.md (Project Handbook)\n{claude_docs[0]['content'][:12000]}",
+            "这是项目操作手册。提取：七层架构定义(L0-L6+FT)、每个agent的角色和职责、所有技术决策、pipeline流程、API配置、git工作流。务必提取每一层的详细定义和当前状态。"
+        )
+        all_insights.extend(insights)
 
+    # Batch 2: STATUS.md — extract current state
+    status_docs = [d for d in priority_docs if d.get("filename") == "STATUS.md"]
+    if status_docs:
+        print("  [batch 2/4] STATUS.md (current project state)...")
+        insights = _extract_from_text(
+            f"## STATUS.md (Current State)\n{status_docs[0]['content'][:12000]}",
+            "这是项目当前状态。提取：每本书的pipeline进度、L0/L2a/L2b/L2c的具体数据量、阻塞项、待办队列、最近完成的工作。"
+        )
+        all_insights.extend(insights)
+
+    # Batch 3: Research & design docs — extract key findings
+    research_docs = [d for d in priority_docs if d.get("filename") not in ("CLAUDE.md", "STATUS.md")]
+    if research_docs:
+        print(f"  [batch 3/4] {len(research_docs)} research/design docs...")
+        # Process in groups of 3
+        for i in range(0, len(research_docs), 3):
+            batch = research_docs[i:i+3]
+            text = "\n\n".join(
+                f"## {d['filename']}\n{d['content'][:4000]}" for d in batch
+            )
+            insights = _extract_from_text(text,
+                "从这些研究/设计文档中提取关键发现、技术决策、架构方案和数据源信息。"
+            )
+            all_insights.extend(insights)
+
+    # Batch 4: Operational data (dispatches, results, git, conversations)
+    ops_sections = []
     if raw_data.get("dispatches"):
-        sections.append("## Recent Dispatches\n" + "\n".join(
-            f"- {d.get('from','?')} → {d.get('to','?')}: {d.get('task','')[:100]}" for d in raw_data["dispatches"][-15:]
+        ops_sections.append("## Dispatches\n" + "\n".join(
+            f"- {d.get('from','?')} → {d.get('to','?')}: {d.get('task','')[:100]}"
+            for d in raw_data["dispatches"][-20:]
         ))
-
     if raw_data.get("results"):
-        sections.append("## Recent Results\n" + "\n".join(
-            f"- {r.get('from','?')}: {r.get('summary','')[:100]} [{r.get('status','?')}]" for r in raw_data["results"][-15:]
+        ops_sections.append("## Results\n" + "\n".join(
+            f"- {r.get('from','?')}: {r.get('summary','')[:100]} [{r.get('status','?')}]"
+            for r in raw_data["results"][-20:]
         ))
-
-    if raw_data.get("decisions"):
-        sections.append("## Decisions\n" + "\n".join(
-            f"- #{d.get('number','?')}: {d.get('text','')[:150]}" for d in raw_data["decisions"]
+    if raw_data.get("conversations"):
+        ops_sections.append("## Conversations\n" + "\n".join(
+            f"- [{c.get('agent','?')}]: {c.get('content','')[:300]}"
+            for c in raw_data["conversations"][-10:]
         ))
-
     if raw_data.get("git_log"):
-        sections.append("## Recent Git Commits\n" + "\n".join(
-            f"- {g.get('date','')[:10]} {g.get('subject','')}" for g in raw_data["git_log"][:20]
+        ops_sections.append("## Git Log\n" + "\n".join(
+            f"- {g.get('date','')[:10]} {g.get('subject','')}"
+            for g in raw_data["git_log"][:30]
         ))
+    if ops_sections:
+        print("  [batch 4/4] Operational data (dispatches, results, git, conversations)...")
+        insights = _extract_from_text(
+            "\n\n".join(ops_sections),
+            "从运营数据中提取有价值的信息：任务完成情况、agent间协作模式、关键git变更。"
+        )
+        all_insights.extend(insights)
 
-    if not sections:
-        print("  No new data to extract from")
-        return []
+    # Deduplicate by insight text similarity (simple)
+    seen = set()
+    unique = []
+    for ins in all_insights:
+        key = ins.get("insight", "")[:80]
+        if key not in seen:
+            seen.add(key)
+            unique.append(ins)
 
-    raw_text = "\n\n".join(sections)
+    print(f"  Total extracted: {len(unique)} unique insights (from {len(all_insights)} raw)")
+    return unique
 
-    prompt = f"""Analyze the following raw project data and extract meaningful insights.
 
-For each insight, output a JSON object on its own line with:
-- "insight": the knowledge point (concise, factual)
-- "category": one of [status, decision, architecture, agent, book, concept, blocker, resource]
-- "related_pages": list of wiki pages this relates to (e.g., ["STATUS.md", "books/ofc.md"])
-- "importance": 1-10 (10 = critical project decision, 1 = minor detail)
+def _extract_from_text(text, focus_instruction):
+    """Call LLM to extract insights from a text chunk."""
+    prompt = f"""Analyze the following project data and extract ALL meaningful knowledge points.
 
-Only extract facts that are worth remembering long-term. Ignore:
-- Routine greetings, acknowledgments
-- Temporary debugging output
-- Repetitive status checks
+{focus_instruction}
+
+For each insight, output a JSON object on its own line:
+- "insight": the knowledge point (concise but complete — include specific numbers, names, paths)
+- "category": one of [status, decision, architecture, agent, book, concept, blocker, resource, pipeline]
+- "related_pages": wiki pages this relates to (e.g., ["Architecture/L0.md", "agents/coder.md"])
+- "importance": 1-10
+
+Be THOROUGH. Extract every fact worth remembering. Include:
+- Layer definitions (L0, L1, L2a, L2b, L2c, FT, L3, L6) with their exact purpose and status
+- Agent roles and responsibilities
+- Numbered decisions (#22, #23, etc.)
+- Pipeline stages and their tools
+- File paths, ports, API endpoints
+- Data quantities (number of books, entries, recipes)
+- Architectural principles and constraints
 
 Raw data:
-{raw_text[:8000]}
+{text[:12000]}
 
-Output ONLY valid JSON lines, one per insight. No other text."""
+Output ONLY valid JSON lines. No other text."""
 
     result = call_llm(
-        "你是 culinary-engine 项目的知识策展人。从原始数据中提取有价值的、值得长期记忆的洞察。只输出 JSON。",
+        "你是 culinary-engine 项目的知识策展人。全面、详尽地提取所有有价值的知识点。每个层级、每个agent、每个决策都要单独提取。只输出 JSON。",
         prompt,
-        max_tokens=3000,
+        max_tokens=4096,
     )
 
     if not result:
-        print("  [debug] LLM returned None")
         return []
-
-    print(f"  [debug] LLM response ({len(result)} chars): {result[:200]}...")
 
     insights = []
     for line in result.strip().split("\n"):
@@ -294,13 +359,12 @@ Output ONLY valid JSON lines, one per insight. No other text."""
         if not line or not line.startswith("{"):
             continue
         try:
-            insight = json.loads(line)
-            if "insight" in insight:
-                insights.append(insight)
+            ins = json.loads(line)
+            if "insight" in ins:
+                insights.append(ins)
         except json.JSONDecodeError:
             pass
 
-    print(f"  Extracted: {len(insights)} insights")
     return insights
 
 
