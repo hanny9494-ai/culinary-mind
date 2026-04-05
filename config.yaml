@@ -4,10 +4,14 @@
 project_root: ~/culinary-engine
 ce_hub_dir: ~/culinary-engine/.ce-hub
 
-# LLM API — Sonnet 4.6 via Lingya direct (no proxy)
-api_endpoint: https://api.lingyaai.cn/v1/chat/completions
-api_key_env: L0_API_KEY
-model: claude-sonnet-4-6
+# LLM API — Qwen 3.5 Flash (DashScope) while Lingya API is down
+# Switch to Sonnet 4.6 when Lingya recovers:
+#   api_endpoint: https://api.lingyaai.cn/v1/chat/completions
+#   api_key_env: L0_API_KEY
+#   model: claude-sonnet-4-6
+api_endpoint: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+api_key_env: DASHSCOPE_API_KEY
+model: qwen3.5-flash
 no_proxy: true
 max_tokens: 4096
 temperature: 0.3

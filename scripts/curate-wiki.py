@@ -87,10 +87,17 @@ def call_llm(system_prompt, user_prompt, max_tokens=None):
             cfg["api_endpoint"],
             json=payload,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            timeout=120,
+            timeout=300,
         )
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        if not content or not content.strip():
+            model_returned = data.get("model", "?")
+            tokens = data.get("usage", {}).get("total_tokens", 0)
+            print(f"[curator] WARNING: API returned empty content (model={model_returned}, tokens={tokens}). API may be down.")
+            return None
+        return content
     except Exception as e:
         print(f"[curator] API error: {type(e).__name__}: {e}")
         import traceback; traceback.print_exc()
@@ -240,23 +247,49 @@ def step_extract(raw_data):
         else:
             priority_docs.append(r)
 
-    # Batch 1: CLAUDE.md — extract architecture, agents, decisions, pipeline
+    # Batch 1: CLAUDE.md — split into 3 sub-batches (architecture, agents, decisions)
     claude_docs = [d for d in priority_docs if d.get("filename") == "CLAUDE.md"]
     if claude_docs:
-        print("  [batch 1/4] CLAUDE.md (architecture + agents + decisions)...")
+        content = claude_docs[0]['content']
+        # 1a: Architecture (layers)
+        print("  [batch 1a] CLAUDE.md → layers...")
         insights = _extract_from_text(
-            f"## CLAUDE.md (Project Handbook)\n{claude_docs[0]['content'][:12000]}",
-            "这是项目操作手册。提取：七层架构定义(L0-L6+FT)、每个agent的角色和职责、所有技术决策、pipeline流程、API配置、git工作流。务必提取每一层的详细定义和当前状态。"
+            f"## CLAUDE.md — Architecture Section\n{content[:4000]}",
+            "提取七层架构定义：L0, L1, L2a, L2b, L2c, FT, L3, L6。每层的名称、定位、当前状态。17个科学域列表。target_page用layers/L0.md格式。"
         )
         all_insights.extend(insights)
 
-    # Batch 2: STATUS.md — extract current state
+        # 1b: Agents
+        print("  [batch 1b] CLAUDE.md → agents...")
+        insights = _extract_from_text(
+            f"## CLAUDE.md — Agent Section\n{content[3000:6000]}",
+            "提取每个agent的角色定义和职责：cc-lead, coder, researcher, architect, pipeline-runner, pipeline-supervisor, code-reviewer, ops。target_page用agents/cc-lead.md格式。"
+        )
+        all_insights.extend(insights)
+
+        # 1c: Decisions + Pipeline + Infrastructure
+        print("  [batch 1c] CLAUDE.md → decisions + infra...")
+        insights = _extract_from_text(
+            f"## CLAUDE.md — Decisions & Infrastructure\n{content[5000:10000]}",
+            "提取所有编号决策(#22-#42)、pipeline流程(Stage1-5工具链)、基础设施服务(端口、API)。target_page用decisions/D22.md、pipeline/stage4.md、infrastructure/services.md格式。"
+        )
+        all_insights.extend(insights)
+
+    # Batch 2: STATUS.md — split into 2 sub-batches
     status_docs = [d for d in priority_docs if d.get("filename") == "STATUS.md"]
     if status_docs:
-        print("  [batch 2/4] STATUS.md (current project state)...")
+        content = status_docs[0]['content']
+        print("  [batch 2a] STATUS.md → current state...")
         insights = _extract_from_text(
-            f"## STATUS.md (Current State)\n{status_docs[0]['content'][:12000]}",
-            "这是项目当前状态。提取：每本书的pipeline进度、L0/L2a/L2b/L2c的具体数据量、阻塞项、待办队列、最近完成的工作。"
+            f"## STATUS.md — Current State\n{content[:5000]}",
+            "提取当前项目状态：每层的完成度百分比、数据量、阻塞项。target_page用layers/L0.md、STATUS.md格式。"
+        )
+        all_insights.extend(insights)
+
+        print("  [batch 2b] STATUS.md → books + pipeline...")
+        insights = _extract_from_text(
+            f"## STATUS.md — Books & Pipeline\n{content[4000:9000]}",
+            "提取每本书的pipeline进度、Stage4完成明细、待处理书籍队列。target_page用books/ofc.md、pipeline/stage4.md格式。"
         )
         all_insights.extend(insights)
 
@@ -264,12 +297,10 @@ def step_extract(raw_data):
     research_docs = [d for d in priority_docs if d.get("filename") not in ("CLAUDE.md", "STATUS.md")]
     if research_docs:
         print(f"  [batch 3/4] {len(research_docs)} research/design docs...")
-        # Process in groups of 3
-        for i in range(0, len(research_docs), 3):
-            batch = research_docs[i:i+3]
-            text = "\n\n".join(
-                f"## {d['filename']}\n{d['content'][:4000]}" for d in batch
-            )
+        # Process one at a time for better quality
+        for i, doc in enumerate(research_docs[:15]):  # cap at 15 docs
+            batch = [doc]
+            text = f"## {doc['filename']}\n{doc['content'][:4000]}"
             insights = _extract_from_text(text,
                 "从这些研究/设计文档中提取关键发现、技术决策、架构方案和数据源信息。"
             )
@@ -326,8 +357,9 @@ def _extract_from_text(text, focus_instruction):
 
 For each insight, output a JSON object on its own line:
 - "insight": the knowledge point (concise but complete — include specific numbers, names, paths)
-- "category": one of [status, decision, architecture, agent, book, concept, blocker, resource, pipeline]
-- "related_pages": wiki pages this relates to (e.g., ["Architecture/L0.md", "agents/coder.md"])
+- "category": one of [layer, agent, book, pipeline, decision, infrastructure, research, concept, status]
+- "target_page": the wiki page this belongs to (MUST match structure: layers/L0.md, agents/coder.md, books/ofc.md, pipeline/stage4.md, decisions/D22.md, infrastructure/services.md, research/flavordb2.md, concepts/xxx.md, STATUS.md)
+- "related_pages": other wiki pages this relates to via [[backlinks]]
 - "importance": 1-10
 
 Be THOROUGH. Extract every fact worth remembering. Include:
@@ -340,9 +372,9 @@ Be THOROUGH. Extract every fact worth remembering. Include:
 - Architectural principles and constraints
 
 Raw data:
-{text[:12000]}
+{text[:4000]}
 
-Output ONLY valid JSON lines. No other text."""
+Output ONLY valid JSON lines, one per line. No markdown, no explanation, no code blocks. Maximum 20 insights per call."""
 
     result = call_llm(
         "你是 culinary-engine 项目的知识策展人。全面、详尽地提取所有有价值的知识点。每个层级、每个agent、每个决策都要单独提取。只输出 JSON。",
@@ -459,7 +491,21 @@ def step_decide(insights, wiki_pages):
 {insights_text}
 
 For EACH insight, output a JSON line:
-{{"index": N, "action": "MERGE|REPLACE|KEEP_SEPARATE|UPDATE|SKIP", "target_page": "page to modify or new page name", "reason": "brief explanation"}}"""
+{{"index": N, "action": "MERGE|REPLACE|KEEP_SEPARATE|UPDATE|SKIP", "target_page": "path", "reason": "brief"}}
+
+MANDATORY wiki structure — target_page MUST be one of these paths:
+  layers/L0.md, layers/L1.md, layers/L2a.md, layers/L2b.md, layers/L2c.md, layers/FT.md, layers/L3.md, layers/L6.md
+  agents/{{agent-name}}.md (cc-lead, coder, researcher, architect, pipeline-runner, pipeline-supervisor, code-reviewer, ops)
+  books/{{book-id}}.md (e.g. books/ofc.md, books/mc-vol1.md)
+  pipeline/{{stage}}.md (pipeline/stage1.md, pipeline/stage4.md, pipeline/stage5.md, pipeline/ocr.md)
+  decisions/D{{number}}.md (e.g. decisions/D22.md, decisions/D37.md)
+  infrastructure/services.md, infrastructure/api-routing.md, infrastructure/ce-hub.md
+  research/{{topic}}.md (e.g. research/flavordb2.md, research/ocr-comparison.md)
+  concepts/{{topic}}.md (only for cross-cutting concepts that don't fit above)
+  STATUS.md (overall project status)
+  CONTRADICTIONS.md (only for contradiction records)
+
+One concept per page. Do NOT create catch-all pages like "concepts/resource.md" with 200 items."""
 
     result = call_llm(
         "你是知识管理决策者。为每条洞察选择最合适的处理方式。",
@@ -647,7 +693,7 @@ def step_decay(dry_run=False):
         mention_count = meta.get("mention_count", 5.0)  # default 5 for existing pages without tracking
 
         # Decrement if not updated this cycle
-        last_updated = meta.get("last_updated", "")
+        last_updated = str(meta.get("last_updated", ""))
         today = ts()[:10]
         if not last_updated or last_updated[:10] != today:
             mention_count -= decrement

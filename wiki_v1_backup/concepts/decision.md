@@ -1,0 +1,125 @@
+---
+last_updated: '2026-04-04T16:09:15.108139+00:00'
+mention_count: 73.0
+related:
+- '[[CLAUDE.md]]'
+- '[[STATUS.md]]'
+- '[[config/api.yaml]]'
+- '[[.claude/agents/]]'
+- '[[api_routing.md]]'
+- '[[l0-l2-linking-research.md]]'
+- '[[l2a_atom_schema_v2.md]]'
+- '[[recipe_schema_v1.md]]'
+- '[[stage5_recipe_extract_design.md]]'
+- '[[system_architecture_evaluation.md]]'
+- '[[mc_integration_plan.md]]'
+- '[[roadmap_priorities_v2.md]]'
+- '[[pipeline_scripts.md]]'
+- '[[research/search-grounded-llms-for-ingredient-data.md]]'
+- '[[Architecture/L2a.md]]'
+- '[[Architecture/L1.md]]'
+- '[[scripts/dify/orchestrator.py]]'
+- '[[Architecture/L0.md]]'
+- '[[pipeline/stage4.md]]'
+- '[[research_architecture-briefing-for-cc-lead.md]]'
+sources:
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+- curate-cycle-2026-04-04
+status: active
+title: concepts — decision
+---
+
+# concepts — decision
+
+
+## Updates (2026-04-04)
+- Decision #22: OCR tool changed from MinerU to qwen3.5-flash (DashScope). New book standard pipeline: flash OCR → md → 2b chunking → 9b annotation.
+- Decision #23: Product layer uses LangGraph + Neo4j + Graphiti instead of Dify. Dify kept running for daily reports/webhooks/KB but not migrated to.
+- Decision #26: Unified graph using Neo4j with built-in vector index. Weaviate removed.
+- Decision #28: Recipe schema v2 — pure JSON + Neo4j relationship network.
+- Decision #29: Critical scientific decision points replace step-by-step L0 binding.
+- Decision #32: Compiled md files used only for L2b recipe extraction, NOT for L0 extraction.
+- Decision #33: Stage4 Phase A uses 9b model instead of 27b — 3-4x speed improvement.
+- Decision #34: Ollama allows multiple models in parallel. OLLAMA_MAX_LOADED_MODELS=3, 128G RAM sufficient.
+- Decision #35: Opus API supports 3 concurrent requests.
+- ALL API calls must go through proxy at localhost:3001 (New API gateway with automatic routing AiGoCode → 灵雅 failover). All HTTP clients must set trust_env=False to bypass local proxy at 127.0.0.1:7890.
+- Git workflow: All code changes go through PR, no direct push to main. Claude Code sessions must be started from ~/culinary-engine (otherwise sub-agent permissions are restricted).
+- Decision #37 (2026-03-30): USDA full dataset NOT used, only Foundation Foods subset of 335 entries is usable — reason: packaged food contamination
+- Decision #38 (2026-03-30): Every external data source must undergo quality check before import
+- Decision #39 (2026-03-30): DashScope flash/plus models default thinking OFF — saves 10x time
+- Decision #40 (2026-03-30): Pipeline scripts must have step-by-step checkpointing + resume capability + progress persistence
+- Decision #41 (2026-03-30): CC Lead does NOT write code; all coding done by coder agent
+- Decision #42 (2026-03-30): 食材图鉴书 pipeline = simple OCR text extraction → LLM ingredient name extraction (no complex 3-layer pipeline needed)
+- All scripts must use trust_env=False or clear proxy env vars to bypass local SOCKS5 proxy at 127.0.0.1:7890 set in ~/.zshrc
+- Proxy bypass Python method 1: requests.Session() with session.trust_env = False
+- Proxy bypass Python method 2: clear all proxy env vars at script start using os.environ.pop() for http_proxy, https_proxy, HTTP_PROXY, HTTPS_PROXY, all_proxy, ALL_PROXY
+- Terminal proxy bypass: run 'unset http_proxy https_proxy all_proxy' before executing python3 scripts/xxx.py
+- NOT recommended: FoodKG full 67M triples (overkill), building custom food NER (qwen LLM is better), recipe flow graph tools near-term (ISA-88 schema already more structured)
+- L2a atomic granularity = culinary function granularity, NOT biological classification granularity and NOT body-part granularity
+- L2a design decision: Variety nodes are separate nodes (not embedded JSON arrays) because they are the basic unit of graph traversal
+- L2a design decision: processing_states is a required field representing parameter sets for the same atom in different physical states
+- L2a design decision: L0 binding uses dual-track approach — l0_domain_tags[] array + runtime vector search. Principle IDs are NOT hardcoded in schema.
+- L2a design decision: Wikidata QID is the primary anchor. USDA fdcId and FooDB food_id are attached to the same node, enabling three-database cross-queries.
+- FoodOn assessment: can use top-level categories (poultry/seafood/legume/allium/brassica) aligned with L2a category field, and FoodOn class IDs as stable anchors. Cannot use FoodOn hierarchy directly: food-safety/traceability oriented, too coarse (no distinction between regional varieties), weak Chinese support, OWL import to Neo4j requires neosemantics plugin with maintenance cost.
+- FoodOn integration decision: use FoodOn class ID as supplementary field foodon_class_id, but use project-custom vocabulary (15-20 categories) as primary L2a classification tree for stability and control
+- LLM distillation rule: fuzzy quantities MUST be converted to numbers. Example: 'Juice of ½ lemon' → {item: lemon_juice, qty: 15, unit: ml}. Only 'to taste' allows qty=null
+- Distillation order within a book: FIRST distill Basic Recipes / Appendix chapters to build shared SubRecipe library, THEN distill main body recipes that reference them
+- System architecture recommendation: Plan C (Hybrid) — Python ETL for data import, neo4j-graphrag-python + LangGraph for inference engine, FastAPI for API layer, Chainlit for UI
+- API layer: FastAPI self-built (LangServe stopped new features; LangGraph Platform has cloud dependency risk)
+- UI layer: Chainlit — conversational AI frontend, native LangGraph streaming support, Chinese language compatible
+- Model assignment for Stage5: chunk filtering=2b (fast binary classification), recipe classification+extraction=27b (structured extraction doesn't need Opus-level reasoning), reference resolution=27b+rules, complex recipe fallback=Opus 4.6 (ambiguous/multi-nested/trilingual only)
+- Schema document is mother-conversation defined, agents are NOT allowed to modify it (母对话定义，agent不许修改)
+- Decision: Use sync script (scripts/mc_task_sync.py) rather than dual-write for task_queue.db → MC tasks sync, to preserve separation of concerns and fault isolation
+- Simplification decision: Replace self-built Chinese-English ingredient mapping table (2-3 days) with FoodOn + Wikidata multilingual labels + FoodOntoRAG automatic alignment
+- Simplification decision: Replace 4 independent ETLs (FoodAtlas/FlavorGraph/FooDB/USDA) with FoodKG dump (already integrates USDA+Recipe1M+FoodOn) + FoodAtlas supplement
+- Simplification decision: Replace manual cross-book entity alignment with embedding cosine + FoodOn standardization automatic alignment
+- Simplification decision: Merge recipe×L0 mapping into Stage5 recipe extraction (annotate domain during extraction, then use embedding for precise mapping later) — eliminates separate full scan pass
+- Unchanged design decision: Stage4 (principles) and Stage5 (recipes) are separate scans — L0 is the foundation, single-task quality is more stable; recipe extraction depends on principle library being stable first
+- Unchanged design decision: 27b model for filtering, Opus for principle extraction — principle quality is system foundation, cannot be compromised
+- Unchanged design decision: 27b as main model for recipe extraction, Opus as fallback — recipe extraction is structured extraction not reasoning, 27b is sufficient
+- New books pipeline entry point: copy OCR md to raw_merged.md, then run stage1_pipeline.py --start-step 4 (skipping Steps 0-3). Old books use --start-step 0 with MinerU flow.
+- Google Gemini 2.5 Flash with Search Grounding is the PRIMARY recommendation for L2a ingredient data collection, using built-in `google_search_retrieval` tool that auto-searches Google and synthesizes grounded responses with source citations
+- Gemini grounding metadata gotcha: URLs/source citations are in a separate field, NOT inside the JSON response body — requires special handling when parsing structured output
+- Grok (xAI) is NOT RECOMMENDED for L2a ingredient data: search primarily hits X/Twitter (not broad web), minimal Chinese food content, higher pricing, immature docs
+- Perplexity Sonar is STRONG SECONDARY for L2a: every query auto-grounded, $0.005/query (7x cheaper than Gemini grounding), OpenAI-compatible API, always returns citations — good for cross-reference
+- YouTube pipeline for ingredient data is DEFERRED: better suited for L1 (techniques/equipment) than L2a (ingredients). Requires: YouTube Data API → transcript extraction → LLM processing
+- Task type detection is ORDER-SENSITIVE: stage4 → stage1_step5 → ocr_stage1 → stage1 → ocr → stage5, must match in this order to avoid false positives
+- All data tasks execute via Codex in tmux windows using: ~/bin/codex exec --dangerously-bypass-approvals-and-sandbox '{prompt}'
+- CRITICAL: --dangerously-bypass-approvals-and-sandbox flag is REQUIRED for Codex to write to ~/culinary-engine/output/
+- ENV_CONTEXT prepended to every Codex prompt: Ollama at http://localhost:11434; proxy at 127.0.0.1:7890; ALL HTTP clients MUST set trust_env=False; run 'export no_proxy=localhost,127.0.0.1 http_proxy= https_proxy=' before any script; output to ~/culinary-engine/output/; do not modify existing scripts
+- stage4 dependency check: if chunks_smart.json does not exist, task is deferred
+- Workaround for Codex sandbox write restriction: use --output-dir pointing to /tmp or /Users/jeff/culinary-engine/ instead of /Users/jeff/l0-knowledge-engine/
+- L2a ingredient seeds should come from L2b recipes (Route B): Stage 5 extracted 21,414 recipes → 102,227 ingredient mentions → ~3,000 canonical ingredients after normalization. This is more precise than starting from USDA because it only includes ingredients chefs actually use
+- Decision #26: Neo4j built-in vector index replaces Weaviate for hot-layer vector retrieval. Three-tier storage: hot layer = Neo4j (graph + vector), warm layer = Weaviate (now potentially eliminated), cold layer = PostgreSQL/Neo4j cold instance
+- L2a build route decision: Route B preferred (Jeff's preference) — first extract seed ingredients from L2b recipes → match USDA for composition → then Gemini distillation. Route A (start from USDA) rejected as less precise
+- Grok (xAI) is NOT RECOMMENDED for ingredient data: search primarily hits X/Twitter, minimal Chinese food content, higher pricing, immature docs.
+- YouTube pipeline for food knowledge extraction is DEFERRED to L1 phase (techniques/equipment), not L2a (ingredients). Requires: YouTube Data API → transcript extraction → LLM processing.
+- NotebookLM has NO API (as of 2026-03) and cannot be automated. Limits: 100 notebooks/account, 300 sources/notebook, ~50-100 queries/day (free tier). Plus version is $19.99/month (Google One AI Premium) but still no API.
+- Two workarounds for Codex sandbox write permission issue: (1) Run commands directly in local terminal, (2) Pass writable --output-dir such as /tmp or /Users/jeff/culinary-engine/
+- NotebookLM has no API as of 2026-03, making it unsuitable for automated pipelines; it can only be used manually by Jeff for quality anchoring
+- NotebookLM role in project: NOT used in pipeline, used as quality anchor — Jeff loads 30-50 core documentaries, uses interactive Q&A to calibrate automated pipeline extraction quality
+- Agent Management UI tech stack: Frontend — Vite + React + TypeScript (chosen over Next.js as too heavy for local tool, over Vanilla JS for xterm.js maintenance); Backend — Node.js + Express + node-pty (chosen over Python+FastAPI+ptyprocess for stability, over Electron as explicitly excluded)
+- Agent UI message bus reuses task_queue.db with a new agent_messages table — rationale: no new processes/dependencies needed, task_queue.py already on port 8742, SQLite WAL mode supports concurrent read/write, message volume (tens/day) doesn't need a message queue
+- Ahn et al. methodology is replicable using FlavorDB2 (free) to analyze Cantonese pairing patterns.
+- FT layer MUST encode texture as cuisine-dependent, not universal.
+- Immediate import priority: (1) FlavorDB2 → compound-perception nodes, (2) FooDB → ingredient-compound-concentration data, (3) Ahn methodology → Cantonese pairing pattern analysis.
+- Must build ourselves (no external source covers): (1) Chinese sensory ontology using Civille texture lexicon as backbone + Chinese terms from books, (2) Cuisine-specific aesthetic preferences via LLM extraction from 40+ book corpus, (3) Cooking transformation effects linking L0 science to compound changes.
+- Civille texture lexicon will serve as the backbone for building the Chinese sensory ontology, supplemented with Chinese terms extracted from the book corpus.
