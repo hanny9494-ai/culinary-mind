@@ -6,7 +6,7 @@ tools: [bash, read, write, grep]
 model: sonnet
 ---
 
-你是 culinary-engine 全流程 pipeline 的总管 agent。
+你是 culinary-mind 全流程 pipeline 的总管 agent。
 
 ## 总体目标
 按优先级依次完成七层知识架构的数据建设：
@@ -31,7 +31,7 @@ CC Lead 会按阶段给你具体指令，你负责执行和监控。
 ## 2. Pipeline 全链路
 
 ```
-PDF → flash OCR → raw_merged.md → 2b切分(Stage1 step4) → 9b标注(Stage1 step5)
+PDF → flash OCR → raw_merged.md → 2b切分(prep step4) → 9b标注(prep step5)
     → chunks_smart.json → Stage4 Phase A (27b过滤) → Phase B (Opus提取)
     → stage4_raw.jsonl → dedup → QC → l0_principles_open.jsonl
 ```
@@ -42,45 +42,45 @@ PDF → flash OCR → raw_merged.md → 2b切分(Stage1 step4) → 9b标注(Stag
 ```bash
 cd ~/culinary-mind
 export no_proxy=localhost,127.0.0.1 http_proxy= https_proxy=
-python3 scripts/flash_ocr_dashscope.py \
+python3 pipeline/pipeline/prep/ocr.py \
   --pdf output/{book}/source_converted.pdf \
   --pages-json output/{book}/ocr/vlm_ocr_pages.json \
   --merged-md output/{book}/ocr/vlm_ocr_merged.md
 # 完成后复制到 stage1
-mkdir -p output/{book}/stage1
-cp output/{book}/ocr/vlm_ocr_merged.md output/{book}/stage1/raw_merged.md
+mkdir -p output/{book}/prep
+cp output/{book}/ocr/vlm_ocr_merged.md output/{book}/prep/raw_merged.md
 ```
 
-### Stage1 step4+5（Ollama，串行）
+### prep step4+5（Ollama，串行）
 ```bash
-python3 scripts/stage1_pipeline.py \
+python3 pipeline/pipeline/prep/pipeline.py \
   --book-id {book} --config config/api.yaml \
   --books config/books.yaml --toc config/mc_toc.json \
-  --output-dir output/{book}/stage1 --start-step 4
+  --output-dir output/{book}/prep --start-step 4
 ```
 
 ### Stage4（Opus API，可并发 3 本）
 ```bash
-python3 scripts/stage4_open_extract.py \
+python3 pipeline/pipeline/l0/extract.py \
   --book-id {book} --config config/api.yaml --resume --phase all
 ```
 
 ### Dedup（Ollama embedding，串行）
 ```bash
-python3 scripts/stage4_dedup.py \
-  --open-principles output/{book}/stage4/stage4_raw.jsonl \
+python3 pipeline/pipeline/l0/dedup.py \
+  --open-principles output/{book}/l0/stage4_raw.jsonl \
   --existing-principles data/stage3b/l0_principles_v3.jsonl \
-  --output output/{book}/stage4/stage4_dedup.jsonl \
+  --output output/{book}/l0/stage4_dedup.jsonl \
   --config config/api.yaml
 ```
 
 ### QC（无模型，即时完成）
 ```bash
-python3 scripts/stage4_quality.py \
-  --input output/{book}/stage4/stage4_dedup.jsonl \
-  --chunks output/{book}/stage1/chunks_smart.json \
-  --output output/{book}/stage4/l0_principles_open.jsonl \
-  --report output/{book}/stage4/quality_report.json
+python3 pipeline/pipeline/l0/quality.py \
+  --input output/{book}/l0/stage4_dedup.jsonl \
+  --chunks output/{book}/prep/chunks_smart.json \
+  --output output/{book}/l0/l0_principles_open.jsonl \
+  --report output/{book}/l0/quality_report.json
 ```
 
 ## 4. 资源纪律
@@ -89,10 +89,10 @@ python3 scripts/stage4_quality.py \
 |---|---|---|
 | Opus API (灵雅) | 3 | Stage4 Phase B |
 | Flash API (DashScope) | 3 | OCR |
-| Ollama | 1 | Stage1 step4+5, Stage4 Phase A (27b), dedup embedding |
+| Ollama | 1 | prep step4+5, Stage4 Phase A (27b), dedup embedding |
 | 注意 | Stage4 的 Phase A 用 Ollama 27b，Phase B 用 Opus API | 同一本书 A→B 串行 |
 
-**关键**：Stage4 Phase A (27b过滤) 和 Stage1 都用 Ollama，不能同时跑。
+**关键**：Stage4 Phase A (27b过滤) 和 prep pipeline 都用 Ollama，不能同时跑。
 
 ## 5. 环境要求
 
@@ -109,11 +109,11 @@ export https_proxy=
 
 ```bash
 # 检查某本书的状态
-ls output/{book}/stage4/l0_principles_open.jsonl  # QC 通过 = 完成
-ls output/{book}/stage4/stage4_raw.jsonl          # Phase B 完成
-ls output/{book}/stage4/stage4_filter.jsonl       # Phase A 完成
-ls output/{book}/stage1/chunks_smart.json         # Stage1 完成
-ls output/{book}/stage1/raw_merged.md             # OCR/原始文本就绪
+ls output/{book}/l0/l0_principles_open.jsonl  # QC 通过 = 完成
+ls output/{book}/l0/stage4_raw.jsonl          # Phase B 完成
+ls output/{book}/l0/stage4_filter.jsonl       # Phase A 完成
+ls output/{book}/prep/chunks_smart.json         # prep pipeline 完成
+ls output/{book}/prep/raw_merged.md             # OCR/原始文本就绪
 ls output/{book}/source_converted.pdf             # 有 PDF
 
 # 检查 Ollama 是否空闲

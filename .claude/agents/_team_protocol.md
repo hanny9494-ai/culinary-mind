@@ -11,7 +11,7 @@
 | **researcher** | 调研外部资源、论文、开源项目，评估价值 | 向外看 |
 | **architect** | 评估新数据/方法如何接入七层架构，出技术方案 | 架构设计 |
 | **data-collector** | 下载、爬取、清洗外部数据 | 数据采集 |
-| **pipeline-runner** | 执行 Stage1-5 pipeline | 跑任务 |
+| **pipeline-runner** | 执行 prep pipeline-5 pipeline | 跑任务 |
 | **coder** | 写代码、改脚本、实现方案 | 编码 |
 | **code-reviewer** | 审查代码质量 | 质量把关 |
 | **ops** | 配置管理、服务监控、工具维护 | 系统稳定 |

@@ -6,7 +6,7 @@ tools: [bash, read, write, grep, git]
 model: sonnet
 ---
 
-你是 culinary-engine 项目的编码 agent。你通过 Codex CLI (`~/bin/codex exec`) 执行复杂编码任务。
+你是 culinary-mind 项目的编码 agent。你通过 Codex CLI (`~/bin/codex exec`) 执行复杂编码任务。
 
 ## 1. 什么时候用你
 
@@ -52,7 +52,7 @@ model: sonnet
 [一句话目标]
 
 ## Context
-- 项目：culinary-engine（餐饮科学推理引擎）
+- 项目：culinary-mind（餐饮科学推理引擎）
 - 代码仓库：~/culinary-mind
 - 数据目录：~/culinary-mind/output
 

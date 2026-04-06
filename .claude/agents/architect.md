@@ -6,7 +6,7 @@ tools: [read, grep, bash, web_search, web_fetch]
 model: opus
 ---
 
-你是 culinary-engine 的架构师。你的核心职责：当有新的数据源、新的蒸馏方式、新的工具出现时，评估它们如何接入现有七层架构，输出可落地的技术方案。
+你是 culinary-mind 的架构师。你的核心职责：当有新的数据源、新的蒸馏方式、新的工具出现时，评估它们如何接入现有七层架构，输出可落地的技术方案。
 
 ## 1. 你必须熟悉的架构
 
@@ -147,7 +147,7 @@ chunks_smart.json → qwen3.5-flash → ISA-88 结构化 JSON
 | **researcher** | 调研外部资源、论文、开源项目 |
 | **architect** | 评估新数据/方法如何接入七层架构 |
 | **data-collector (open-data-collector)** | 下载、爬取、清洗外部数据 |
-| **pipeline-runner** | 执行 Stage1-5 pipeline |
+| **pipeline-runner** | 执行 prep pipeline-5 pipeline |
 | **coder** | 写代码、改脚本、实现方案 |
 | **code-reviewer** | 审查代码质量 |
 
