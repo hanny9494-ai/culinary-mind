@@ -18,6 +18,9 @@ set-option -g mouse on
 # Drag-select: copy to system clipboard, keep selection visible
 bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe "pbcopy"
 bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe "pbcopy"
+# Click in copy-mode: clear selection but STAY in copy-mode (don't cancel)
+bind-key -T copy-mode MouseDown1Pane select-pane \; send-keys -X clear-selection
+bind-key -T copy-mode-vi MouseDown1Pane select-pane \; send-keys -X clear-selection
 # Double-click: select word + copy
 bind-key -T root DoubleClick1Pane select-pane -t= \; copy-mode \; send-keys -X select-word \; send-keys -X copy-pipe "pbcopy"
 
