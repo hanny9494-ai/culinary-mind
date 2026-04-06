@@ -1,8 +1,8 @@
 # Culinary Mind v1 — Configuration
 
 # Source project
-project_root: ~/culinary-engine
-ce_hub_dir: ~/culinary-engine/.ce-hub
+project_root: ~/culinary-mind
+ce_hub_dir: ~/culinary-mind/.ce-hub
 
 # LLM API — Sonnet 4.6 via Lingya direct
 api_endpoint: https://api.lingyaai.cn/v1/chat/completions
@@ -21,10 +21,12 @@ raw_sources:
   reports_dir: raw/reports/
   git_log: raw/git-log.jsonl
 
-# Ingest paths (scanned for reports)
+# Ingest paths (scanned for reports + conversations)
 ingest_paths:
-  - ~/culinary-engine/docs/research/
-  - ~/culinary-engine/reports/
+  - ~/culinary-mind/docs/research/
+  - ~/culinary-mind/docs/
+  - ~/culinary-mind/wiki/copilot/copilot-conversations/
+  - ~/culinary-mind/raw/conversations/
 
 # Dreaming / decay parameters
 decay:
