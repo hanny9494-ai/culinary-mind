@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cehub.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/node</string>
+        <string>/Users/jeff/culinary-engine/ce-hub/node_modules/.bin/tsx</string>
+        <string>src/index.ts</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jeff/culinary-engine/ce-hub</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CE_HUB_CWD</key>
+        <string>/Users/jeff/culinary-engine</string>
+        <key>CE_HUB_AGENTS_DIR</key>
+        <string>/Users/jeff/culinary-engine/.claude/agents</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/jeff</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jeff/culinary-engine/ce-hub/logs/daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jeff/culinary-engine/ce-hub/logs/daemon.err</string>
+</dict>
+</plist>

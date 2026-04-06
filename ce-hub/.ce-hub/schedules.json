@@ -1,0 +1,7 @@
+[
+  {
+    "cron": "23:00",
+    "task": "生成日报：读 STATUS.md 和今天的 git log，写一份日报到 reports/",
+    "agent": "cc-lead"
+  }
+]

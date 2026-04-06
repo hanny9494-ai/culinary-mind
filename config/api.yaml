@@ -1,0 +1,43 @@
+# API 配置
+# 敏感值从环境变量读取，不要硬编码
+
+# Claude 代理 API（蒸馏用）
+claude:
+  endpoint: "${L0_API_ENDPOINT}/v1/messages"
+  api_key: "${L0_API_KEY}"
+  models:
+    distill: "claude-opus-4-6"      # Stage3 蒸馏
+    causal: "claude-sonnet-4-6"
+    scan: "claude-sonnet-4-6"       # 补题扫描
+  timeout_sec: 90
+  max_retries: 3
+  save_every: 20
+
+# Ollama 本地模型
+ollama:
+  url: "http://localhost:11434"
+  models:
+    split: "qwen3.5:2b"            # Stage1 Step4 切分
+    annotate: "qwen3.5:9b"         # Stage1 Step5 标注
+    embedding: "qwen3-embedding:8b" # Stage2 向量（备用）
+  options:
+    think: false
+
+# Gemini Embedding（Stage2 主力）
+gemini:
+  api_key: "${GEMINI_API_KEY}"
+  model: "gemini-embedding-2-preview"
+
+# MinerU（Stage1 Step1）
+mineru:
+  base_url: "https://mineru.net/api/v4"
+  api_key: "${MINERU_API_KEY}"
+  daily_page_limit: 2000
+  max_pages_per_part: 200
+  max_mb_per_part: 100
+
+# DashScope（Stage1 Step2 视觉识别）
+dashscope:
+  url: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+  api_key: "${DASHSCOPE_API_KEY}"
+  model: "qwen3-vl-plus"

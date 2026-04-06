@@ -1,0 +1,39 @@
+{
+  "version": "2.0",
+  "domains": [
+    {"id": "protein_science",          "label_zh": "蛋白质科学",   "kept_from_v1": true},
+    {"id": "carbohydrate",             "label_zh": "碳水化合物",   "kept_from_v1": true},
+    {"id": "lipid_science",            "label_zh": "脂质科学",     "kept_from_v1": true},
+    {"id": "fermentation",             "label_zh": "发酵",         "kept_from_v1": true},
+    {"id": "food_safety",              "label_zh": "食品安全",     "kept_from_v1": true},
+    {"id": "water_activity",           "label_zh": "水分活度",     "kept_from_v1": true},
+    {"id": "enzyme",                   "label_zh": "酶",           "kept_from_v1": true},
+    {"id": "color_pigment",            "label_zh": "色素/显色",    "kept_from_v1": true},
+    {"id": "equipment_physics",        "label_zh": "设备物理",     "kept_from_v1": true},
+    {"id": "maillard_caramelization",  "label_zh": "美拉德/焦糖化", "split_from": "chemical_reaction"},
+    {"id": "oxidation_reduction",      "label_zh": "氧化还原",     "split_from": "chemical_reaction"},
+    {"id": "salt_acid_chemistry",      "label_zh": "盐酸碱化学",   "split_from": "chemical_reaction"},
+    {"id": "taste_perception",         "label_zh": "味觉感知",     "split_from": "flavor_sensory"},
+    {"id": "aroma_volatiles",          "label_zh": "香气挥发物",   "split_from": "flavor_sensory"},
+    {"id": "thermal_dynamics",         "label_zh": "热力学/传热",  "split_from": "heat_transfer+physical_change"},
+    {"id": "mass_transfer",            "label_zh": "质量传递",     "split_from": "heat_transfer+physical_change"},
+    {"id": "texture_rheology",         "label_zh": "质构/流变学",  "new_in_v2": true}
+  ],
+  "v1_to_v2_mapping": {
+    "protein_science": "protein_science",
+    "carbohydrate": "carbohydrate",
+    "lipid_science": "lipid_science",
+    "fermentation": "fermentation",
+    "food_safety": "food_safety",
+    "water_activity": "water_activity",
+    "enzyme": "enzyme",
+    "color_pigment": "color_pigment",
+    "equipment_physics": "equipment_physics",
+    "chemical_reaction": ["maillard_caramelization", "oxidation_reduction", "salt_acid_chemistry"],
+    "flavor_sensory": ["taste_perception", "aroma_volatiles"],
+    "heat_transfer": ["thermal_dynamics", "mass_transfer"],
+    "physical_change": ["thermal_dynamics", "mass_transfer"],
+    "emulsion_colloid": "texture_rheology"
+  },
+  "retired_v1_domains": ["chemical_reaction", "flavor_sensory", "heat_transfer", "physical_change", "emulsion_colloid"]
+}

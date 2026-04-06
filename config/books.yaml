@@ -1,0 +1,412 @@
+# 书目注册表 v2 — L0 最终版 (2026-03-28 updated)
+#
+# purpose: science+recipe / recipe_only
+# l0_status: done / running / pending
+# recipe_status: done / pending
+
+books:
+- id: ofc
+  title: On Food and Cooking
+  l0_status: done
+  recipe_status: done
+  l0_count: 3955
+  purpose: science+recipe
+  recipe_count: 894
+- id: mc_vol1
+  title: Modernist Cuisine Vol 1 - History and Fundamentals
+  l0_status: done
+  recipe_status: done
+  l0_count: 3110
+  purpose: science+recipe
+  recipe_count: 2145
+- id: mc_vol2
+  title: Modernist Cuisine Vol 2 - Techniques and Equipment
+  l0_status: done
+  recipe_status: done
+  l0_count: 893
+  purpose: science+recipe
+  recipe_count: 483
+- id: mc_vol3
+  title: Modernist Cuisine Vol 3 - Animals and Plants
+  l0_status: done
+  recipe_status: done
+  l0_count: 1059
+  purpose: science+recipe
+  recipe_count: 501
+- id: mc_vol4
+  title: Modernist Cuisine Vol 4 - Ingredients and Preparations
+  l0_status: done
+  recipe_status: done
+  l0_count: 1034
+  purpose: science+recipe
+  recipe_count: 703
+- id: science_good_cooking
+  title: The Science of Good Cooking
+  l0_status: done
+  recipe_status: done
+  l0_count: 3806
+  purpose: science+recipe
+  recipe_count: 2802
+- id: food_lab
+  title: The Food Lab
+  l0_status: done
+  recipe_status: done
+  l0_count: 2242
+  purpose: science+recipe
+  recipe_count: 2136
+- id: mouthfeel
+  title: Mouthfeel - How Texture Makes Taste
+  l0_status: done
+  recipe_status: done
+  l0_count: 2410
+  purpose: science+recipe
+  recipe_count: 1144
+- id: cooking_for_geeks
+  title: Cooking for Geeks
+  l0_status: done
+  recipe_status: done
+  l0_count: 2266
+  purpose: science+recipe
+  recipe_count: 1460
+- id: professional_baking
+  title: Professional Baking 7th Edition
+  l0_status: done
+  recipe_status: done
+  l0_count: 2136
+  purpose: science+recipe
+  recipe_count: 3312
+- id: molecular_gastronomy
+  title: Molecular Gastronomy
+  l0_status: done
+  recipe_status: done
+  l0_count: 1951
+  purpose: science+recipe
+  recipe_count: 809
+- id: chocolates_confections
+  title: Chocolates and Confections
+  l0_status: done
+  recipe_status: done
+  l0_count: 1934
+  purpose: science+recipe
+  recipe_count: 908
+- id: professional_pastry_chef
+  title: The Professional Pastry Chef
+  l0_status: done
+  recipe_status: done
+  l0_count: 1716
+  purpose: science+recipe
+  recipe_count: 16
+- id: bread_hamelman
+  title: Bread - A Baker's Book of Techniques
+  l0_status: done
+  recipe_status: done
+  l0_count: 1669
+  purpose: science+recipe
+  recipe_count: 2302
+- id: science_of_chocolate
+  title: The Science of Chocolate
+  l0_status: done
+  recipe_status: done
+  l0_count: 1577
+  purpose: science+recipe
+  recipe_count: 657
+- id: modernist_pizza
+  title: Modernist Pizza
+  l0_status: done
+  recipe_status: done
+  l0_count: 1300
+  purpose: science+recipe
+  recipe_count: 1119
+- id: flavorama
+  title: Flavorama
+  l0_status: done
+  recipe_status: done
+  l0_count: 1258
+  purpose: science+recipe
+  recipe_count: 1139
+- id: koji_alchemy
+  title: Koji Alchemy
+  l0_status: done
+  recipe_status: done
+  l0_count: 978
+  purpose: science+recipe
+  recipe_count: 664
+- id: science_of_spice
+  title: The Science of Spice
+  l0_status: done
+  recipe_status: done
+  l0_count: 960
+  purpose: science+recipe
+  recipe_count: 1124
+- id: salt_fat_acid_heat
+  title: Salt Fat Acid Heat
+  l0_status: done
+  recipe_status: done
+  l0_count: 910
+  purpose: science+recipe
+  recipe_count: 1018
+- id: noma_fermentation
+  title: The Noma Guide to Fermentation
+  l0_status: done
+  recipe_status: done
+  l0_count: 850
+  purpose: science+recipe
+  recipe_count: 614
+- id: taste_whats_missing
+  title: Taste - What You're Missing
+  l0_status: done
+  recipe_status: done
+  l0_count: 730
+  purpose: science+recipe
+  recipe_count: 678
+- id: bread_science_yoshino
+  title: パンの科学 (Bread Science)
+  l0_status: done
+  recipe_status: done
+  l0_count: 522
+  purpose: science+recipe
+  recipe_count: 208
+- id: neurogastronomy
+  title: Neurogastronomy
+  l0_status: done
+  recipe_status: done
+  l0_count: 464
+  purpose: science+recipe
+  recipe_count: 613
+- id: ice_cream_flavor
+  title: 冰淇淋风味学
+  l0_status: done
+  recipe_status: done
+  l0_count: 414
+  purpose: science+recipe
+  recipe_count: 215
+- id: ratio
+  title: Ratio
+  l0_status: done
+  recipe_status: done
+  l0_count: 355
+  purpose: science+recipe
+  recipe_count: 465
+- id: dashi_umami
+  title: Dashi and Umami
+  l0_status: done
+  recipe_status: done
+  l0_count: 170
+  purpose: science+recipe
+  recipe_count: 265
+- id: flavor_bible
+  title: The Flavor Bible
+  l0_status: done
+  recipe_status: done
+  l0_count: 124
+  purpose: science+recipe
+  recipe_count: 1123
+- id: bocuse_cookbook
+  title: Bocuse - The Complete Recipes
+  l0_status: done
+  recipe_status: done
+  l0_count: 121
+  purpose: science+recipe
+  recipe_count: 335
+- id: french_sauces
+  title: French Sauces
+  l0_status: done
+  recipe_status: done
+  l0_count: 78
+  purpose: science+recipe
+  recipe_count: 125
+- id: handbook_molecular_gastronomy
+  title: Handbook of Molecular Gastronomy
+  l0_status: done
+  recipe_status: done
+  l0_count: 10
+  purpose: science+recipe
+  recipe_count: 521
+- id: essentials_food_science
+  title: Essentials of Food Science
+  l0_status: running
+  recipe_status: done
+  toc_config: mc_toc.json
+  purpose: science+recipe
+  recipe_count: 1887
+- id: japanese_cooking_tsuji
+  title: Japanese Cooking - A Simple Art
+  l0_status: running
+  recipe_status: done
+  toc_config: mc_toc.json
+  purpose: science+recipe
+  recipe_count: 300
+- id: jacques_pepin
+  title: Jacques Pépin New Complete Techniques
+  l0_status: running
+  recipe_status: done
+  toc_config: mc_toc.json
+  purpose: science+recipe
+  recipe_count: 1111
+- id: franklin_barbecue
+  title: Franklin Barbecue
+  l0_status: pending
+  recipe_status: done
+  toc_config: mc_toc.json
+  purpose: science+recipe
+  recipe_count: 487
+- id: sous_vide_keller
+  title: Under Pressure - Cooking Sous Vide
+  l0_status: pending
+  recipe_status: done
+  toc_config: mc_toc.json
+  purpose: science+recipe
+  recipe_count: 653
+- id: noma_vegetable
+  title: Noma - Time and Place in Nordic Cuisine
+  l0_status: pending
+  recipe_status: done
+  toc_config: mc_toc.json
+  purpose: science+recipe
+  recipe_count: 147
+- id: flavor_thesaurus
+  title: The Flavor Thesaurus
+  l0_status: pending
+  recipe_status: done
+  toc_config: mc_toc.json
+  purpose: science+recipe
+  recipe_count: 1075
+- id: vegetarian_flavor_bible
+  title: The Vegetarian Flavor Bible
+  l0_status: pending
+  recipe_status: done
+  toc_config: mc_toc.json
+  purpose: science+recipe
+  recipe_count: 1740
+- id: charcuterie
+  title: Charcuterie
+  l0_status: pending
+  recipe_status: done
+  toc_config: mc_toc.json
+  purpose: science+recipe
+  recipe_count: 766
+- id: art_of_fermentation
+  title: The Art of Fermentation
+  l0_status: pending
+  recipe_status: done
+  toc_config: mc_toc.json
+  purpose: science+recipe
+  recipe_count: 1575
+- id: professional_chef
+  title: The Professional Chef
+  l0_status: pending
+  recipe_status: done
+  toc_config: mc_toc.json
+  purpose: science+recipe
+  recipe_count: 2261
+- id: flavor_equation
+  title: The Flavor Equation
+  l0_status: pending
+  recipe_status: done
+  toc_config: mc_toc.json
+  purpose: science+recipe
+  recipe_count: 902
+- id: french_patisserie
+  title: French Pâtisserie (Ferrandi)
+  l0_status: pending
+  recipe_status: done
+  toc_config: mc_toc.json
+  purpose: science+recipe
+  recipe_count: 2159
+- id: phoenix_claws
+  title: Phoenix Claws and Jade Trees
+  l0_status: pending
+  recipe_status: done
+  toc_config: mc_toc.json
+  purpose: science+recipe
+  recipe_count: 750
+- id: alinea_-_grant_achatz
+  title: Alinea
+  recipe_status: done
+  purpose: recipe_only
+  recipe_count: 822
+- id: bouchon_-_thomas_keller
+  title: Bouchon
+  recipe_status: done
+  purpose: recipe_only
+  recipe_count: 839
+- id: core_-_clare_smyth
+  title: Core
+  recipe_status: done
+  purpose: recipe_only
+  recipe_count: 450
+- id: crave
+  title: Crave
+  recipe_status: done
+  purpose: recipe_only
+  recipe_count: 464
+- id: daniel_my_french_cuisine_-_daniel_boulud
+  title: Daniel - My French Cuisine
+  recipe_status: done
+  purpose: recipe_only
+  recipe_count: 972
+- id: dokumen.pub_the-whole-fish-cookbook-new-
+  title: The Whole Fish Cookbook
+  recipe_status: done
+  purpose: recipe_only
+  recipe_count: 329
+- id: eleven_madison_park_the_cookbook_-_danie
+  title: Eleven Madison Park - The Cookbook
+  recipe_status: done
+  purpose: recipe_only
+  recipe_count: 1188
+- id: eleven_madison_park_the_next_chapter_紫色封
+  title: Eleven Madison Park - The Next Chapter
+  recipe_status: done
+  purpose: recipe_only
+  recipe_count: 1025
+- id: f1749_manresa
+  title: Manresa
+  recipe_status: done
+  purpose: recipe_only
+  recipe_count: 678
+- id: f2986_baltic
+  title: Baltic
+  recipe_status: done
+  purpose: recipe_only
+  recipe_count: 282
+- id: japanese_farm_food_-_nancy_singleton_hac
+  title: Japanese Farm Food
+  recipe_status: done
+  purpose: recipe_only
+  recipe_count: 889
+- id: meat_illustrated_a_foolproof_guide_to_un
+  title: Meat Illustrated
+  recipe_status: done
+  purpose: recipe_only
+  recipe_count: 1669
+- id: momofuku
+  title: Momofuku
+  recipe_status: done
+  purpose: recipe_only
+  recipe_count: 623
+- id: organum_nature_texture_intensity_purity
+  title: Organum
+  recipe_status: done
+  purpose: recipe_only
+  recipe_count: 390
+- id: relae_a_book_of_ideas_-_christian_f_pugl
+  title: Relæ
+  recipe_status: done
+  purpose: recipe_only
+  recipe_count: 931
+- id: the-french-laundry-cookbook-978157965126
+  title: The French Laundry Cookbook
+  recipe_status: done
+  purpose: recipe_only
+  recipe_count: 701
+- id: the_everlasting_meal_cookbook_leftovers_
+  title: The Everlasting Meal Cookbook
+  recipe_status: done
+  purpose: recipe_only
+  recipe_count: 1161
+- id: the_hand_and_flowers_cookbook
+  title: The Hand and Flowers Cookbook
+  recipe_status: done
+  purpose: recipe_only
+  recipe_count: 802

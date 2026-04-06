@@ -1,8 +1,24 @@
-__pycache__/
-*.pyc
-.env
+# Data (too large for git)
+output/
 raw/
 wiki/
-*.db
-*.log
+.ce-hub/ce-hub.db*
+.ce-hub/status.json
+.ce-hub/compiler/
+.ce-hub/inbox/
+.ce-hub/results/
+.ce-hub/dispatch/
+
+# Runtime
+__pycache__/
+*.pyc
+node_modules/
 .DS_Store
+*.log
+.curate-state.json
+.curate-progress.json
+.ingest-state.json
+.migration_backup_marker
+
+# Archives (tracked separately)
+_archive/logs/

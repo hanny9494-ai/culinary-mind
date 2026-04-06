@@ -1,0 +1,37 @@
+{
+  "name": "ce-hub",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "CE_HUB_CWD=${CE_HUB_CWD:-$(cd .. && pwd)} tsx watch src/index.ts",
+    "daemon": "CE_HUB_CWD=${CE_HUB_CWD:-$(cd .. && pwd)} tsx src/index.ts",
+    "start:all": "tsx src/index.ts & tmux attach -t cehub",
+    "layout": "bash scripts/layout.sh",
+    "layout:attach": "bash scripts/layout.sh --attach",
+    "layout:reset": "bash scripts/layout.sh --reset",
+    "dashboard": "python3 scripts/dashboard.py",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^9.0.0",
+    "better-sqlite3": "^11.0.0",
+    "eventemitter2": "^6.4.0",
+    "fastify": "^4.28.0",
+    "p-queue": "^8.0.0",
+    "p-retry": "^6.0.0",
+    "toposort": "^2.0.2",
+    "uuid": "^9.0.0",
+    "ws": "^8.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^20.0.0",
+    "@types/uuid": "^9.0.0",
+    "@types/ws": "^8.0.0",
+    "concurrently": "^9.2.1",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0"
+  }
+}
