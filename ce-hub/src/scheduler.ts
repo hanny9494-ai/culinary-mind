@@ -7,13 +7,12 @@ const SCHEDULES_FILE = join(getCwd(), '.ce-hub', 'schedules.json');
 
 // System task commands (agent: "system")
 function getSystemTasks(): Record<string, string> {
-  const cwd = getCwd();
-  const mindDir = join(cwd, '..', 'culinary-mind');
+  const cwd = getCwd(); // ~/culinary-mind
   return {
-    'curate-wiki': `cd ${mindDir} && python3 scripts/ingest.py --source ${cwd} && python3 scripts/curate-wiki.py`,
-    'curate-wiki-full': `cd ${mindDir} && python3 scripts/ingest.py --full --source ${cwd} && python3 scripts/curate-wiki.py --full`,
-    'ingest-only': `cd ${mindDir} && python3 scripts/ingest.py --source ${cwd}`,
-    'ingest-conversations': `cd ${mindDir} && python3 scripts/ingest.py --conversations`,
+    'curate-wiki': `cd ${cwd} && python3 mind/ingest.py --source ${cwd} && python3 mind/ingest-all.py`,
+    'curate-wiki-full': `cd ${cwd} && python3 mind/ingest.py --full --source ${cwd} && python3 mind/ingest-all.py`,
+    'ingest-only': `cd ${cwd} && python3 mind/ingest.py --source ${cwd}`,
+    'ingest-conversations': `cd ${cwd} && python3 mind/ingest.py --conversations`,
   };
 }
 
