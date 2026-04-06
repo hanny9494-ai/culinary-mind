@@ -297,12 +297,13 @@ def step_extract(raw_data):
     research_docs = [d for d in priority_docs if d.get("filename") not in ("CLAUDE.md", "STATUS.md")]
     if research_docs:
         print(f"  [batch 3/4] {len(research_docs)} research/design docs...")
-        # Process one at a time for better quality
-        for i, doc in enumerate(research_docs[:15]):  # cap at 15 docs
-            batch = [doc]
-            text = f"## {doc['filename']}\n{doc['content'][:4000]}"
+        # Process one at a time
+        for i, doc in enumerate(research_docs[:15]):
+            fname = doc.get('filename', '?')
+            print(f"    [{i+1}/{min(len(research_docs),15)}] {fname}")
+            text = f"## Document: {fname}\n{doc['content'][:3500]}"
             insights = _extract_from_text(text,
-                "从这些研究/设计文档中提取关键发现、技术决策、架构方案和数据源信息。"
+                f"从文档 '{fname}' 中提取关键发现。只提取文档中明确写到的内容。不要定义层级（L0-L6），不要定义决策编号，除非文档中有明确提及。target_page 用 research/{fname.replace('.md','')}.md 格式。"
             )
             all_insights.extend(insights)
 
@@ -351,33 +352,32 @@ def step_extract(raw_data):
 
 def _extract_from_text(text, focus_instruction):
     """Call LLM to extract insights from a text chunk."""
-    prompt = f"""Analyze the following project data and extract ALL meaningful knowledge points.
+    prompt = f"""You are a knowledge extractor. Extract facts ONLY from the text below.
+
+RULES:
+1. ONLY extract information that is EXPLICITLY stated in the text.
+2. NEVER invent, guess, or infer information not present.
+3. If you don't find relevant facts, return an empty line. Do NOT make up content.
+4. Use the EXACT words, numbers, and definitions from the text.
+5. Each insight must be traceable to a specific sentence in the source text.
 
 {focus_instruction}
 
-For each insight, output a JSON object on its own line:
-- "insight": the knowledge point (concise but complete — include specific numbers, names, paths)
+Output format: one JSON per line.
+Required fields:
+- "insight": exact fact from the text (quote or closely paraphrase)
 - "category": one of [layer, agent, book, pipeline, decision, infrastructure, research, concept, status]
-- "target_page": the wiki page this belongs to (MUST match structure: layers/L0.md, agents/coder.md, books/ofc.md, pipeline/stage4.md, decisions/D22.md, infrastructure/services.md, research/flavordb2.md, concepts/xxx.md, STATUS.md)
-- "related_pages": other wiki pages this relates to via [[backlinks]]
+- "target_page": wiki path (layers/L0.md, agents/coder.md, books/ofc.md, pipeline/stage4.md, decisions/D22.md, infrastructure/services.md, research/xxx.md, concepts/xxx.md, STATUS.md)
+- "related": list of related wiki pages as simple strings like "layers/L0.md" (NOT double-bracketed)
 - "importance": 1-10
 
-Be THOROUGH. Extract every fact worth remembering. Include:
-- Layer definitions (L0, L1, L2a, L2b, L2c, FT, L3, L6) with their exact purpose and status
-- Agent roles and responsibilities
-- Numbered decisions (#22, #23, etc.)
-- Pipeline stages and their tools
-- File paths, ports, API endpoints
-- Data quantities (number of books, entries, recipes)
-- Architectural principles and constraints
-
-Raw data:
+Source text:
 {text[:4000]}
 
-Output ONLY valid JSON lines, one per line. No markdown, no explanation, no code blocks. Maximum 20 insights per call."""
+Output ONLY JSON lines. No other text. If nothing to extract, output nothing."""
 
     result = call_llm(
-        "你是 culinary-engine 项目的知识策展人。全面、详尽地提取所有有价值的知识点。每个层级、每个agent、每个决策都要单独提取。只输出 JSON。",
+        "You are a strict fact extractor. Only output facts explicitly stated in the source. Never invent or hallucinate.",
         prompt,
         max_tokens=4096,
     )
@@ -388,11 +388,22 @@ Output ONLY valid JSON lines, one per line. No markdown, no explanation, no code
     insights = []
     for line in result.strip().split("\n"):
         line = line.strip()
-        if not line or not line.startswith("{"):
+        if not line:
+            continue
+        # Strip markdown code block markers if present
+        if line.startswith("```"):
+            continue
+        if not line.startswith("{"):
             continue
         try:
             ins = json.loads(line)
             if "insight" in ins:
+                # Fix backlink format: remove any [[]] wrapping from related
+                if "related" in ins:
+                    ins["related_pages"] = [
+                        r.replace("[[", "").replace("]]", "")
+                        for r in (ins.pop("related") if isinstance(ins.get("related"), list) else [])
+                    ]
                 insights.append(ins)
         except json.JSONDecodeError:
             pass
@@ -525,7 +536,11 @@ One concept per page. Do NOT create catch-all pages like "concepts/resource.md" 
             decision = json.loads(line.strip())
             idx = decision.get("index", 0) - 1
             if 0 <= idx < len(insights):
-                insights[idx]["action"] = decision.get("action", "KEEP_SEPARATE")
+                action = decision.get("action", "KEEP_SEPARATE")
+                # Safety: never REPLACE unless we're sure (prevent hallucination overwrites)
+                if action == "REPLACE" and not insights[idx].get("contradiction"):
+                    action = "UPDATE"  # downgrade to UPDATE
+                insights[idx]["action"] = action
                 insights[idx]["target_page"] = decision.get("target_page", "")
                 insights[idx]["decision_reason"] = decision.get("reason", "")
         except (json.JSONDecodeError, IndexError):
@@ -603,16 +618,23 @@ def step_write(insights, dry_run=False):
                 sources.append(f"curate-cycle-{ts()[:10]}")
             meta["sources"] = sources
 
-            # Track related pages via [[backlinks]]
+            # Track related pages (clean format, no double brackets in YAML)
             related = meta.get("related", [])
             for rp in ins.get("related_pages", []):
-                link = f"[[{rp}]]"
-                if link not in related:
-                    related.append(link)
+                # Clean: remove any [[ ]] wrapping, store as plain path
+                clean = rp.replace("[[", "").replace("]]", "").strip()
+                if clean and clean not in related:
+                    related.append(clean)
             meta["related"] = related[:20]
 
         if additions:
-            body += f"\n## Updates ({ts()[:10]})\n" + "\n".join(additions) + "\n"
+            # Avoid duplicate Updates sections — append to existing or create new
+            date_header = f"## Updates ({ts()[:10]})"
+            if date_header in body:
+                # Append to existing section
+                body = body.replace(date_header, date_header + "\n" + "\n".join(additions))
+            else:
+                body += f"\n{date_header}\n" + "\n".join(additions) + "\n"
 
         write_wiki_page(page_name, meta, body)
         print(f"  Wrote: {page_name} ({len(page_insights)} insights)")
