@@ -33,7 +33,7 @@ import requests
 from tqdm import tqdm
 
 # ── paths ─────────────────────────────────────────────────────────────────────
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 L2A_DIR = ROOT / "output" / "l2a"
 DEFAULT_INPUT = L2A_DIR / "ingredient_seeds.json"
 DEFAULT_OUTPUT = L2A_DIR / "canonical_map.json"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 4 deduplication.
+"""L0 deduplication.
 
 Embeds scientific_statement fields via Ollama qwen3-embedding:8b,
 then deduplicates by cosine similarity:
@@ -128,10 +128,10 @@ def embed_statements(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Stage 4 deduplication via embedding cosine similarity",
+        description="L0 deduplication via embedding cosine similarity",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--open-principles", required=True, help="Path to stage4_raw.jsonl (open-extracted principles)")
+    parser.add_argument("--open-principles", required=True, help="Path to l0_raw.jsonl (open-extracted principles)")
     parser.add_argument("--existing-principles", required=True, help="Path to l0_principles_v2.jsonl (Stage3b existing)")
     parser.add_argument("--output", required=True, help="Output path for deduplicated JSONL")
     parser.add_argument("--config", required=True, help="Path to config/api.yaml (for Ollama config)")

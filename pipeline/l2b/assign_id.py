@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-assign_recipe_id.py — Stage 5.6
-Assign unique recipe_id to every recipe in stage5_batch output files.
+assign_recipe_id.py — L2b
+Assign unique recipe_id to every recipe in recipes output files.
 
 ID format: {book_id}_r{seq:04d}, e.g. ofc_r0001
 - book_id = filename stem with '_recipes' removed
@@ -13,17 +13,25 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-STAGE5_DIR = ROOT / "output" / "stage5_batch"
+ROOT = Path(__file__).resolve().parents[2]
+RECIPES_DIR = ROOT / "output" / "recipes"
+# Backward compatibility fallback
+STAGE5_DIR_LEGACY = ROOT / "output" / "stage5_batch"
 
 
 def main() -> None:
     # Each book is a directory containing stage5_results.jsonl
     # Each line in the JSONL is a chunk: {book_id, chunk_idx, chunk_type, topics, recipes[]}
     # Recipes are nested inside chunks.
-    jsonl_files = sorted(STAGE5_DIR.glob("*/stage5_results.jsonl"))
+    # Try new path first, fall back to old
+    active_dir = RECIPES_DIR if RECIPES_DIR.exists() else STAGE5_DIR_LEGACY
+    jsonl_files = sorted(active_dir.glob("*/stage5_results.jsonl"))
     if not jsonl_files:
-        print(f"No stage5_results.jsonl files found in {STAGE5_DIR}", file=sys.stderr)
+        # Try the other directory
+        other_dir = STAGE5_DIR_LEGACY if active_dir == RECIPES_DIR else RECIPES_DIR
+        jsonl_files = sorted(other_dir.glob("*/stage5_results.jsonl"))
+    if not jsonl_files:
+        print(f"No stage5_results.jsonl files found in {RECIPES_DIR} or {STAGE5_DIR_LEGACY}", file=sys.stderr)
         sys.exit(1)
 
     print(f"Found {len(jsonl_files)} book(s)")

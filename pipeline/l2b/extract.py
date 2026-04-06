@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Stage5 Step A: Recipe Structure Extraction
+L2b Recipe Structure Extraction
 Uses local qwen3.5 (Ollama) to extract structured recipe JSON from chunk text.
 """
 import json
@@ -21,28 +21,40 @@ except ImportError:
     from pydantic import BaseModel
     from typing import List, Optional
 
+import importlib.util
 import requests
-import stage1_pipeline as stage1
+
+# Cross-script import: load pipeline/prep/pipeline.py regardless of how this script is invoked
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_stage1_spec = importlib.util.spec_from_file_location("stage1_pipeline", _REPO_ROOT / "pipeline" / "prep" / "pipeline.py")
+stage1 = importlib.util.module_from_spec(_stage1_spec)
+_stage1_spec.loader.exec_module(stage1)
 
 SESSION = requests.Session()
 SESSION.trust_env = False
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_ROOT = REPO_ROOT / "output"
 
+def _resolve_chunks_path(book_subpath: str) -> str:
+    """Try new prep/ path first, fall back to stage1/."""
+    new = OUTPUT_ROOT / book_subpath.replace("/stage1/", "/prep/").replace("/stage1/stage1/", "/prep/")
+    old = OUTPUT_ROOT / book_subpath
+    return str(new) if new.exists() else str(old)
+
 BATCH_BOOKS = {
-    "ofc": str(OUTPUT_ROOT / "ofc/stage1/chunks_smart.json"),
-    "mc_vol2": str(OUTPUT_ROOT / "mc/vol2/stage1/chunks_smart.json"),
-    "mc_vol3": str(OUTPUT_ROOT / "mc/vol3/stage1/chunks_smart.json"),
-    "mc_vol4": str(OUTPUT_ROOT / "mc/vol4/stage1/chunks_smart.json"),
-    "neurogastronomy": str(OUTPUT_ROOT / "neurogastronomy/stage1/stage1/chunks_smart.json"),
-    "mc_vol1": str(OUTPUT_ROOT / "mc_vol1/stage1/stage1/chunks_smart.json"),
-    "salt_fat_acid_heat": str(OUTPUT_ROOT / "salt_fat_acid_heat/stage1/stage1/chunks_smart.json"),
-    "ice_cream_flavor": str(OUTPUT_ROOT / "ice_cream_flavor/stage1/stage1/chunks_smart.json"),
-    "mouthfeel": str(OUTPUT_ROOT / "mouthfeel/stage1/stage1/chunks_smart.json"),
-    "flavorama": str(OUTPUT_ROOT / "flavorama/stage1/stage1/chunks_smart.json"),
-    "science_of_spice": str(OUTPUT_ROOT / "science_of_spice/stage1/stage1/chunks_smart.json"),
-    "professional_baking": str(OUTPUT_ROOT / "professional_baking/stage1/stage1/chunks_smart.json"),
+    "ofc": _resolve_chunks_path("ofc/stage1/chunks_smart.json"),
+    "mc_vol2": _resolve_chunks_path("mc/vol2/stage1/chunks_smart.json"),
+    "mc_vol3": _resolve_chunks_path("mc/vol3/stage1/chunks_smart.json"),
+    "mc_vol4": _resolve_chunks_path("mc/vol4/stage1/chunks_smart.json"),
+    "neurogastronomy": _resolve_chunks_path("neurogastronomy/stage1/stage1/chunks_smart.json"),
+    "mc_vol1": _resolve_chunks_path("mc_vol1/stage1/stage1/chunks_smart.json"),
+    "salt_fat_acid_heat": _resolve_chunks_path("salt_fat_acid_heat/stage1/stage1/chunks_smart.json"),
+    "ice_cream_flavor": _resolve_chunks_path("ice_cream_flavor/stage1/stage1/chunks_smart.json"),
+    "mouthfeel": _resolve_chunks_path("mouthfeel/stage1/stage1/chunks_smart.json"),
+    "flavorama": _resolve_chunks_path("flavorama/stage1/stage1/chunks_smart.json"),
+    "science_of_spice": _resolve_chunks_path("science_of_spice/stage1/stage1/chunks_smart.json"),
+    "professional_baking": _resolve_chunks_path("professional_baking/stage1/stage1/chunks_smart.json"),
 }
 
 COMPILED_MD_DIR = Path("/Users/jeff/Documents/厨书数据库（编译）")
@@ -369,12 +381,17 @@ def prepare_compiled_md_sources(md_dir=COMPILED_MD_DIR, output_root=L0_OUTPUT_RO
             print(f"[warn] missing compiled md: {source}")
             continue
         book_id = normalize_compiled_md_book_id(md_name)
-        stage1_dir = Path(output_root) / book_id / "stage1"
-        stage1_dir.mkdir(parents=True, exist_ok=True)
-        target = stage1_dir / "raw_merged.md"
+        prep_dir = Path(output_root) / book_id / "prep"
+        prep_dir.mkdir(parents=True, exist_ok=True)
+        target = prep_dir / "raw_merged.md"
         if not target.exists():
-            shutil.copyfile(source, target)
-            print(f"[prep] copied {md_name} -> {stage1_dir}")
+            # Fall back to old stage1 location
+            stage1_target = Path(output_root) / book_id / "stage1" / "raw_merged.md"
+            if stage1_target.exists():
+                shutil.copyfile(stage1_target, target)
+            else:
+                shutil.copyfile(source, target)
+            print(f"[prep] copied {md_name} -> {prep_dir}")
         prepared.append((book_id, target))
     return prepared
 
@@ -384,9 +401,17 @@ def chunk_compiled_md_books(output_root=L0_OUTPUT_ROOT, split_model="qwen3.5:2b"
     stage1.configure_ollama({"url": "http://localhost:11434", "options": {"think": False}})
     for md_name in COMPILED_MD_FILES:
         book_id = normalize_compiled_md_book_id(md_name)
+        prep_dir = Path(output_root) / book_id / "prep"
         stage1_dir = Path(output_root) / book_id / "stage1"
-        raw_merged = stage1_dir / "raw_merged.md"
-        chunks_raw = stage1_dir / "chunks_raw.json"
+        # Try new path first, fall back to old
+        if (prep_dir / "raw_merged.md").exists():
+            work_dir = prep_dir
+        elif (stage1_dir / "raw_merged.md").exists():
+            work_dir = stage1_dir
+        else:
+            continue
+        raw_merged = work_dir / "raw_merged.md"
+        chunks_raw = work_dir / "chunks_raw.json"
         if not raw_merged.exists() or chunks_raw.exists():
             continue
 
@@ -421,7 +446,7 @@ def chunk_compiled_md_books(output_root=L0_OUTPUT_ROOT, split_model="qwen3.5:2b"
                 }
             )
         chunks_raw.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        (stage1_dir / "step4_quality.json").write_text(
+        (work_dir / "step4_quality.json").write_text(
             json.dumps(stage1.summarize_step4_chunks(payload), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
@@ -432,7 +457,9 @@ def chunk_compiled_md_books(output_root=L0_OUTPUT_ROOT, split_model="qwen3.5:2b"
 
 def create_smart_chunks_from_raw(output_root=L0_OUTPUT_ROOT):
     created = 0
-    for chunks_raw_path in Path(output_root).glob("*/stage1/chunks_raw.json"):
+    # Search both new and old paths
+    raw_paths = list(Path(output_root).glob("*/prep/chunks_raw.json")) + list(Path(output_root).glob("*/stage1/chunks_raw.json"))
+    for chunks_raw_path in raw_paths:
         smart_path = chunks_raw_path.with_name("chunks_smart.json")
         if smart_path.exists():
             continue
@@ -460,12 +487,12 @@ def create_smart_chunks_from_raw(output_root=L0_OUTPUT_ROOT):
     return created
 
 
-def discover_pending_stage5_books(output_root=L0_OUTPUT_ROOT, stage5_root=Path("output/stage5_batch")):
+def discover_pending_stage5_books(output_root=L0_OUTPUT_ROOT, stage5_root=Path("output/recipes")):
     discovered = {}
     for book_id, chunks_path in BATCH_BOOKS.items():
         discovered[book_id] = Path(chunks_path)
 
-    for smart_path in Path(output_root).glob("*/stage1/chunks_smart.json"):
+    for smart_path in list(Path(output_root).glob("*/prep/chunks_smart.json")) + list(Path(output_root).glob("*/stage1/chunks_smart.json")):
         book_id = smart_path.parent.parent.name
         discovered.setdefault(book_id, smart_path)
 
@@ -491,7 +518,7 @@ def discover_pending_stage5_books(output_root=L0_OUTPUT_ROOT, stage5_root=Path("
     return pending
 
 
-def write_batch_catalog(pending_books, path=Path("config/stage5_batch_all.json")):
+def write_batch_catalog(pending_books, path=Path("config/recipes_all.json")):
     payload = [{"book_id": book_id, "chunks_path": str(chunks_path)} for book_id, chunks_path in pending_books]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -623,7 +650,7 @@ def process_pending_books(pending, output_root, model, concurrency=1):
             print(f"[done] {book_id}")
 
 
-def run_batch(model="qwen3.5-flash", output_root=Path("output/stage5_batch"), selected_books=None, concurrency=1):
+def run_batch(model="qwen3.5-flash", output_root=Path("output/recipes"), selected_books=None, concurrency=1):
     output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -632,7 +659,7 @@ def run_batch(model="qwen3.5-flash", output_root=Path("output/stage5_batch"), se
     process_pending_books(pending, output_root, model, concurrency=concurrency)
 
 
-def run_batch_catalog(model="qwen3.5-flash", output_root=Path("output/stage5_batch"), selected_books=None, concurrency=1):
+def run_batch_catalog(model="qwen3.5-flash", output_root=Path("output/recipes"), selected_books=None, concurrency=1):
     output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -650,7 +677,7 @@ def run_batch_catalog(model="qwen3.5-flash", output_root=Path("output/stage5_bat
 
 def run_batch_auto(
     model="qwen3.5-flash",
-    output_root=Path("output/stage5_batch"),
+    output_root=Path("output/recipes"),
     scan_interval_hours=2,
     concurrency=1,
 ):
@@ -771,7 +798,7 @@ The first time we made one was for family meal back when we'd just started servi
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--batch":
         model = sys.argv[2] if len(sys.argv) > 2 else "qwen3.5-flash"
-        output_root = Path(sys.argv[3]) if len(sys.argv) > 3 else Path("output/stage5_batch")
+        output_root = Path(sys.argv[3]) if len(sys.argv) > 3 else Path("output/recipes")
         selected_books = sys.argv[4:] if len(sys.argv) > 4 else None
         concurrency = 1
         print(f"Batch model: {model}")
@@ -783,7 +810,7 @@ def main():
 
     if len(sys.argv) > 1 and sys.argv[1] == "--batch-all":
         model = sys.argv[2] if len(sys.argv) > 2 else "qwen3.5-flash"
-        output_root = Path(sys.argv[3]) if len(sys.argv) > 3 else Path("output/stage5_batch")
+        output_root = Path(sys.argv[3]) if len(sys.argv) > 3 else Path("output/recipes")
         concurrency = int(sys.argv[4]) if len(sys.argv) > 4 else 1
         selected_books = sys.argv[5:] if len(sys.argv) > 5 else None
         print(f"Batch-all model: {model}")
@@ -794,7 +821,7 @@ def main():
 
     if len(sys.argv) > 1 and sys.argv[1] == "--batch-auto":
         model = sys.argv[2] if len(sys.argv) > 2 else "qwen3.5-flash"
-        output_root = Path(sys.argv[3]) if len(sys.argv) > 3 else Path("output/stage5_batch")
+        output_root = Path(sys.argv[3]) if len(sys.argv) > 3 else Path("output/recipes")
         scan_interval_hours = float(sys.argv[4]) if len(sys.argv) > 4 else 2.0
         concurrency = int(sys.argv[5]) if len(sys.argv) > 5 else 1
         print(f"Batch-auto model: {model}")
@@ -805,7 +832,7 @@ def main():
         return
 
     model = sys.argv[1] if len(sys.argv) > 1 else "qwen3.5:latest"
-    output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("output/stage5_pilot")
+    output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("output/recipes_pilot")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Model: {model}")

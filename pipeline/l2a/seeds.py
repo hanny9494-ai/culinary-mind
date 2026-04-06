@@ -3,7 +3,7 @@
 L2a Ingredient Seed Extractor
 Scans all stage5_results.jsonl files and extracts unique ingredient seeds.
 No LLM — pure Python normalization.
-Output: ~/culinary-engine/output/l2a/ingredient_seeds.json
+Output: ~/culinary-mind/output/l2a/ingredient_seeds.json
 """
 
 import json
@@ -13,8 +13,11 @@ from collections import defaultdict
 from pathlib import Path
 
 # ── Paths ────────────────────────────────────────────────────────────────────
-STAGE5_BASE = Path("/Users/jeff/culinary-engine/output/stage5_batch")
-OUTPUT_DIR  = Path("/Users/jeff/culinary-engine/output/l2a")
+# Try new path first, fall back to old
+_RECIPES_DIR = Path("/Users/jeff/culinary-mind/output/recipes")
+_STAGE5_DIR = Path("/Users/jeff/culinary-mind/output/stage5_batch")
+STAGE5_BASE = _RECIPES_DIR if _RECIPES_DIR.exists() else _STAGE5_DIR
+OUTPUT_DIR  = Path("/Users/jeff/culinary-mind/output/l2a")
 OUTPUT_FILE = OUTPUT_DIR / "ingredient_seeds.json"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

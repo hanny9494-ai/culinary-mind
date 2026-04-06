@@ -172,8 +172,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Extract L2a ingredient mentions from one book.md using qwen3.5-flash")
     parser.add_argument("--book-id", required=True)
     parser.add_argument("--book-md", required=True)
-    parser.add_argument("--output", default="~/culinary-engine/output/l2a/book_ingredients.json")
-    parser.add_argument("--cache-dir", default="~/culinary-engine/output/l2a/extract_cache")
+    parser.add_argument("--output", default="~/culinary-mind/output/l2a/book_ingredients.json")
+    parser.add_argument("--cache-dir", default="~/culinary-mind/output/l2a/extract_cache")
     parser.add_argument("--replace-source", action="store_true", help="Replace existing items from this book source before writing output")
     args = parser.parse_args()
 

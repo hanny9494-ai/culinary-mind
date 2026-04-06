@@ -11,7 +11,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parents[2]
 EXTERNAL_DIR = BASE_DIR / "data" / "external"
 OUTPUT_DIR = BASE_DIR / "output" / "l2a"
 SEEDS_FILE = OUTPUT_DIR / "ingredient_seeds.json"

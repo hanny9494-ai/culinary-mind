@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 4 open extraction pipeline.
+"""L0 open extraction pipeline.
 
 Phase A: 27b filter -- classify chunks for extractable scientific propositions.
 Phase B: Opus extract -- extract atomic scientific propositions via Claude.
@@ -19,10 +19,10 @@ from typing import Any
 import requests
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # ---------------------------------------------------------------------------
-# Ollama session (proxy bypass) -- mirrors scripts/utils/ollama_client.py
+# Ollama session (proxy bypass) -- mirrors pipeline/utils/ollama_client.py
 # ---------------------------------------------------------------------------
 
 _OLLAMA_BASE = "http://localhost:11434"
@@ -247,6 +247,7 @@ def resolve_chunks_path(chunks_arg: str | None, book_id: str | None) -> Path:
         raise FileNotFoundError("Provide --chunks or --book-id.")
 
     candidates = [
+        REPO_ROOT / "output" / book_id / "prep" / "chunks_smart.json",
         REPO_ROOT / "output" / book_id / "stage1" / "chunks_smart.json",
     ]
     for candidate in candidates:
@@ -259,8 +260,10 @@ def resolve_output_dir(output_dir_arg: str | None, book_id: str | None) -> Path:
     if output_dir_arg:
         return Path(output_dir_arg)
     if book_id:
-        return REPO_ROOT / "output" / book_id / "stage4"
-    return REPO_ROOT / "output" / "stage4"
+        new_path = REPO_ROOT / "output" / book_id / "l0"
+        old_path = REPO_ROOT / "output" / book_id / "stage4"
+        return new_path if new_path.exists() else old_path if old_path.exists() else new_path
+    return REPO_ROOT / "output" / "l0"
 
 
 # ---------------------------------------------------------------------------
@@ -615,14 +618,14 @@ def run_phase_b(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Stage 4 open extraction: Phase A (27b filter) + Phase B (Opus extract)",
+        description="L0 open extraction: Phase A (27b filter) + Phase B (Opus extract)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--chunks", help="Path to chunks_smart.json")
     parser.add_argument("--book-id", help="Book id used to auto-discover chunks_smart.json and default output paths")
     parser.add_argument("--config", default=str(REPO_ROOT / "config" / "api.yaml"), help="Path to config/api.yaml")
     parser.add_argument("--domains", default=str(REPO_ROOT / "config" / "domains_v2.json"), help="Path to config/domains_v2.json")
-    parser.add_argument("--output-dir", help="Output directory for stage4 artifacts")
+    parser.add_argument("--output-dir", help="Output directory for l0 artifacts")
     parser.add_argument("--filter-model", default="qwen3.5:27b", help="Ollama model for Phase A filter (default: qwen3.5:27b)")
     parser.add_argument("--save-every", type=int, default=50, help="Save progress every N records (default: 50)")
     parser.add_argument("--watchdog", type=int, default=15, help="Abort if no progress for N minutes (default: 15, 0=disable)")
@@ -647,8 +650,13 @@ def main() -> None:
     if not args.dry_run:
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    filter_path = output_dir / "stage4_filter.jsonl"
-    raw_path = output_dir / "stage4_raw.jsonl"
+    filter_path = output_dir / "l0_filter.jsonl" if (output_dir / "l0_filter.jsonl").exists() else output_dir / "stage4_filter.jsonl"
+    raw_path = output_dir / "l0_raw.jsonl" if (output_dir / "l0_raw.jsonl").exists() else output_dir / "stage4_raw.jsonl"
+    # For new runs, use new names
+    if not filter_path.exists():
+        filter_path = output_dir / "l0_filter.jsonl"
+    if not raw_path.exists():
+        raw_path = output_dir / "l0_raw.jsonl"
 
     # Load inputs
     print(f"Loading chunks from {chunks_path} ...", flush=True)
@@ -702,7 +710,7 @@ def main() -> None:
         resume=args.resume,
     )
 
-    print("Stage 4 open extraction complete.", flush=True)
+    print("L0 open extraction complete.", flush=True)
 
 
 if __name__ == "__main__":

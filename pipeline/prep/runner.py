@@ -58,8 +58,12 @@ def log_line(path: Path, message: str) -> None:
 
 def ensure_root_raw(book_dir: Path) -> bool:
     root_raw = book_dir / "raw_merged.md"
+    prep_raw = book_dir / "prep" / "raw_merged.md"
     stage1_raw = book_dir / "stage1" / "raw_merged.md"
     if root_raw.exists():
+        return True
+    if prep_raw.exists():
+        root_raw.write_text(prep_raw.read_text(encoding="utf-8"), encoding="utf-8")
         return True
     if stage1_raw.exists():
         root_raw.write_text(stage1_raw.read_text(encoding="utf-8"), encoding="utf-8")
@@ -70,8 +74,15 @@ def ensure_root_raw(book_dir: Path) -> bool:
 def infer_book_status(book_dir: Path) -> dict[str, Any]:
     raw_merged = book_dir / "raw_merged.md"
     chunks_raw = book_dir / "chunks_raw.json"
-    smart = book_dir / "stage1" / "chunks_smart.json"
-    failures = book_dir / "stage1" / "annotation_failures.json"
+    # Try new path first, fall back to old
+    prep_dir = book_dir / "prep"
+    stage1_dir = book_dir / "stage1"
+    if (prep_dir / "chunks_smart.json").exists():
+        smart = prep_dir / "chunks_smart.json"
+        failures = prep_dir / "annotation_failures.json"
+    else:
+        smart = stage1_dir / "chunks_smart.json"
+        failures = stage1_dir / "annotation_failures.json"
     progress = load_json(book_dir / "stage1_progress.json", {})
     raw_count = count_json_list(chunks_raw)
     smart_count = count_json_list(smart)
@@ -104,14 +115,14 @@ def acquire_lock(lock_path: Path):
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as exc:
-        raise RunnerError(f"Another stage1_serial_runner is already active: {lock_path}") from exc
+        raise RunnerError(f"Another prep_serial_runner is already active: {lock_path}") from exc
     handle.write(str(os.getpid()))
     handle.flush()
     return handle
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Serial queue runner for local Ollama Stage1 Step4+5")
+    parser = argparse.ArgumentParser(description="Serial queue runner for local Ollama prep Step4+5")
     parser.add_argument("--config", required=True)
     parser.add_argument("--books", required=True)
     parser.add_argument("--toc", required=True)
@@ -152,9 +163,9 @@ def main() -> int:
     args = build_parser().parse_args()
     output_root = Path(args.output_root).expanduser()
     logs_dir = output_root / "logs"
-    lock_path = Path(args.lock_file).expanduser() if args.lock_file else logs_dir / "stage1_serial_runner.lock"
-    state_path = Path(args.state_file).expanduser() if args.state_file else logs_dir / "stage1_serial_runner_state.json"
-    log_path = Path(args.log_file).expanduser() if args.log_file else logs_dir / "stage1_serial_runner.log"
+    lock_path = Path(args.lock_file).expanduser() if args.lock_file else logs_dir / "prep_serial_runner.lock"
+    state_path = Path(args.state_file).expanduser() if args.state_file else logs_dir / "prep_serial_runner_state.json"
+    log_path = Path(args.log_file).expanduser() if args.log_file else logs_dir / "prep_serial_runner.log"
     logs_dir.mkdir(parents=True, exist_ok=True)
     lock_handle = acquire_lock(lock_path)
 
@@ -186,7 +197,7 @@ def main() -> int:
 
             cmd = [
                 sys.executable,
-                "/Users/jeff/culinary-engine/scripts/stage1_pipeline.py",
+                "/Users/jeff/culinary-mind/pipeline/prep/pipeline.py",
                 "--book-id", book_id,
                 "--config", args.config,
                 "--books", args.books,
@@ -208,7 +219,7 @@ def main() -> int:
             log_line(log_path, f"[runner] launch {book_id}")
 
             try:
-                result = subprocess.run(cmd, cwd="/Users/jeff/culinary-engine")
+                result = subprocess.run(cmd, cwd="/Users/jeff/culinary-mind")
             except BaseException as exc:
                 post = finalize_book_state(
                     state,

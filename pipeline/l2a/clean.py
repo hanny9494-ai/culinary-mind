@@ -2,7 +2,7 @@
 import argparse, json, re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 L2A_DIR = ROOT / 'output' / 'l2a'
 L2C_DIR = ROOT / 'output' / 'l2c'
 INPUT_FILE = L2A_DIR / 'canonical_map_merged.json'

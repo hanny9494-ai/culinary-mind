@@ -245,8 +245,15 @@ def infer_resume_status(book: BookSpec, output_dir: Path) -> str:
     chunks_raw = output_dir / "chunks_raw.json"
     chunks_raw_data = load_json(chunks_raw, []) if chunks_raw.exists() else []
     step4_quality = load_json(output_dir / "step4_quality.json", {}) if (output_dir / "step4_quality.json").exists() else {}
-    stage1_chunks = output_dir / "stage1" / "chunks_smart.json"
-    stage1_failures = output_dir / "stage1" / "annotation_failures.json"
+    # Try new path first, fall back to old
+    prep_dir = output_dir / "prep"
+    stage1_dir_legacy = output_dir / "stage1"
+    if (prep_dir / "chunks_smart.json").exists():
+        _chunks_dir = prep_dir
+    else:
+        _chunks_dir = stage1_dir_legacy
+    stage1_chunks = _chunks_dir / "chunks_smart.json"
+    stage1_failures = _chunks_dir / "annotation_failures.json"
     stage1_chunks_data = load_json(stage1_chunks, []) if stage1_chunks.exists() else []
     stage1_failures_data = load_json(stage1_failures, []) if stage1_failures.exists() else []
 
@@ -1373,9 +1380,9 @@ def run_step5_annotate(
     watchdog_minutes: int,
 ) -> tuple[Path, int]:
     chunks_path = output_dir / "chunks_raw.json"
-    stage1_dir = ensure_dir(output_dir / "stage1")
-    out_path = stage1_dir / "chunks_smart.json"
-    failures_path = stage1_dir / "annotation_failures.json"
+    prep_dir = ensure_dir(output_dir / "prep")
+    out_path = prep_dir / "chunks_smart.json"
+    failures_path = prep_dir / "annotation_failures.json"
     chunks = load_json_list(chunks_path)
     if dry_run and not chunks:
         save_json(out_path, [])

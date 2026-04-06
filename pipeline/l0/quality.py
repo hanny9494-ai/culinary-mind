@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 4 quality checks.
+"""L0 quality checks.
 
 Validates deduped open-extracted principles against quality criteria:
   - has_number: scientific_statement contains digits
@@ -10,7 +10,7 @@ Validates deduped open-extracted principles against quality criteria:
   - causal_chain_format: if causal_chain, has >=2 steps
 
 Passing records -> l0_principles_open.jsonl
-Stats -> stage4_quality_report.json
+Stats -> l0_quality_report.json
 """
 from __future__ import annotations
 
@@ -184,10 +184,10 @@ def record_passes(checks: dict[str, bool]) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Stage 4 quality checks on deduped open-extracted principles",
+        description="L0 quality checks on deduped open-extracted principles",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--input", required=True, help="Path to stage4_deduped.jsonl")
+    parser.add_argument("--input", required=True, help="Path to l0_deduped.jsonl")
     parser.add_argument("--chunks", required=True, help="Path to chunks_smart.json (for citation verification)")
     parser.add_argument("--output", required=True, help="Output path for passing principles (l0_principles_open.jsonl)")
     parser.add_argument("--report", required=True, help="Output path for quality report JSON")

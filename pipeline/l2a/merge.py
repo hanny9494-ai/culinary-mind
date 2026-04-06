@@ -28,7 +28,7 @@ from pathlib import Path
 import requests
 from tqdm import tqdm
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 L2A_DIR = ROOT / "output" / "l2a"
 INPUT_FILE = L2A_DIR / "canonical_map.json"
 OUTPUT_FILE = L2A_DIR / "canonical_map_merged.json"
@@ -311,6 +311,7 @@ def main():
     parser.add_argument("--skip-opus", action="store_true", help="Skip Opus merge, only do Flash re-map")
     parser.add_argument("--skip-flash", action="store_true", help="Skip Flash re-map, only do Opus merge")
     parser.add_argument("--dry-run", action="store_true", help="Show stats only, don't call APIs")
+    parser.add_argument("--resume", action="store_true", help="Resume from existing merge_groups.json if available")
     args = parser.parse_args()
 
     print(f"Loading {args.input} ...")
@@ -337,7 +338,12 @@ def main():
 
     # Round 2: Opus
     if not args.skip_opus:
-        merge_groups = round2_opus_merge(canonicals_list)
+        # Resume: load existing merge groups if available
+        if args.resume and MERGE_GROUPS_FILE.exists():
+            merge_groups = json.loads(MERGE_GROUPS_FILE.read_text(encoding="utf-8"))
+            print(f"Resumed {len(merge_groups)} merge groups from {MERGE_GROUPS_FILE}")
+        else:
+            merge_groups = round2_opus_merge(canonicals_list)
 
         # Save merge groups for audit
         MERGE_GROUPS_FILE.write_text(

@@ -490,7 +490,7 @@ class SummaryRow:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Batch OCR/extract L2a reference books into page txt files plus one combined book.md per book")
     parser.add_argument("--manifest", required=True, help="JSON manifest with books[]")
-    parser.add_argument("--output-root", default="~/culinary-engine/output/l2a/ocr_output")
+    parser.add_argument("--output-root", default="~/culinary-mind/output/l2a/ocr_output")
     parser.add_argument("--server-url", default=os.environ.get("PADDLE_SERVER_URL", ""))
     parser.add_argument("--token", default=os.environ.get("PADDLE_API_TOKEN", ""))
     parser.add_argument("--primary-server-url", default=os.environ.get("PADDLE_VL15_SERVER_URL", ""))
