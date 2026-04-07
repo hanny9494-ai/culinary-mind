@@ -15,7 +15,7 @@ BG='\033[1;32m'  # bright green
 SEP="${D}────────────────────────────────────────────────────────────────────────────${RST}"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-check_port() { nc -z -w1 localhost "$1" 2>/dev/null && printf "${G}●${RST}" || printf "${R}○${RST}"; }
+check_port() { nc -z -w2 -G2 localhost "$1" 2>/dev/null && printf "${G}●${RST}" || printf "${R}○${RST}"; }
 
 ago() {
   local ts_ms="$1"  # epoch ms
@@ -172,6 +172,36 @@ else
   printf "  ${D}books.yaml not found${RST}\n"
 fi
 
+# L2a R2 distillation progress
+r2_progress="$CE_HUB_CWD/output/l2a/atoms_r2/_progress.json"
+printf "${B}§ L2A R2${RST}  "
+if [ -f "$r2_progress" ]; then
+  python3 -c "
+import json, sys
+try:
+    p = json.load(open('$r2_progress'))
+except:
+    print('\033[2m(parse error)\033[0m'); sys.exit()
+done = p.get('done', 0); total = p.get('total', 21422)
+failed = p.get('failed', 0); eta = p.get('eta_seconds', -1)
+cost = p.get('cost_estimate_usd', 0)
+pct = int(done / total * 100) if total else 0
+bar_len = 10
+filled = int(pct / 100 * bar_len)
+bar = '\033[35m' + '█'*filled + '\033[2m' + '░'*(bar_len-filled) + '\033[0m'
+if eta > 0:
+    d, r = divmod(eta, 86400); h, m = divmod(r, 3600)
+    eta_str = f'{d}d{h}h' if d else (f'{h}h{m}m' if h else f'{m}m')
+else:
+    eta_str = '?'
+fail_str = f'  \033[31mfailed:{failed}\033[0m' if failed > 0 else ''
+print(f'[{bar}] {pct}% ({done}/{total}){fail_str}  ETA:{eta_str}  \${cost:.2f}')
+" 2>/dev/null || printf "${D}(error)${RST}"
+else
+  printf "${D}not started${RST}"
+fi
+printf "\n"
+
 printf "$SEP\n"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -224,6 +254,30 @@ printf "$(check_port 3456) cloudcli  "
 printf "$(check_port 3333) mctl\n"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# § H — Mac Mini (jify) harvest status (cached, ssh every 60s via /tmp file)
+# ─────────────────────────────────────────────────────────────────────────────
+JIFY_CACHE="/tmp/cehub-jify-status"
+JIFY_AGE=$(($(date +%s) - $(stat -f %m "$JIFY_CACHE" 2>/dev/null || echo 0)))
+if [ ! -f "$JIFY_CACHE" ] || [ $JIFY_AGE -gt 60 ]; then
+  ssh -o ConnectTimeout=2 -o BatchMode=yes jify '
+    queue=$(grep -hvc "^#\\|^$" ~/culinary-mind-mini/config/harvest-queue.txt ~/culinary-mind-mini/config/flavor-databases.txt ~/culinary-mind-mini/config/serious-eats-foodlab.txt ~/culinary-mind-mini/config/tds-brands.txt 2>/dev/null | awk "{s+=\$1} END {print s}")
+    done=$(find ~/culinary-mind-mini/data/raw -type f 2>/dev/null | wc -l | tr -d " ")
+    orch=$(pgrep -f harvest-orchestrator >/dev/null && echo running || echo idle)
+    claw=$(pgrep -f openclaw >/dev/null && echo running || echo idle)
+    echo "$queue|$done|$orch|$claw"
+  ' > "$JIFY_CACHE" 2>/dev/null || echo "offline|||" > "$JIFY_CACHE"
+fi
+IFS="|" read jify_q jify_d jify_o jify_c < "$JIFY_CACHE"
+if [ "$jify_q" = "offline" ]; then
+  printf "${B}§ JIFY${RST}  ${R}○${RST} offline\n"
+else
+  [ "$jify_o" = "running" ] && orch_dot="${G}●${RST}" || orch_dot="${D}○${RST}"
+  [ "$jify_c" = "running" ] && claw_dot="${G}●${RST}" || claw_dot="${D}○${RST}"
+  printf "${B}§ JIFY${RST}  ${G}●${RST} jify  ${D}queue:${RST}${jify_q}  ${D}done:${RST}${jify_d}  ${orch_dot}orch ${claw_dot}claw\n"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
 # § F — System resources (1 line)
 # ─────────────────────────────────────────────────────────────────────────────
 mem_info=$(python3 -c "
@@ -245,7 +299,7 @@ except Exception as e:
 disk_info=$(df -h "$HOME" 2>/dev/null | tail -1 | awk '{print "disk: "$4" free"}')
 
 ollama_vram=""
-if nc -z -w1 localhost 11434 2>/dev/null; then
+if nc -z -w2 -G2 localhost 11434 2>/dev/null; then
   model_count=$(curl -s --noproxy localhost --max-time 1 http://localhost:11434/api/tags 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('models',[])))" 2>/dev/null || echo "?")
   ollama_vram="${model_count} models"
 fi
