@@ -1,13 +1,13 @@
 #!/bin/bash
-# statusbar.sh — ce-hub TUI v2: Window nav bar + attention flashing
-#
-# Generates tmux window-status-format and status bar settings.
-# Window nav: each agent window gets a large colored block (>=14 cols).
+# statusbar.sh — ce-hub TUI v2: Window nav bar + attention state from attention.json
 #
 # Colors:
 #   active window    -> orange (#[bg=colour214,fg=colour234,bold])
-#   attention window -> red/orange flashing (via monitor-activity)
+#   attention window -> red    (#[bg=colour196,fg=colour231,bold])
 #   inactive window  -> dark grey (#[bg=colour237,fg=colour245])
+#
+# Attention is driven by .ce-hub/state/attention.json — NOT tmux monitor-activity.
+# window-label.sh reads attention.json per call to pick the right color style.
 
 CE_HUB_CWD="${CE_HUB_CWD:-$HOME/culinary-mind}"
 SCRIPTS="$CE_HUB_CWD/ce-hub/scripts"
@@ -21,21 +21,18 @@ set-option -g status-position bottom
 set-option -g status-style "bg=colour234,fg=colour245"
 set-option -g status-justify left
 
-# Window status blocks (inactive) -- >= 14 cols per cell
-set-option -g window-status-format "#[bg=colour237,fg=colour245,nobold]  #(bash ${SCRIPTS}/window-label.sh #{window_name})  #[bg=colour234]#[default]"
+# Window status blocks
+# window-label.sh reads attention.json and chooses the color prefix accordingly.
+# Inactive windows use a default dark-grey style; window-label.sh can override to red.
+set-option -g window-status-format "#(bash ${SCRIPTS}/window-label.sh #{window_name} inactive)"
+set-option -g window-status-current-format "#(bash ${SCRIPTS}/window-label.sh #{window_name} active)"
 
-# Active window -- orange
-set-option -g window-status-current-format "#[bg=colour214,fg=colour234,bold]  #(bash ${SCRIPTS}/window-label.sh #{window_name})  #[bg=colour234,fg=colour214]#[default]"
-
-# Attention window (monitor-activity flag) -- red/alert
-set-option -g window-status-activity-format "#[bg=colour196,fg=colour231,bold]  #(bash ${SCRIPTS}/window-label.sh #{window_name})  #[bg=colour234,fg=colour196]#[default]"
-
-set-option -g window-status-separator ""
-
-# Activity monitoring: triggers window-status-activity-format
-set-option -g monitor-activity on
+# Disable monitor-activity to avoid false positives (we use attention.json instead)
+set-option -g monitor-activity off
 set-option -g visual-activity off
 set-option -g activity-action none
+
+set-option -g window-status-separator ""
 
 # Status left: session indicator
 set-option -g status-left-length 10
@@ -45,8 +42,8 @@ set-option -g status-left "#[fg=colour214,bold] # #[default]"
 set-option -g status-right-length 60
 set-option -g status-right "#[fg=colour245]#(bash ${SCRIPTS}/statusbar-right.sh) #[fg=colour239]| #[fg=colour245]%H:%M"
 
-# Status interval
-set-option -g status-interval 5
+# Refresh frequently so attention changes appear quickly
+set-option -g status-interval 3
 
 # Pane borders (minimal -- dashboard pane needs clean space)
 set-option -g pane-border-style "fg=colour238"

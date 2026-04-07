@@ -11,6 +11,13 @@ apply_bindings() {
 # ce-hub mouse bindings v2 (auto-generated)
 set-option -g mouse on
 
+# === Pane click: select only, NO send-keys -M ===
+# The default tmux binding (select-pane + send-keys -M) forwards the click
+# event to the running application. For Claude Code TUI this causes the input
+# box to lock up (mouse escape sequence enters selection sub-state).
+# Fix: just select the pane, let the user type — no click forwarding.
+bind-key -T root MouseDown1Pane select-pane -t=
+
 # === Copy/Paste ===
 # Drag-select: copy to system clipboard, keep selection visible
 bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe "pbcopy"
@@ -54,7 +61,7 @@ bind-key Tab select-pane -t :.+
 TMUXCONF
 
   tmux source-file "$CONF_FILE" 2>&1
-  echo "Mouse bindings v2 applied."
+  echo "Mouse bindings v2 applied (input deadlock fix: no send-keys -M on pane click)."
 }
 
 apply_bindings

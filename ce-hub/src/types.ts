@@ -76,6 +76,7 @@ export interface AgentDefinition {
 }
 
 export interface CreateTaskInput {
+  id?: string;
   title: string;
   from_agent: string;
   to_agent: string;

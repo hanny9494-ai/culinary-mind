@@ -124,6 +124,7 @@ export class FileWatcher {
 
     // Create task in DB
     this.store.createTask({
+      id: taskId,
       title: task || 'Dispatched task', from_agent: from, to_agent: to,
       priority, payload: data as Record<string, unknown>,
     });
