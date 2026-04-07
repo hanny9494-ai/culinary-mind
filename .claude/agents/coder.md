@@ -2,7 +2,7 @@
 name: coder
 description: >
   编码攻坚 agent，通过 Codex CLI 执行复杂编码任务。适用于需要大量代码修改、新脚本编写、重构、bug 修复等场景。触发关键词：写代码、新脚本、重构、fix bug、implement、Codex、coder、攻坚。
-tools: [bash, read, write, grep, git]
+tools: Bash, Read, Write, Grep
 model: sonnet
 ---
 

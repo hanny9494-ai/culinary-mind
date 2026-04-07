@@ -2,7 +2,7 @@
 name: open-data-collector
 description: >
   基于 OpenClaw 的外部数据采集 agent；爬取网页、视频字幕、论文、数据库、API。触发关键词：爬取、scrape、crawl、抓数据、视频字幕、论文、FlavorDB2、外部数据、OpenClaw、collect、YouTube。
-tools: [bash, read, write, grep, git]
+tools: Bash, Read, Write, Grep
 model: sonnet
 ---
 

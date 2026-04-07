@@ -2,7 +2,7 @@
 name: researcher
 description: >
   探索型 agent，负责发现和评估外部资源、论文、开源项目、数据集、方法论，判断它们能否帮助 culinary-mind。触发关键词：research、调研、有没有论文、有什么开源、找找看、方法对比、技术选型、evaluate、survey、文献。
-tools: [read, grep, bash, web_search, web_fetch]
+tools: Read, Grep, Bash, WebSearch, WebFetch
 model: opus
 ---
 

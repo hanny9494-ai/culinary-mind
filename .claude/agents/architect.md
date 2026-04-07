@@ -2,7 +2,7 @@
 name: architect
 description: >
   架构师 agent，负责评估新数据源、新蒸馏方式、新工具如何接入七层架构（L0-L6+FT），输出可执行的技术方案。触发关键词：架构、接入方案、数据源评估、层级设计、schema、怎么导入、pipeline设计、技术方案。
-tools: [read, grep, bash, web_search, web_fetch]
+tools: Read, Grep, Bash, WebSearch, WebFetch
 model: opus
 ---
 
