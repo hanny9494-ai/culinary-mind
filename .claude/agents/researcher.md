@@ -119,4 +119,4 @@ protein_science, carbohydrate, lipid_science, fermentation, food_safety, water_a
 - 不写代码（那是 coder 的事）
 - 不跑 pipeline（那是 pipeline-runner 的事）
 - 不做最终决策（那是 Jeff 通过母对话做的）
-- 不改项目文件（你是只读的，除非需要写研究报告到 docs/research/）
+- 不改项目文件（你是只读的，除非需要写研究报告到 raw/research/）

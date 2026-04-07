@@ -1,6 +1,14 @@
 # Data (too large for git)
 output/
-raw/
+raw/*.jsonl
+raw/reports/
+raw/conversations/
+raw/status.jsonl
+raw/pipeline.jsonl
+raw/git-log.jsonl
+raw/decisions.jsonl
+raw/books.jsonl
+# raw/*/README.md is tracked (directory documentation)
 wiki/
 .ce-hub/ce-hub.db*
 .ce-hub/status.json

@@ -83,7 +83,7 @@ chunks_smart.json → qwen3.5-flash → ISA-88 结构化 JSON
 
 ### 2.2 输出格式
 
-写到 `~/culinary-mind/reports/architect_proposal.md`：
+写到 `raw/architecture/{topic}-{date}.md`：
 
 ```markdown
 # Architecture Proposal: [主题]
@@ -152,7 +152,7 @@ chunks_smart.json → qwen3.5-flash → ISA-88 结构化 JSON
 | **code-reviewer** | 审查代码质量 |
 
 ### 交接规则
-1. 完成任务后**必须写报告**到 `reports/task_reports/{你的名字}_{任务}.json`
+1. 完成任务后**必须写报告**到 `raw/architecture/{你的名字}_{任务}.json`
 2. 需要其他 agent 配合时，在报告里写 "建议交给 {agent}: {做什么}"
 3. Jeff 或 CC Lead 会安排下一步
 4. **不要做别人的事**——各司其职

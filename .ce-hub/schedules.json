@@ -1,5 +1,5 @@
 [
-  {"cron": "08:00", "task": "curate-wiki", "agent": "wiki-curator"},
-  {"cron": "23:00", "task": "curate-wiki", "agent": "wiki-curator"},
+  {"cron": "08:00", "task": "curate-wiki", "agent": "wiki-curator", "note": "wiki 写入路径必须是 /Users/jeff/culinary-mind/wiki/"},
+  {"cron": "23:00", "task": "curate-wiki", "agent": "wiki-curator", "note": "wiki 写入路径必须是 /Users/jeff/culinary-mind/wiki/"},
   {"cron": "*/30", "task": "ingest-conversations", "agent": "system"}
 ]

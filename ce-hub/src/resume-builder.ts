@@ -62,10 +62,10 @@ export class ResumeBuilder {
 
     // After claude starts, point it to the wiki (primary) + resume file (fallback)
     setTimeout(() => {
-      const wikiStatus = join(cwd, '.ce-hub', 'wiki', 'STATUS.md');
+      const wikiStatus = '/Users/jeff/culinary-mind/wiki/STATUS.md';
       const hasWiki = existsSync(wikiStatus);
       const msg = hasWiki
-        ? `Read .ce-hub/wiki/STATUS.md for project context, then .ce-hub/resume-prompt.md for recent session state. Report status to Jeff.`
+        ? `Read /Users/jeff/culinary-mind/wiki/STATUS.md for project context, then .ce-hub/resume-prompt.md for recent session state. Report status to Jeff.`
         : `Read .ce-hub/resume-prompt.md — it contains your session recovery context. Then report status to Jeff.`;
       const escaped = msg.replace(/'/g, "'\\''");
       exec(`tmux send-keys -t ${SESSION}:main.0 '${escaped}' Enter`);

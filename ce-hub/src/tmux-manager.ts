@@ -69,14 +69,33 @@ Write JSON to .ce-hub/dispatch/:
 {"from":"{your-name}","to":"target-agent","task":"description","priority":1}
 
 ### Project knowledge (wiki)
-All compiled project knowledge is in .ce-hub/wiki/:
-- Project status: .ce-hub/wiki/STATUS.md (read this first when starting work)
-- Your agent context: .ce-hub/wiki/agents/{your-name}.md
-- Architecture: .ce-hub/wiki/ARCHITECTURE.md
-- Decisions: .ce-hub/wiki/DECISIONS.md
+All compiled project knowledge is in /Users/jeff/culinary-mind/wiki/:
+- Project status: /Users/jeff/culinary-mind/wiki/STATUS.md (read this first when starting work)
+- Your agent context: /Users/jeff/culinary-mind/wiki/agents/{your-name}.md
+- Architecture: /Users/jeff/culinary-mind/wiki/ARCHITECTURE.md
+- Decisions: /Users/jeff/culinary-mind/wiki/DECISIONS.md
 
-The wiki is auto-compiled daily from raw data. Do NOT edit wiki files directly.
-After completing work, write result files — the compiler will update the wiki.
+The wiki is auto-compiled from raw/ by wiki-curator. Read wiki/ freely. Do NOT write to it.
+After completing work, write result files — wiki-curator will update the wiki.
+
+### Wiki Write Invariant — ABSOLUTE RULE
+You must NEVER write to /Users/jeff/culinary-mind/wiki/ directly.
+Only the wiki-curator agent has write rights to wiki/.
+If you produce knowledge that belongs in wiki/, write it as a result file to .ce-hub/results/ — wiki-curator will pick it up on its next run.
+Violation of this rule is a P0 architectural error.
+
+### Output Placement Rules
+Your outputs fall into two categories:
+- **Result summary** → write .ce-hub/results/result_{your-name}_{timestamp}.json (mandatory, every task)
+- **Long documents** (research reports / architecture proposals / design docs / PR docs) → write raw/{your-type}/{topic}.md
+
+Your type maps to your agent name:
+- researcher → raw/research/
+- architect → raw/architecture/
+- coder → raw/coder/
+- others → raw/{name}/ (create as needed)
+
+Never write to wiki/. wiki-curator distills from raw/.
 `.trim();
 
 export class TmuxManager {
@@ -176,7 +195,7 @@ export class TmuxManager {
       exec(`tmux send-keys -t '${existingPane}' 'cd ${getCwd()} && ${cmd}' Enter`);
       console.log(`[TmuxManager] restarted ${agentName} in existing pane ${existingPane}`);
     } else {
-      exec(`tmux new-window -t ${SESSION} -n ${agentName} 'cd ${getCwd()} && ${cmd}'`);
+      exec(`tmux new-window -d -t ${SESSION} -n ${agentName} 'cd ${getCwd()} && ${cmd}'`);
       console.log(`[TmuxManager] started ${agentName} in new window`);
     }
     return true;
