@@ -11,6 +11,7 @@ import type { Scheduler } from './scheduler.js';
 
 function getCwd() { return process.env.CE_HUB_CWD || process.cwd(); }
 function getCeHubDir() { return join(getCwd(), '.ce-hub'); }
+function getWikiDir() { return '/Users/jeff/culinary-mind/wiki'; }
 
 export async function buildApp(
   store: StateStore, engine: TaskEngine, tmux: TmuxManager,
@@ -96,7 +97,7 @@ export async function buildApp(
     if (existsSync(onboard)) sections.push(readFileSync(onboard, 'utf-8'));
 
     // wiki/STATUS.md
-    const status = join(ceHub, 'wiki', 'STATUS.md');
+    const status = join(getWikiDir(), 'STATUS.md');
     if (existsSync(status)) sections.push(readFileSync(status, 'utf-8'));
 
     return { context: sections.join('\n\n---\n\n'), files: sections.length };
@@ -104,7 +105,7 @@ export async function buildApp(
 
   // GET /api/wiki — list all wiki pages
   app.get('/api/wiki', async () => {
-    const wikiDir = join(getCeHubDir(), 'wiki');
+    const wikiDir = getWikiDir();
     if (!existsSync(wikiDir)) return { pages: [] };
     const pages: { name: string; path: string; size: number }[] = [];
     const scan = (dir: string, prefix: string) => {
@@ -123,7 +124,7 @@ export async function buildApp(
 
   // Safe wiki file reader — prevents path traversal
   const safeWikiRead = (subPath: string): { content: string; resolved: string } | null => {
-    const wikiDir = resolve(getCeHubDir(), 'wiki');
+    const wikiDir = resolve(getWikiDir());
     const target = resolve(wikiDir, subPath.endsWith('.md') ? subPath : `${subPath}.md`);
     if (!target.startsWith(wikiDir)) return null; // path traversal blocked
     if (!existsSync(target)) return null;
@@ -149,8 +150,8 @@ export async function buildApp(
   // GET /wiki/ — browse wiki in browser with markdown rendering
   app.get('/wiki', async (_req, reply) => reply.redirect('/wiki/'));
   app.get('/wiki/', async (req, reply) => {
-    const wikiDir = join(getCeHubDir(), 'wiki');
-    if (!existsSync(wikiDir)) return reply.type('text/html').send('<h1>Wiki not compiled yet</h1><p>Run: python3 scripts/compile-wiki.py --full</p>');
+    const wikiDir = getWikiDir();
+    if (!existsSync(wikiDir)) return reply.type('text/html').send('<h1>Wiki not compiled yet</h1><p>wiki-curator agent has not run yet. Trigger via dispatch.</p>');
 
     // Build page list
     const pages: string[] = [];
@@ -170,7 +171,7 @@ export async function buildApp(
   app.get('/wiki/*', async (req, reply) => {
     const rawPath = (req.params as any)['*'] as string;
     if (!rawPath) return reply.redirect('/wiki/');
-    const wikiDir = resolve(getCeHubDir(), 'wiki');
+    const wikiDir = resolve(getWikiDir());
     const filePath = resolve(wikiDir, rawPath);
     if (!filePath.startsWith(wikiDir) || !existsSync(filePath)) {
       return reply.status(404).type('text/html').send('<h1>404</h1><p>Page not found</p><a href="/wiki/">← Back to wiki</a>');
@@ -210,7 +211,7 @@ const WIKI_INDEX_HTML = `<!DOCTYPE html>
   <ul>
     {{LINKS}}
   </ul>
-  <p style="margin-top:3rem;color:#484f58;font-size:0.75rem;">Compiled by Qwen 3.5 Flash · <a href="/api/wiki">API</a> · <a href="/api/context">Context API</a></p>
+  <p style="margin-top:3rem;color:#484f58;font-size:0.75rem;">Compiled by wiki-curator agent · <a href="/api/wiki">API</a> · <a href="/api/context">Context API</a></p>
 </body>
 </html>`;
 
@@ -250,7 +251,7 @@ const WIKI_PAGE_HTML = `<!DOCTYPE html>
 <body>
   <nav><a href="/wiki/">← Wiki Index</a></nav>
   <div id="content"></div>
-  <p class="meta">CE-Hub Wiki · auto-compiled by Qwen 3.5 Flash</p>
+  <p class="meta">CE-Hub Wiki · auto-compiled by wiki-curator</p>
   <script>
     const b64 = '{{CONTENT_B64}}';
     const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));

@@ -54,7 +54,7 @@ export class FileWatcher {
 
     // Watch dispatch directory
     this.watchers.push(watch(dispatchDir, (event, filename) => {
-      if (event === 'rename' && filename?.endsWith('.json')) {
+      if ((event === 'rename' || event === 'change') && filename?.endsWith('.json')) {
         const filePath = join(dispatchDir, filename);
         if (!existsSync(filePath)) return;
         setTimeout(() => this.handleDispatch(filePath), 200); // debounce
@@ -63,7 +63,7 @@ export class FileWatcher {
 
     // Watch results directory
     this.watchers.push(watch(resultsDir, (event, filename) => {
-      if (event === 'rename' && filename?.endsWith('.json')) {
+      if ((event === 'rename' || event === 'change') && filename?.endsWith('.json')) {
         const filePath = join(resultsDir, filename);
         if (!existsSync(filePath)) return;
         setTimeout(() => this.handleResult(filePath), 200);
@@ -80,7 +80,13 @@ export class FileWatcher {
     // Periodically timeout stuck tasks
     this.taskTimeoutTimer = setInterval(() => this.timeoutStuckTasks(), 300_000); // every 5 min
 
-    console.log(`[FileWatcher] watching ${dispatchDir} and ${resultsDir}`);
+    // Polling fallback: fs.watch is unreliable on macOS, scan every 30s
+    setInterval(() => {
+      this.processExisting(dispatchDir, (f) => this.handleDispatch(f));
+      this.processExisting(resultsDir, (f) => this.handleResult(f));
+    }, 30_000);
+
+    console.log(`[FileWatcher] watching ${dispatchDir} and ${resultsDir} (+ 30s poll fallback)`);
   }
 
   private processExisting(dir: string, handler: (path: string) => void): void {
@@ -95,8 +101,8 @@ export class FileWatcher {
     const data = readJson(filePath);
     if (!data) return;
 
-    const from = data.from as string;
-    const to = data.to as string;
+    const from = (data.from || data.dispatched_by || "cc-lead") as string;
+    const to = (data.to || data.dispatched_to) as string;
     const task = data.task as string;
     const taskId = data.id as string || `dispatch_${Date.now()}`;
     const priority = (data.priority as number) || 1;
@@ -116,11 +122,17 @@ export class FileWatcher {
     const inboxDir = join(getCeHubDir(), 'inbox', to);
     ensureDir(inboxDir);
 
-    // Write task to target agent's inbox
+    // Write task to target agent's inbox — include full dispatch payload so agent sees all fields
     const inboxFile = join(inboxDir, `${taskId}.json`);
     writeFileSync(inboxFile, JSON.stringify({
       id: taskId, from, type: 'task', content: task,
-      context: data.context || '', created_at: new Date().toISOString(),
+      context: data.context || '',
+      objective: data.objective || '',
+      priority: data.priority || 1,
+      expected_output: data.expected_output || '',
+      success_criteria: data.success_criteria || '',
+      payload: data,
+      created_at: new Date().toISOString(),
     }, null, 2));
 
     // Start target agent if not running
@@ -148,7 +160,7 @@ export class FileWatcher {
     const data = readJson(filePath);
     if (!data) return;
 
-    const from = data.from as string;
+    const from = (data.from || data.dispatched_by || "cc-lead") as string;
     const taskId = data.task_id as string;
     const status = data.status as string;
     const summary = data.summary as string;
@@ -222,9 +234,7 @@ export class FileWatcher {
       if (this.tmux.isAlive(info.agent)) {
         console.log(`[FileWatcher] nudging ${info.agent} for pending task ${taskId} (${Math.round(ageMin)}min, nudge #${info.nudgeCount + 1})`);
         this.tmux.sendMessage(info.agent,
-          `REMINDER: You have a pending task (${taskId}). If you have completed it, please write a result file to .ce-hub/results/. ` +
-          `Example: cat > .ce-hub/results/result_${info.agent}_$(date +%s).json << 'EOF'\n` +
-          `{"from":"${info.agent}","task_id":"${taskId}","status":"done","summary":"what you did","output_files":[]}\nEOF`
+          `Reminder: pending task ${taskId}. Check .ce-hub/inbox/${info.agent}/ and write result to .ce-hub/results/ when done.`
         );
         info.nudgeCount++;
       }

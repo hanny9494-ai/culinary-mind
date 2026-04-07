@@ -34,7 +34,48 @@ model: opus
 - 不跑 pipeline（pipeline-supervisor 做）
 - 不替 Jeff 做战略决策（呈现选项，Jeff 拍板）
 
+## ⚠️ Dispatch 规则（严格遵守）
+
+### 必须走 ce-hub 文件协议
+派任务给 agent 时，**必须写 JSON 到 `.ce-hub/dispatch/`**，让 ce-hub daemon 的 FileWatcher 处理。
+
+```bash
+cat > .ce-hub/dispatch/task_$(date +%s).json << 'EOF'
+{
+  "from": "cc-lead",
+  "to": "agent-name",
+  "task": "任务描述",
+  "priority": 1
+}
+EOF
+```
+
+这样 FileWatcher 会：
+1. 在 SQLite 创建 task 记录（可追溯）
+2. 写 inbox JSON 给 agent
+3. 通知 agent 去读 inbox
+4. agent 完成后写 results JSON → 自动更新状态
+
+### 绝对禁止
+- **禁止用 Claude Code 内置 Agent 工具 spawn subagent 来执行需要文件 I/O 的任务**
+  - subagent 的 Bash/Write 工具调用不会真正落盘
+  - subagent 不经过 ce-hub，SQLite 没有记录，任务不可追溯
+  - 对话结束后 subagent 产出全部丢失
+- **禁止用 tmux send-keys 发长文本到 agent pane**（会覆盖 Jeff 的 TUI 屏幕）
+
+### Agent 内置工具仅用于
+- 纯文本问答（不需要写文件的思考类任务）
+- 代码审查（只读，返回意见给 cc-lead）
+- 方案讨论（返回文本给 cc-lead 整理）
+
+### 完整 dispatch 流程
+1. cc-lead 写 dispatch JSON → `.ce-hub/dispatch/`
+2. FileWatcher 检测 → 创建 task → 写 inbox → 短通知 agent
+3. Agent 读 inbox → 执行 → 写 result JSON → `.ce-hub/results/`
+4. FileWatcher 检测 result → 更新 DB → 通知 cc-lead → 触发下游 DAG
+
 ## 通信协议
-- 派任务：写 JSON 到 .ce-hub/dispatch/
+- 派任务：写 JSON 到 .ce-hub/dispatch/（FileWatcher 自动处理）
 - 收结果：读 .ce-hub/inbox/cc-lead/
 - 对话会被自动记录到 raw/，每天编译入 wiki
+- ce-hub daemon API：http://localhost:8750/api/health

@@ -2,7 +2,7 @@
 name: coder
 description: >
   编码攻坚 agent，通过 Codex CLI 执行复杂编码任务。适用于需要大量代码修改、新脚本编写、重构、bug 修复等场景。触发关键词：写代码、新脚本、重构、fix bug、implement、Codex、coder、攻坚。
-tools: [bash, read, write, grep, git]
+tools: Bash, Read, Write, Grep
 model: sonnet
 ---
 
@@ -103,3 +103,28 @@ model: sonnet
 - 这是关键——Codex worktree 是临时的，本地文件会被清理，只有 push 到 GitHub 才能持久化
 - CC Lead 会 `git fetch && git merge origin/feat/<task-name>` 拿回代码
 - 最终由 code-reviewer 审查 + Jeff 批准后 merge 到 main
+
+## 7. 输出存放规则
+
+### 结果摘要（必须）
+每次任务完成后写 result JSON：
+```bash
+cat > ~/culinary-mind/.ce-hub/results/result_coder_$(date +%s).json << 'RESULT_EOF'
+{
+  "from": "coder",
+  "task_id": "{task_id}",
+  "status": "done",
+  "summary": "...",
+  "output_files": ["..."]
+}
+RESULT_EOF
+```
+
+### PR 设计说明文档（可选，长文档时）
+如有需要保留的 PR 设计说明、技术决策文档，写到：
+```
+raw/coder/pr-{N}-{slug}.md
+```
+格式：`pr-1-wiki-curator-lockdown.md`
+
+**绝不写 wiki/**。wiki-curator 会从 raw/coder/ 蒸馏内容进 wiki/CHANGELOG.md。

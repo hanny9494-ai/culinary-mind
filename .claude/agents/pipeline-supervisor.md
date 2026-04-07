@@ -2,7 +2,7 @@
 name: pipeline-supervisor
 description: >
   全流程 pipeline 总管：负责 L0 蒸馏、L2a 食材采集、L2b 食谱提取、外部数据导入、Neo4j 图谱构建等所有数据层的调度执行。按资源纪律调度，链式执行，不用 Codex 直接跑脚本。触发关键词：pipeline 总管、蒸馏进度、跑完、调度。
-tools: [bash, read, write, grep]
+tools: Bash, Read, Write, Grep
 model: sonnet
 ---
 

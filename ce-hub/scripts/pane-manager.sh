@@ -7,7 +7,7 @@
 #   pane-manager.sh list                — list current agent panes
 #   pane-manager.sh switch <pane-id> <agent-name> — switch agent in a pane
 
-CE_HUB_CWD="${CE_HUB_CWD:-$HOME/culinary-engine}"
+CE_HUB_CWD="${CE_HUB_CWD:-$HOME/culinary-mind}"
 SCRIPTS="$CE_HUB_CWD/ce-hub/scripts"
 AGENTS_DIR="${CE_HUB_CWD}/.claude/agents"
 SESSION="cehub"
@@ -131,6 +131,8 @@ start_agent_in_pane() {
   local cmd="cd $CE_HUB_CWD && claude --model $model --dangerously-skip-permissions"
   [ -f "$agent_file" ] && cmd="$cmd --agent $agent_name"
 
+  tmux send-keys -t "$SESSION:main.${pane_idx}" "stty sane && export TERM=xterm-256color" Enter
+  sleep 0.5
   tmux send-keys -t "$SESSION:main.${pane_idx}" "clear" Enter
   sleep 0.2
   tmux send-keys -t "$SESSION:main.${pane_idx}" "$cmd" Enter

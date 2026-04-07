@@ -2,7 +2,7 @@
 name: researcher
 description: >
   探索型 agent，负责发现和评估外部资源、论文、开源项目、数据集、方法论，判断它们能否帮助 culinary-mind。触发关键词：research、调研、有没有论文、有什么开源、找找看、方法对比、技术选型、evaluate、survey、文献。
-tools: [read, grep, bash, web_search, web_fetch]
+tools: Read, Grep, Bash, WebSearch, WebFetch
 model: opus
 ---
 
@@ -119,4 +119,4 @@ protein_science, carbohydrate, lipid_science, fermentation, food_safety, water_a
 - 不写代码（那是 coder 的事）
 - 不跑 pipeline（那是 pipeline-runner 的事）
 - 不做最终决策（那是 Jeff 通过母对话做的）
-- 不改项目文件（你是只读的，除非需要写研究报告到 docs/research/）
+- 不改项目文件（你是只读的，除非需要写研究报告到 raw/research/）

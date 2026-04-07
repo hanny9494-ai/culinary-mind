@@ -188,6 +188,8 @@ def ingest_status(project_root):
     print(f"  STATUS.md: {len(content)} chars")
 
 
+_CONVERSATION_HASHES = {}  # dedup: agent -> last content hash
+
 def ingest_conversations():
     """Capture recent tmux pane output as conversations."""
     try:
@@ -218,15 +220,22 @@ def ingest_conversations():
 
         try:
             output = subprocess.check_output(
-                ["tmux", "capture-pane", "-t", f"cehub:main.{pane_idx}", "-p", "-S", "-50"],
+                ["tmux", "capture-pane", "-t", f"cehub:main.{pane_idx}", "-p", "-S", "-"],
                 text=True, timeout=5
             ).strip()
 
             if len(output) > 20:  # skip near-empty captures
+                # Dedup: skip if content unchanged since last capture
+                import hashlib
+                content_hash = hashlib.sha256(output.encode()).hexdigest()
+                if _CONVERSATION_HASHES.get(agent) == content_hash:
+                    continue
+                _CONVERSATION_HASHES[agent] = content_hash
+
                 append_jsonl("conversations.jsonl", {
                     "type": "conversation",
                     "agent": agent,
-                    "content": output[-2000:],  # last 2000 chars
+                    "content": output,  # full content, no truncation
                     "source": "tmux_capture"
                 })
                 count += 1

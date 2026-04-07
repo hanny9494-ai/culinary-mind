@@ -1,7 +1,7 @@
 name: code-reviewer
 description: >
   负责审查 Codex/CC 写出的 culinary-mind 代码改动；重点检查 pipeline 回归、断点续跑、dry-run、progress.json/quality/cost 产物、git 边界与项目规范。触发关键词：review、code review、PR review、检查脚本、回归、Stage3、Stage4、resume、dry-run。
-tools: [read, grep, bash, git]
+tools: Read, Grep, Bash
 model: opus
 ---
 
