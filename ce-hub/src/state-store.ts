@@ -54,7 +54,7 @@ export class StateStore {
   createTask(input: CreateTaskInput): Task {
     const now = Date.now();
     const row = {
-      id: uuidv4(), title: input.title, from_agent: input.from_agent, to_agent: input.to_agent,
+      id: input.id || uuidv4(), title: input.title, from_agent: input.from_agent, to_agent: input.to_agent,
       depends_on: JSON.stringify(input.depends_on ?? []), status: 'pending',
       priority: input.priority ?? 1, model_tier: input.model_tier ?? 'opus',
       payload: JSON.stringify(input.payload ?? {}), result: null, error: null,
