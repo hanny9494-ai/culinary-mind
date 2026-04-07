@@ -22,7 +22,7 @@ CE_HUB_CWD="${CE_HUB_CWD:-$HOME/culinary-mind}"
 SCRIPTS="$CE_HUB_CWD/ce-hub/scripts"
 SCREEN_W=149
 SCREEN_H=117
-DASH_H=20   # dashboard pane height (rows)
+DASH_H=28   # dashboard pane height (rows) — enriched dashboard for 27" screen
 
 # Agent windows in order
 WINDOWS=(
