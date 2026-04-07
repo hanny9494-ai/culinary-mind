@@ -48,6 +48,9 @@ export class FileWatcher {
   private pendingResults = new Map<string, { agent: string; dispatchedAt: number; nudgeCount: number }>();
   private nudgeTimer: ReturnType<typeof setInterval> | null = null;
   private taskTimeoutTimer: ReturnType<typeof setInterval> | null = null;
+  // Dedup: track result files currently being processed to prevent double-handling
+  // (watch() event + 30s poll can race on the same file before unlinkSync fires)
+  private processingResults = new Set<string>();
 
   constructor(tmux: TmuxManager, store: StateStore) {
     this.tmux = tmux;
@@ -174,8 +177,12 @@ export class FileWatcher {
   }
 
   private handleResult(filePath: string): void {
+    // Dedup guard: skip if already being processed (watch event + poll race)
+    if (this.processingResults.has(filePath)) return;
+    this.processingResults.add(filePath);
+
     const data = readJson(filePath);
-    if (!data) return;
+    if (!data) { this.processingResults.delete(filePath); return; }
 
     const from = (data.from || data.dispatched_by || "cc-lead") as string;
     const taskId = data.task_id as string;
@@ -246,6 +253,13 @@ export class FileWatcher {
       const inboxFile = join(getCeHubDir(), 'inbox', from, `${taskId}.json`);
       try { unlinkSync(inboxFile); } catch {}
     }
+
+    // Delete result file after processing to prevent 30s poll from reprocessing it
+    // (mirrors handleDispatch behavior — symmetric cleanup)
+    try { unlinkSync(filePath); } catch {}
+
+    // Release dedup lock
+    this.processingResults.delete(filePath);
   }
 
   private nudgePending(): void {

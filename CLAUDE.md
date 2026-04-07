@@ -158,7 +158,7 @@ Recommendation: [建议]
 - Ollama 允许多模型并行（决策#34，OLLAMA_MAX_LOADED_MODELS=3，128G 够用）
 - Opus API 支持 3 并发（决策#35）
 - flash API 支持 3-5 并发
-- **所有 API 必须走 proxy localhost:3001**（New API 网关自动路由 AiGoCode→灵雅 failover）
+- **API 直连**（proxy :3001 已删除，决策 D43）：灵雅直连 `${L0_API_ENDPOINT}`，DashScope 直连，Gemini 直连
 - 所有 HTTP 客户端必须 trust_env=False（绕过本机代理 127.0.0.1:7890）
 
 ### 架构
@@ -188,7 +188,7 @@ Recommendation: [建议]
 ### 服务
 | 服务 | Port | 用途 |
 |---|---|---|
-| New API proxy | 3001 | API 路由网关（AiGoCode→灵雅 failover） |
+| ~~New API proxy~~ | ~~3001~~ | ❌ 已删除（决策 D43）|
 | Task Queue | 8742 | 任务管理 HTTP API + SQLite |
 | Orchestrator | — | launchd 守护，轮询 task queue |
 | CloudCLI | 3456 | Claude Code Web UI |
@@ -210,7 +210,7 @@ Recommendation: [建议]
 - MINERU_API_KEY
 - GEMINI_API_KEY
 
-API 调用走 proxy（localhost:3001），config/api.yaml 用 `${L0_API_ENDPOINT}` 和 `${L0_API_KEY}` 环境变量。
+API 直连：config/api.yaml 用 `${L0_API_ENDPOINT}` 和 `${L0_API_KEY}` 环境变量（proxy :3001 已删除，决策 D43）。
 
 ## 10. 每日工作流
 

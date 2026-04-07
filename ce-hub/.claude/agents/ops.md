@@ -18,7 +18,7 @@ model: sonnet
 | Orchestrator | — | `launchctl list \| grep orchestrator` |
 | Daily Reporter | — | `launchctl list \| grep daily-reporter` |
 | CCS Web | 7777 | `curl --noproxy '*' http://localhost:7777/` |
-| New API | 3001 | `curl --noproxy '*' http://localhost:3001/` |
+| ~~New API proxy~~ | ~~3001~~ | ❌ 已删除（决策 D43） |
 | Dify | 80 | `curl --noproxy '*' http://localhost/` |
 | Ollama | 11434 | `curl --noproxy '*' http://localhost:11434/api/tags` |
 
