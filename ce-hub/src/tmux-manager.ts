@@ -9,6 +9,8 @@ const SESSION = 'cehub';
 function getCwd() { return process.env.CE_HUB_CWD || process.cwd(); }
 function getAgentsDir() { return process.env.CE_HUB_AGENTS_DIR || join(getCwd(), '.claude', 'agents'); }
 function getMemoryDir() { return join(getCwd(), '.ce-hub', 'memory'); }
+function getScripts() { return join(getCwd(), 'ce-hub', 'scripts'); }
+const DASH_ROWS = 20; // dashboard pane height
 
 function exec(cmd: string): string {
   try { return execSync(cmd, { encoding: 'utf-8', timeout: 5000, cwd: getCwd() }).trim(); } catch { return ''; }
@@ -188,20 +190,50 @@ export class TmuxManager {
     const cmd = this.resolveCommand(def);
     console.log(`[TmuxManager] starting ${agentName}: ${cmd.slice(0, 80)}...`);
 
-    // Prefer reusing existing pane (agent exited, pane still has its title) over opening new window
-    const existingPane = this.findAgentPane(agentName);
-    if (existingPane) {
-      // Send command to the existing bash pane
-      exec(`tmux send-keys -t '${existingPane}' 'cd ${getCwd()} && ${cmd}' Enter`);
-      console.log(`[TmuxManager] restarted ${agentName} in existing pane ${existingPane}`);
+    const cwd = getCwd();
+    const scripts = getScripts();
+
+    // TUI v2: each agent has its own window (name = agentName)
+    // window layout: pane 0 = dashboard (top), pane 1 = agent (bottom)
+    const windowExists = exec(`tmux list-windows -t ${SESSION} -F '#{window_name}' 2>/dev/null`)
+      .split('\n').includes(agentName);
+
+    if (windowExists) {
+      // Window exists — agent process exited, restart in pane 1
+      const agentPaneId = this.getAgentPaneId(agentName);
+      if (agentPaneId) {
+        exec(`tmux send-keys -t '${agentPaneId}' 'cd ${cwd} && ${cmd}' Enter`);
+        console.log(`[TmuxManager] restarted ${agentName} in window pane 1 (${agentPaneId})`);
+      }
     } else {
-      exec(`tmux new-window -d -t ${SESSION} -n ${agentName} 'cd ${getCwd()} && ${cmd}'`);
-      console.log(`[TmuxManager] started ${agentName} in new window`);
+      // Create new window with dashboard (pane 0) + agent (pane 1)
+      exec(`tmux new-window -d -t ${SESSION} -n ${agentName} -c ${cwd}`);
+      // Split: pane 0 = top (dashboard), pane 1 = bottom (agent)
+      exec(`tmux split-window -d -t '${SESSION}:${agentName}.0' -v -l 95 -c ${cwd}`);
+      // Dashboard pane (top)
+      exec(`tmux select-pane -t '${SESSION}:${agentName}.0' -T 'dashboard'`);
+      exec(`tmux send-keys -t '${SESSION}:${agentName}.0' 'export CE_HUB_CWD=${cwd} no_proxy=localhost,127.0.0.1 && watch -n 5 -t bash ${scripts}/dashboard.sh ${agentName}' Enter`);
+      // Agent pane (bottom) — pane 1
+      exec(`tmux select-pane -t '${SESSION}:${agentName}.1' -T '${agentName}'`);
+      exec(`tmux send-keys -t '${SESSION}:${agentName}.1' 'export CE_HUB_CWD=${cwd} no_proxy=localhost,127.0.0.1 && cd ${cwd} && ${cmd}' Enter`);
+      console.log(`[TmuxManager] started ${agentName} in new window with dashboard`);
     }
     return true;
   }
 
-  // Find an existing pane with this agent's title (may be bare bash after agent exited)
+  // Get the pane ID of the agent pane (pane 1) in the agent's window
+  private getAgentPaneId(agentName: string): string | null {
+    const panes = exec(`tmux list-panes -t '${SESSION}:${agentName}' -F '#{pane_index}\t#{pane_id}' 2>/dev/null`)
+      .split('\n').filter(Boolean);
+    for (const p of panes) {
+      const sep = p.lastIndexOf('\t');
+      if (sep < 0) continue;
+      if (p.slice(0, sep) === '1') return p.slice(sep + 1); // pane index 1 = agent pane
+    }
+    return null;
+  }
+
+  // Legacy: find pane in main window (backward compat with old layout)
   private findAgentPane(agentName: string): string | null {
     const panes = exec(`tmux list-panes -t ${SESSION}:main -F '#{pane_title}\t#{pane_id}' 2>/dev/null`).split('\n');
     for (const p of panes) {
@@ -258,29 +290,46 @@ export class TmuxManager {
     console.log(`[TmuxManager] notified ${agentName}: inbox msg_${timestamp}.json`);
   }
 
-  // Find the tmux target for an agent — returns precise pane ID (%N) when possible
-  // Claude Code may prefix pane titles with "✳ " or similar, so we use fuzzy matching
+  // Find the agent pane target (pane 1 in agent's window — NOT the dashboard pane 0)
+  // TUI v2: each agent has window named after it; pane 0 = dashboard, pane 1 = agent
   private findAgentTarget(agentName: string): string | null {
-    // Check panes in main window (by pane title containing agent name)
+    // TUI v2: agent window pane 1 (bottom pane = agent pane, not dashboard)
+    const windows = exec(`tmux list-windows -t ${SESSION} -F '#{window_name}' 2>/dev/null`).split('\n');
+    if (windows.includes(agentName)) {
+      const paneId = this.getAgentPaneId(agentName);
+      if (paneId) return paneId;
+    }
+    // Legacy fallback: check panes in main window by title
     const panes = exec(`tmux list-panes -t ${SESSION}:main -F '#{pane_title}\t#{pane_id}' 2>/dev/null`).split('\n').filter(Boolean);
     for (const p of panes) {
       const sep = p.lastIndexOf('\t');
       if (sep < 0) continue;
       const title = p.slice(0, sep);
       const id = p.slice(sep + 1);
-      if (title === agentName || title.includes(agentName)) return id; // returns %N pane ID
-    }
-    // Check windows by name — get first pane ID of that window (more precise than window reference)
-    const windows = exec(`tmux list-windows -t ${SESSION} -F '#{window_name}' 2>/dev/null`).split('\n');
-    if (windows.includes(agentName)) {
-      const paneId = exec(`tmux list-panes -t '${SESSION}:${agentName}' -F '#{pane_id}' 2>/dev/null`).split('\n')[0]?.trim();
-      return paneId || `${SESSION}:${agentName}`;
+      if (title === agentName || title.includes(agentName)) return id;
     }
     return null;
   }
 
   isAlive(agentName: string): boolean {
-    // Check panes in main window by title + verify pane has child processes (claude runs as child of bash)
+    // TUI v2: check window pane 1 (agent pane) for running processes
+    const windows = exec(`tmux list-windows -t ${SESSION} -F '#{window_name}' 2>/dev/null`).split('\n');
+    if (windows.includes(agentName)) {
+      const panes = exec(`tmux list-panes -t '${SESSION}:${agentName}' -F '#{pane_index}\t#{pane_pid}' 2>/dev/null`)
+        .split('\n').filter(Boolean);
+      for (const p of panes) {
+        const sep = p.lastIndexOf('\t');
+        if (sep < 0) continue;
+        const idx = p.slice(0, sep);
+        const pid = p.slice(sep + 1);
+        if (idx === '1') {
+          // Pane 1 = agent pane; check if it has running children (claude process)
+          const children = exec(`pgrep -P ${pid} 2>/dev/null`);
+          return children.trim().length > 0;
+        }
+      }
+    }
+    // Legacy: check panes in main window by title
     const panes = exec(`tmux list-panes -t ${SESSION}:main -F '#{pane_title}\t#{pane_pid}' 2>/dev/null`).split('\n');
     for (const p of panes) {
       const sep = p.lastIndexOf('\t');
@@ -288,37 +337,25 @@ export class TmuxManager {
       const title = p.slice(0, sep);
       const pid = p.slice(sep + 1);
       if (title === agentName || title?.includes(agentName)) {
-        // Check if pane's shell has any child processes (bare bash = no children)
         const children = exec(`pgrep -P ${pid} 2>/dev/null`);
         if (children.trim()) return true;
       }
     }
-    // Check windows by name (separate windows always have agent running)
-    return exec(`tmux list-windows -t ${SESSION} -F '#{window_name}' 2>/dev/null`).split('\n').includes(agentName);
+    return false;
   }
 
   listWindows(): { name: string; alive: boolean }[] {
-    const windows = exec(`tmux list-windows -t ${SESSION} -F '#{window_name}' 2>/dev/null`).split('\n').filter(Boolean);
-    // Check pane title + child processes (claude runs as child of bash)
-    const paneInfo = exec(`tmux list-panes -t ${SESSION}:main -F '#{pane_title}\t#{pane_pid}' 2>/dev/null`).split('\n').filter(Boolean);
     return this.getDefinitions().map(d => ({
       name: d.name,
-      alive: windows.includes(d.name) || paneInfo.some(p => {
-        const sep = p.lastIndexOf('\t');
-        if (sep < 0) return false;
-        const title = p.slice(0, sep);
-        const pid = p.slice(sep + 1);
-        if (title === d.name || title?.includes(d.name)) {
-          return exec(`pgrep -P ${pid} 2>/dev/null`).trim().length > 0;
-        }
-        return false;
-      }),
+      alive: this.isAlive(d.name),
     }));
   }
 
   killAgent(agentName: string): void {
-    exec(`tmux send-keys -t ${SESSION}:${agentName} C-c`);
-    exec(`tmux kill-window -t ${SESSION}:${agentName} 2>/dev/null`);
+    // TUI v2: send C-c to agent pane (pane 1), then kill the window
+    const agentPaneId = this.getAgentPaneId(agentName);
+    if (agentPaneId) exec(`tmux send-keys -t '${agentPaneId}' C-c`);
+    exec(`tmux kill-window -t '${SESSION}:${agentName}' 2>/dev/null`);
     console.log(`[TmuxManager] killed ${agentName}`);
   }
 

@@ -1,56 +1,61 @@
 #!/bin/bash
-# statusbar.sh — Generate compact status bar content for tmux
-# Called by tmux status-right via #(command) — must be fast (<1s)
+# statusbar.sh — ce-hub TUI v2: Window nav bar + attention flashing
+#
+# Generates tmux window-status-format and status bar settings.
+# Window nav: each agent window gets a large colored block (>=14 cols).
+#
+# Colors:
+#   active window    -> orange (#[bg=colour214,fg=colour234,bold])
+#   attention window -> red/orange flashing (via monitor-activity)
+#   inactive window  -> dark grey (#[bg=colour237,fg=colour245])
 
-CE_HUB_CWD="${CE_HUB_CWD:-$HOME/culinary-engine}"
-API="http://localhost:8750"
+CE_HUB_CWD="${CE_HUB_CWD:-$HOME/culinary-mind}"
+SCRIPTS="$CE_HUB_CWD/ce-hub/scripts"
+SESSION="cehub"
+CONF_FILE="/tmp/cehub-statusbar.conf"
 
-# Quick health check (timeout 1s)
-health=$(curl -s --noproxy localhost --max-time 1 "$API/api/health" 2>/dev/null)
+cat > "$CONF_FILE" << TMUXCONF
+# ce-hub statusbar v2 -- auto-generated $(date '+%H:%M:%S')
+set-option -g status on
+set-option -g status-position bottom
+set-option -g status-style "bg=colour234,fg=colour245"
+set-option -g status-justify left
 
-if [ -z "$health" ]; then
-  echo "daemon:OFF"
-  exit 0
-fi
+# Window status blocks (inactive) -- >= 14 cols per cell
+set-option -g window-status-format "#[bg=colour237,fg=colour245,nobold]  #(bash ${SCRIPTS}/window-label.sh #{window_name})  #[bg=colour234]#[default]"
 
-tasks=$(echo "$health" | python3 -c "import sys,json;print(json.load(sys.stdin).get('taskCount',0))" 2>/dev/null || echo "?")
-agents_alive=$(echo "$health" | python3 -c "import sys,json;d=json.load(sys.stdin);print(sum(1 for a in d.get('agents',[]) if a.get('alive')))" 2>/dev/null || echo "0")
-agents_total=$(echo "$health" | python3 -c "import sys,json;print(len(json.load(sys.stdin).get('agents',[])))" 2>/dev/null || echo "?")
+# Active window -- orange
+set-option -g window-status-current-format "#[bg=colour214,fg=colour234,bold]  #(bash ${SCRIPTS}/window-label.sh #{window_name})  #[bg=colour234,fg=colour214]#[default]"
 
-# Token stats (cached, update every 30s via file)
-CACHE="/tmp/cehub-tok-cache"
-if [ ! -f "$CACHE" ] || [ "$(( $(date +%s) - $(stat -f %m "$CACHE" 2>/dev/null || echo 0) ))" -gt 30 ]; then
-  python3 -c "
-import json,glob,os,time
-now=time.time()
-total_in=0; s5_in=0
-for f in glob.glob(os.path.expanduser('~/.claude/projects/*/*.jsonl')):
-  age=(now-os.path.getmtime(f))/3600
-  si=0
-  with open(f) as fh:
-    for line in fh:
-      if '\"usage\"' not in line: continue
-      try:
-        d=json.loads(line)
-        if d.get('type')!='assistant': continue
-        u=d.get('message',{}).get('usage',{})
-        si+=u.get('input_tokens',0)+u.get('cache_read_input_tokens',0)+u.get('cache_creation_input_tokens',0)
-      except: pass
-  total_in+=si
-  if age<=5: s5_in+=si
-def fmt(n):
-  if n>=1e9: return f'{n/1e9:.1f}B'
-  if n>=1e6: return f'{n/1e6:.0f}M'
-  if n>=1e3: return f'{n/1e3:.0f}K'
-  return str(n)
-print(f'{fmt(s5_in)}|{fmt(total_in)}')
-" > "$CACHE" 2>/dev/null
-fi
-tokens=$(cat "$CACHE" 2>/dev/null || echo "?|?")
-tok5h=$(echo "$tokens" | cut -d'|' -f1)
-tokall=$(echo "$tokens" | cut -d'|' -f2)
+# Attention window (monitor-activity flag) -- red/alert
+set-option -g window-status-activity-format "#[bg=colour196,fg=colour231,bold]  #(bash ${SCRIPTS}/window-label.sh #{window_name})  #[bg=colour234,fg=colour196]#[default]"
 
-# Cost
-cost=$(curl -s --noproxy localhost --max-time 1 "$API/api/costs" 2>/dev/null | python3 -c "import sys,json;print(f\"\${json.load(sys.stdin).get('daily',0):.1f}\")" 2>/dev/null || echo "\$0")
+set-option -g window-status-separator ""
 
-echo "agents:${agents_alive}/${agents_total} | tasks:${tasks} | 5h:${tok5h} all:${tokall} | ${cost}/day"
+# Activity monitoring: triggers window-status-activity-format
+set-option -g monitor-activity on
+set-option -g visual-activity off
+set-option -g activity-action none
+
+# Status left: session indicator
+set-option -g status-left-length 10
+set-option -g status-left "#[fg=colour214,bold] # #[default]"
+
+# Status right: compact info + time
+set-option -g status-right-length 60
+set-option -g status-right "#[fg=colour245]#(bash ${SCRIPTS}/statusbar-right.sh) #[fg=colour239]| #[fg=colour245]%H:%M"
+
+# Status interval
+set-option -g status-interval 5
+
+# Pane borders (minimal -- dashboard pane needs clean space)
+set-option -g pane-border-style "fg=colour238"
+set-option -g pane-active-border-style "fg=colour214"
+set-option -g pane-border-status top
+set-option -g pane-border-format " #{?pane_active,#[fg=colour214 bold],#[fg=colour245 dim]}#{pane_title}#[default] "
+
+# After-select-window hook: clear attention state for the window we just entered
+set-hook -g after-select-window 'run-shell -b "CE_HUB_CWD=${CE_HUB_CWD} bash ${SCRIPTS}/clear-attention.sh #{window_name} 2>/dev/null"'
+TMUXCONF
+
+tmux source-file "$CONF_FILE" 2>/dev/null && echo "Statusbar v2 applied." || echo "Statusbar: apply failed (session may not exist yet)"

@@ -1,5 +1,5 @@
 import { watch, readFileSync, writeFileSync, appendFileSync, readdirSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import type { TmuxManager } from './tmux-manager.js';
 import type { StateStore } from './state-store.js';
 import type { TaskEngine } from './task-engine.js';
@@ -18,6 +18,19 @@ function appendRaw(filename: string, data: Record<string, unknown>): void {
   } catch (err) {
     console.error(`[FileWatcher] failed to archive raw data to ${filename}:`, err);
   }
+}
+
+// Write attention state for a window (triggers nav bar highlight in TUI v2)
+function writeAttention(agentName: string, hasAttention: boolean): void {
+  const stateDir = join(getCeHubDir(), 'state');
+  ensureDir(stateDir);
+  const attnFile = join(stateDir, 'attention.json');
+  let attn: Record<string, boolean> = {};
+  if (existsSync(attnFile)) {
+    try { attn = JSON.parse(readFileSync(attnFile, 'utf-8')); } catch {}
+  }
+  attn[agentName] = hasAttention;
+  try { writeFileSync(attnFile, JSON.stringify(attn, null, 2)); } catch {}
 }
 
 function readJson(path: string): Record<string, unknown> | null {
@@ -149,6 +162,9 @@ export class FileWatcher {
     // Archive to raw/ for wiki compiler
     appendRaw('dispatches.jsonl', { id: taskId, from, to, task, priority });
 
+    // Set attention flag for the target agent (triggers nav bar highlight in TUI v2)
+    writeAttention(to, true);
+
     // Track pending result
     this.pendingResults.set(taskId, { agent: to, dispatchedAt: Date.now(), nudgeCount: 0 });
 
@@ -210,6 +226,12 @@ export class FileWatcher {
 
     // Archive to raw/ for wiki compiler
     appendRaw('results.jsonl', { from, task_id: taskId, status, summary, output_files: outputFiles });
+
+    // Set attention for originating agent so they see task completion in nav bar
+    if (taskId) {
+      const task = this.store.getTask(taskId);
+      if (task?.from_agent) writeAttention(task.from_agent, true);
+    }
 
     // Trigger downstream DAG tasks
     if (taskId && status === 'done' && this.engine) {
