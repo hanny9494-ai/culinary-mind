@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  prompt-detector.plist — launchd agent for cc-lead prompt detector
+  Install: cp ~/culinary-mind/scripts/prompt-detector.plist \
+               ~/Library/LaunchAgents/com.culinary-mind.prompt-detector.plist
+           launchctl load ~/Library/LaunchAgents/com.culinary-mind.prompt-detector.plist
+  Uninstall: launchctl unload ~/Library/LaunchAgents/com.culinary-mind.prompt-detector.plist
+  Status: launchctl list | grep prompt-detector
+  Logs: ~/culinary-mind/ce-hub/logs/prompt-detector.log
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.culinary-mind.prompt-detector</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/jeff/culinary-mind/scripts/prompt-detector.sh</string>
+  </array>
+
+  <!-- Run at user login + restart if it crashes -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Standard I/O logs -->
+  <key>StandardOutPath</key>
+  <string>/Users/jeff/culinary-mind/ce-hub/logs/prompt-detector-launchd.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/jeff/culinary-mind/ce-hub/logs/prompt-detector-launchd.log</string>
+
+  <!-- Environment: ensure Homebrew bins available -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>/Users/jeff</string>
+  </dict>
+
+  <!-- Start 10s after login (give tmux time to start) -->
+  <key>StartInterval</key>
+  <integer>0</integer>
+
+</dict>
+</plist>
