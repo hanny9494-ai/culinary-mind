@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentDefinition } from './types.js';
 
@@ -59,6 +59,10 @@ Use status "done" for success, "failed" for failure (include error in summary), 
 
 THIS IS NOT OPTIONAL. The orchestrator (CC Lead) depends on result files to track progress.
 If you don't write a result file, the task stays stuck as "in_progress" forever.
+
+### Self-polling
+After completing each task, check your inbox (.ce-hub/inbox/{your-name}/) for new tasks.
+If you see a short notification "New task in inbox", read all .json files in your inbox immediately.
 
 ### Dispatching to other agents
 Write JSON to .ce-hub/dispatch/:
@@ -126,7 +130,6 @@ export class TmuxManager {
     }
 
     const appendPrompt = [PROTOCOL_PROMPT, memoryAppend].filter(Boolean).join('\n\n');
-    const escapedAppend = appendPrompt.replace(/'/g, "'\\''");
 
     if (model === 'codex') {
       return `codex exec --dangerously-bypass-approvals-and-sandbox`;
@@ -135,12 +138,18 @@ export class TmuxManager {
       return `python3 scripts/gemini_agent.py --model ${model}`;
     }
 
+    // Write prompt to temp file to avoid shell escaping issues with quotes/parens
+    const promptDir = join(getCwd(), '.ce-hub', 'tmp');
+    if (!existsSync(promptDir)) mkdirSync(promptDir, { recursive: true });
+    const promptFile = join(promptDir, `${def.name}-append.md`);
+    writeFileSync(promptFile, appendPrompt);
+
     // Default: claude with agent definition for proper tools/permissions
     const claudeModel = model === 'opus' ? 'opus' : model === 'haiku' ? 'haiku' : 'sonnet';
     // Use --agent flag if agent .md file exists (gives agent its tools like web_search)
     const agentFile = join(getAgentsDir(), `${def.name}.md`);
     const agentFlag = existsSync(agentFile) ? `--agent ${def.name}` : '';
-    return `claude --model ${claudeModel} --dangerously-skip-permissions ${agentFlag} --append-system-prompt '${escapedAppend}'`;
+    return `claude --model ${claudeModel} --dangerously-skip-permissions ${agentFlag} --append-system-prompt-file ${promptFile}`;
   }
 
   private validateName(name: string): void {
@@ -160,30 +169,67 @@ export class TmuxManager {
     const cmd = this.resolveCommand(def);
     console.log(`[TmuxManager] starting ${agentName}: ${cmd.slice(0, 80)}...`);
 
-    exec(`tmux new-window -t ${SESSION} -n ${agentName} 'cd ${getCwd()} && ${cmd}'`);
+    // Prefer reusing existing pane (agent exited, pane still has its title) over opening new window
+    const existingPane = this.findAgentPane(agentName);
+    if (existingPane) {
+      // Send command to the existing bash pane
+      exec(`tmux send-keys -t '${existingPane}' 'cd ${getCwd()} && ${cmd}' Enter`);
+      console.log(`[TmuxManager] restarted ${agentName} in existing pane ${existingPane}`);
+    } else {
+      exec(`tmux new-window -t ${SESSION} -n ${agentName} 'cd ${getCwd()} && ${cmd}'`);
+      console.log(`[TmuxManager] started ${agentName} in new window`);
+    }
     return true;
   }
 
-  // Send a message to agent's tmux pane or window (types it + hits enter)
+  // Find an existing pane with this agent's title (may be bare bash after agent exited)
+  private findAgentPane(agentName: string): string | null {
+    const panes = exec(`tmux list-panes -t ${SESSION}:main -F '#{pane_title}\t#{pane_id}' 2>/dev/null`).split('\n');
+    for (const p of panes) {
+      const sep = p.lastIndexOf('\t');
+      if (sep < 0) continue;
+      const title = p.slice(0, sep);
+      const id = p.slice(sep + 1);
+      if (title === agentName || title.includes(agentName)) return id;
+    }
+    return null;
+  }
+
+  // Send a message to agent: full content to inbox file + short tmux notification
   sendMessage(agentName: string, message: string): void {
     this.validateName(agentName);
-    // Try pane first (agent running in main window pane), then window
-    const target = this.findAgentTarget(agentName);
-    if (!target) {
+
+    // Start agent if not running
+    if (!this.isAlive(agentName)) {
       console.log(`[TmuxManager] ${agentName} not running, starting...`);
       this.startAgent(agentName);
-      // Wait for startup, then retry
-      setTimeout(() => {
-        const t = this.findAgentTarget(agentName);
-        if (t) {
-          const escaped = message.replace(/'/g, "'\\''").replace(/\n/g, ' ');
-          exec(`tmux send-keys -t '${t}' '${escaped}' Enter`);
-        }
-      }, 5000);
-      return;
     }
-    const escaped = message.replace(/'/g, "'\\''").replace(/\n/g, ' ');
-    exec(`tmux send-keys -t '${target}' '${escaped}' Enter`);
+
+    // Step 1: Write full content to inbox file
+    const inboxDir = join(getCwd(), '.ce-hub', 'inbox', agentName);
+    if (!existsSync(inboxDir)) { exec(`mkdir -p '${inboxDir}'`); }
+    const timestamp = Date.now();
+    const taskFile = join(inboxDir, `msg_${timestamp}.json`);
+    writeFileSync(taskFile, JSON.stringify({
+      from: 'cc-lead', type: 'message', content: message,
+      task_id: `msg_${timestamp}`, created_at: new Date().toISOString(),
+    }, null, 2));
+
+    // Step 2: Short one-line tmux notification (< 80 chars, won't corrupt TUI)
+    const target = this.findAgentTarget(agentName);
+    if (target) {
+      // Use plain ASCII to avoid multibyte char issues, clear input first, delay before Enter
+      const note = `New task in .ce-hub/inbox/${agentName}/ - read and execute`;
+      // Clear any stale input in the TUI input box
+      exec(`tmux send-keys -t '${target}' C-u`);
+      // Type notification literally
+      exec(`tmux send-keys -t '${target}' -l '${note.replace(/'/g, "'\\''")}'`);
+      // Brief delay to let TUI ingest the typed characters before Enter
+      exec(`sleep 0.3`);
+      exec(`tmux send-keys -t '${target}' Enter`);
+    }
+
+    console.log(`[TmuxManager] notified ${agentName}: inbox msg_${timestamp}.json`);
   }
 
   // Find the tmux target for an agent — checks pane titles in main window first, then windows
@@ -205,20 +251,39 @@ export class TmuxManager {
   }
 
   isAlive(agentName: string): boolean {
-    // Check panes in main window by title (fuzzy: Claude adds "✳ " prefix)
-    const panes = exec(`tmux list-panes -t ${SESSION}:main -F '#{pane_title}' 2>/dev/null`).split('\n');
-    if (panes.some(t => t === agentName || t.includes(agentName))) return true;
-    // Check windows
+    // Check panes in main window by title + verify pane has child processes (claude runs as child of bash)
+    const panes = exec(`tmux list-panes -t ${SESSION}:main -F '#{pane_title}\t#{pane_pid}' 2>/dev/null`).split('\n');
+    for (const p of panes) {
+      const sep = p.lastIndexOf('\t');
+      if (sep < 0) continue;
+      const title = p.slice(0, sep);
+      const pid = p.slice(sep + 1);
+      if (title === agentName || title?.includes(agentName)) {
+        // Check if pane's shell has any child processes (bare bash = no children)
+        const children = exec(`pgrep -P ${pid} 2>/dev/null`);
+        if (children.trim()) return true;
+      }
+    }
+    // Check windows by name (separate windows always have agent running)
     return exec(`tmux list-windows -t ${SESSION} -F '#{window_name}' 2>/dev/null`).split('\n').includes(agentName);
   }
 
   listWindows(): { name: string; alive: boolean }[] {
     const windows = exec(`tmux list-windows -t ${SESSION} -F '#{window_name}' 2>/dev/null`).split('\n').filter(Boolean);
-    const paneTitles = exec(`tmux list-panes -t ${SESSION}:main -F '#{pane_title}' 2>/dev/null`).split('\n').filter(Boolean);
-    // Fuzzy match: check if any pane title contains the agent name
+    // Check pane title + child processes (claude runs as child of bash)
+    const paneInfo = exec(`tmux list-panes -t ${SESSION}:main -F '#{pane_title}\t#{pane_pid}' 2>/dev/null`).split('\n').filter(Boolean);
     return this.getDefinitions().map(d => ({
       name: d.name,
-      alive: windows.includes(d.name) || paneTitles.some(t => t === d.name || t.includes(d.name)),
+      alive: windows.includes(d.name) || paneInfo.some(p => {
+        const sep = p.lastIndexOf('\t');
+        if (sep < 0) return false;
+        const title = p.slice(0, sep);
+        const pid = p.slice(sep + 1);
+        if (title === d.name || title?.includes(d.name)) {
+          return exec(`pgrep -P ${pid} 2>/dev/null`).trim().length > 0;
+        }
+        return false;
+      }),
     }));
   }
 

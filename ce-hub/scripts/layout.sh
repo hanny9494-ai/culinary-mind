@@ -24,7 +24,7 @@
 #   layout.sh --reset [a1] [a2]  — kill session and recreate
 
 SESSION="cehub"
-CE_HUB_CWD="${CE_HUB_CWD:-$HOME/culinary-engine}"
+CE_HUB_CWD="${CE_HUB_CWD:-$HOME/culinary-mind}"
 CE_HUB_DIR="$CE_HUB_CWD/ce-hub"
 SCRIPTS="$CE_HUB_DIR/scripts"
 
@@ -122,6 +122,8 @@ setup_session() {
   tmux select-pane -t "$SESSION:main.0" -T "cc-lead"
 
   # Agent slots = pane 1 and pane 2 (bottom-left area)
+  # Wait for panes to initialize before starting agents
+  sleep 1
   start_agent_or_menu 1 "$agent1"
   start_agent_or_menu 2 "$agent2"
 

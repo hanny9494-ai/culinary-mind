@@ -1,7 +1,7 @@
 #!/bin/bash
 # mouse-bindings.sh — tmux mouse bindings + status bar for ce-hub TUI
 
-CE_HUB_CWD="${CE_HUB_CWD:-$HOME/culinary-engine}"
+CE_HUB_CWD="${CE_HUB_CWD:-$HOME/culinary-mind}"
 SCRIPTS="$CE_HUB_CWD/ce-hub/scripts"
 AGENTS_DIR="${CE_HUB_CWD}/.claude/agents"
 SESSION="cehub"
