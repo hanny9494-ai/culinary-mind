@@ -1,5 +1,5 @@
 [
-  {"cron": "23:00", "task": "curate-wiki", "agent": "system"},
-  {"cron": "08:00", "task": "curate-wiki", "agent": "system"},
+  {"cron": "08:00", "task": "curate-wiki", "agent": "wiki-curator"},
+  {"cron": "23:00", "task": "curate-wiki", "agent": "wiki-curator"},
   {"cron": "*/30", "task": "ingest-conversations", "agent": "system"}
 ]
