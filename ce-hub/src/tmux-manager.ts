@@ -234,24 +234,31 @@ export class TmuxManager {
       task_id: `msg_${timestamp}`, created_at: new Date().toISOString(),
     }, null, 2));
 
-    // Step 2: Short one-line tmux notification (< 80 chars, won't corrupt TUI)
+    // Step 2: Short one-line tmux notification using load-buffer+paste-buffer (reliable, no escaping issues)
     const target = this.findAgentTarget(agentName);
     if (target) {
-      // Use plain ASCII to avoid multibyte char issues, clear input first, delay before Enter
       const note = `New task in .ce-hub/inbox/${agentName}/ - read and execute`;
-      // Clear any stale input in the TUI input box
+      // Write note to temp file (avoids all shell escaping issues)
+      const noteTmp = join(getCwd(), '.ce-hub', 'tmp', `.nudge-${agentName}`);
+      writeFileSync(noteTmp, note);
+      // Load into tmux buffer
+      exec(`tmux load-buffer '${noteTmp}'`);
+      // Clear any existing input in the TUI
       exec(`tmux send-keys -t '${target}' C-u`);
-      // Type notification literally
-      exec(`tmux send-keys -t '${target}' -l '${note.replace(/'/g, "'\\''")}'`);
-      // Brief delay to let TUI ingest the typed characters before Enter
+      // Wait for TUI to process C-u (Claude TUI needs more time than a shell)
+      exec(`sleep 0.5`);
+      // Paste buffer content into TUI input box
+      exec(`tmux paste-buffer -t '${target}'`);
+      // Wait for paste to complete
       exec(`sleep 0.3`);
+      // Submit
       exec(`tmux send-keys -t '${target}' Enter`);
     }
 
     console.log(`[TmuxManager] notified ${agentName}: inbox msg_${timestamp}.json`);
   }
 
-  // Find the tmux target for an agent — checks pane titles in main window first, then windows
+  // Find the tmux target for an agent — returns precise pane ID (%N) when possible
   // Claude Code may prefix pane titles with "✳ " or similar, so we use fuzzy matching
   private findAgentTarget(agentName: string): string | null {
     // Check panes in main window (by pane title containing agent name)
@@ -261,11 +268,14 @@ export class TmuxManager {
       if (sep < 0) continue;
       const title = p.slice(0, sep);
       const id = p.slice(sep + 1);
-      if (title === agentName || title.includes(agentName)) return id;
+      if (title === agentName || title.includes(agentName)) return id; // returns %N pane ID
     }
-    // Check windows by name
+    // Check windows by name — get first pane ID of that window (more precise than window reference)
     const windows = exec(`tmux list-windows -t ${SESSION} -F '#{window_name}' 2>/dev/null`).split('\n');
-    if (windows.includes(agentName)) return `${SESSION}:${agentName}`;
+    if (windows.includes(agentName)) {
+      const paneId = exec(`tmux list-panes -t '${SESSION}:${agentName}' -F '#{pane_id}' 2>/dev/null`).split('\n')[0]?.trim();
+      return paneId || `${SESSION}:${agentName}`;
+    }
     return null;
   }
 
