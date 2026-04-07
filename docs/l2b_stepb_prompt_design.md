@@ -462,9 +462,9 @@ python scripts/stage5_stepb_opus_review.py \
 ### 6.4 API 配置
 
 ```python
-# 走 New-API 网关，trust_env=False
+# 直连灵雅 API（proxy :3001 已删除，决策 D43），trust_env=False
 API_CONFIG = {
-    "endpoint": "http://localhost:3001/v1/chat/completions",
+    "endpoint": "${L0_API_ENDPOINT}/v1/chat/completions",  # 灵雅直连
     "headers": {
         "Authorization": "Bearer sk-fS8bLdyWiCys5lIHRrnzJAXWLYViLZ5N4ovEdzT6bdYUasF3",
         "Content-Type": "application/json"

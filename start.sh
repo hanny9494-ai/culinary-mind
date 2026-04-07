@@ -2,6 +2,10 @@
 # Culinary Mind — One-click launch
 # Starts ce-hub daemon + tmux TUI
 
+# Lock Node to Homebrew current (node@25.9) — avoids better-sqlite3 ABI mismatch
+# when both node and node@20 are installed (PATH would otherwise pull node@20 v20 → ABI v115)
+export PATH="/opt/homebrew/opt/node/bin:$PATH"
+
 export CE_HUB_CWD="$HOME/culinary-mind"
 
 # Kill old daemon if running
@@ -14,7 +18,7 @@ CE_HUB_CWD="$CE_HUB_CWD" npx tsx src/index.ts > "$CE_HUB_CWD/ce-hub/logs/daemon.
 sleep 3
 
 # Launch tmux TUI
-bash "$CE_HUB_CWD/ce-hub/scripts/layout.sh" --reset
+bash "$CE_HUB_CWD/ce-hub/scripts/tui-layout.sh" --reset
 
 # Attach
 if [ -n "$TMUX" ]; then
