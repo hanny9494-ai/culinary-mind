@@ -1,8 +1,12 @@
-# Input Box Click Deadlock — Investigation Report
+# Input Box Click Deadlock & Copy-Mode Leak — Investigation Report
 
 **Date**: 2026-04-07  
 **Reporter**: Jeff (via cc-lead dispatch)  
-**Symptom**: After clicking another pane or position, clicking back on cc-lead conversation input box causes it to become unresponsive. Must Ctrl+C to recover.
+**Symptoms**:
+1. After clicking another pane, clicking back on cc-lead conversation input box → becomes unresponsive, must Ctrl+C to recover
+2. While typing, screen shows yellow prompt `(jump forward: ___)` — tmux copy-mode vi jump command triggered by the letter 'f'
+
+Both are the same root cause: **tmux mouse events auto-entering copy-mode** and leaking the vi-mode key handler into the Claude Code pane.
 
 ---
 
@@ -15,66 +19,80 @@ mouse on
 focus-events off
 ```
 
-### 1.2 Root MouseDown1Pane binding (before fix)
+### 1.2 Symptom 1: Click deadlock
 
+**Binding (before fix)**:
 ```
 bind-key -T root MouseDown1Pane  select-pane -t = \; send-keys -M
 ```
 
-### 1.3 Root cause identified: `send-keys -M` forwards click to application
+`send-keys -M` forwards the mouse click event as a VT escape sequence to Claude Code's TUI. When the click lands on the output area, Claude Code enters text-selection state → keyboard input is routed through the TUI selection handler → input box unresponsive.
 
-`send-keys -M` means: "send mouse event as terminal escape sequence to the application running in this pane."
-
-Flow when user clicks BACK on agent pane (pane 1) from dashboard pane (pane 0):
-1. tmux: `select-pane -t=` → pane 1 becomes active ✓
-2. tmux: `send-keys -M` → the MouseDown1 event is forwarded to Claude Code's TUI as a mouse escape sequence
-
-Claude Code's TUI receives a click event at whatever screen coordinates the user clicked. If those coordinates map to:
-- The output/scroll area → Claude Code enters text-selection or copy mode
-- The input field border → unexpected UI state
-- Any UI element → potential lock of input focus
-
-Result: Claude Code's internal state machine enters a sub-state where the input field is not focused, but tmux already handed over control. The user sees the cursor but keystrokes go nowhere (or Claude Code's TUI is processing a mouse sequence that stalled).
-
-### 1.4 Why this is the right diagnosis
-
-Evidence:
-- The default tmux binding DOES include `send-keys -M` (we can see it in `tmux list-keys`)
-- The symptom is specific to "clicking back" — i.e., cross-pane clicks that switch pane selection THEN forward the click
-- After Ctrl+C (which sends SIGINT to foreground process) it recovers — meaning Claude Code's input handler was blocked, not dead
-
-### 1.5 Why `focus-events off` is secondary
-
-Focus events being off means Claude Code doesn't get notified when it loses/regains focus. This could also contribute (Claude Code can't reset internal state on focus regain), but it's not the primary cause here. Enabling focus-events could help as a secondary fix.
-
----
-
-## 2. Fix Applied
-
-Changed `mouse-bindings.sh`:
-
+**Fix 1 applied**: Removed `send-keys -M`:
 ```bash
-# BEFORE (causes deadlock):
-bind-key -T root MouseDown1Pane select-pane -t = \; send-keys -M
-
-# AFTER (safe pane switch, no forwarded click):
 bind-key -T root MouseDown1Pane select-pane -t=
 ```
 
-Why this is safe:
-- Claude Code's TUI is keyboard-driven; it doesn't rely on mouse clicks to focus the input
-- The input field stays focused after `select-pane` without the forwarded click
-- Scroll still works via the separate WheelUpPane/WheelDownPane bindings
-- `mouse_any_flag` apps (which request mouse events) still get scroll via the WheelUp binding's `send-keys -M` conditional
+### 1.3 Symptom 2: "jump forward" prompt while typing / copy-mode leak
 
-Secondary fix: copy-mode click bindings still `clear-selection` to clean up copy state.
+**Binding (before fix)**:
+```
+bind-key -T root WheelUpPane  if-shell "#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -e }
+bind-key -T root WheelDownPane send-keys -M
+```
+
+Flow (scroll wheel up in agent pane):
+1. `alternate_on=0` (Claude Code's TUI may not use alternate screen in some states)
+2. `pane_in_mode=0`, `mouse_any_flag=0` → condition is FALSE
+3. tmux runs `copy-mode -e` → pane enters copy-mode
+4. User doesn't notice the status change `[copy-mode]`
+5. User types `f` → copy-mode vi binding for jump-forward fires
+6. Yellow prompt appears: `(jump forward: ___)`
+7. Any input now goes to copy-mode vi commands, not Claude Code
+
+**Root cause**: `copy-mode -e` enters copy-mode and passes scroll-up to copy buffer. The `alternate_on` check is unreliable — Claude Code's main pane may or may not be in alternate screen depending on its state.
+
+**Fix 2 applied**: Rebind WheelUpPane/Down to always pass to application (never auto-enter copy-mode):
+```bash
+bind-key -T root WheelUpPane   send-keys -M
+bind-key -T root WheelDownPane send-keys -M
+```
+
+Why this is safe:
+- Claude Code's TUI receives the VT mouse scroll events and handles them internally (scrolling its output view)
+- The dashboard pane (`watch -n5`) silently ignores unhandled mouse events — no degradation
+- Drag-select still works via `MouseDrag1Pane copy-mode -M` (unchanged)
+- User can still enter copy-mode manually via `prefix + [` for read-only browsing
 
 ---
 
-## 3. Verification
+## 2. Summary of Fixes
 
-After fix, expected behavior:
-- Click dashboard pane (pane 0) → view dashboard, no input to agent
-- Click agent pane (pane 1) → cursor enters agent TUI, input field immediately active, no Ctrl+C needed
-- Drag-select in agent pane → enters copy-mode, drag selects text
-- Scroll in agent pane → scrolls history (WheelUpPane binding unchanged)
+| Fix | Binding | Before | After |
+|-----|---------|--------|-------|
+| Click deadlock | `MouseDown1Pane` | `select-pane -t= \; send-keys -M` | `select-pane -t=` |
+| Scroll→copy-mode | `WheelUpPane` | conditional `copy-mode -e` | `send-keys -M` |
+| Scroll passthrough | `WheelDownPane` | conditional `send-keys -M` | `send-keys -M` |
+
+---
+
+## 3. Preserved Functionality
+
+| Feature | Status |
+|---------|--------|
+| Drag to select + copy to clipboard | ✅ (via `MouseDragEnd1Pane copy-pipe "pbcopy"`) |
+| Double-click word select + copy | ✅ (unchanged) |
+| Status bar window click nav | ✅ (unchanged) |
+| Keyboard copy-mode `prefix + [` | ✅ (unchanged, manual entry) |
+| Click pane to switch focus | ✅ (fixed, no click forwarding) |
+| Right-click context menu | ✅ (unchanged) |
+
+---
+
+## 4. Verification Checklist
+
+- [ ] Scroll up in agent pane → pane does NOT show `[copy-mode]` in status bar
+- [ ] Type `f` in Claude Code input field → types 'f', no yellow jump-forward prompt
+- [ ] Click dashboard pane → click back on agent pane → input field immediately responsive
+- [ ] Drag across text in any pane → selects text → releases → copied to clipboard
+- [ ] Prefix + `[` in any pane → enters copy-mode → `q` exits

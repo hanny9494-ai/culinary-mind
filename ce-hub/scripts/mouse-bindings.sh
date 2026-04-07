@@ -1,5 +1,12 @@
 #!/bin/bash
 # mouse-bindings.sh — tmux mouse bindings for ce-hub TUI v2
+#
+# Design principles:
+#   1. Pane clicks: select-pane ONLY, no send-keys -M (prevents Claude Code TUI deadlock)
+#   2. Scroll wheels: always forward to application, never auto-enter copy-mode
+#      (prevents vi-mode key hijacking — 'f' triggering jump-forward prompt)
+#   3. Drag-select: enters copy-mode for text selection + clipboard copy
+#   4. Status bar: click to switch windows
 
 CE_HUB_CWD="${CE_HUB_CWD:-$HOME/culinary-mind}"
 SCRIPTS="$CE_HUB_CWD/ce-hub/scripts"
@@ -12,14 +19,23 @@ apply_bindings() {
 set-option -g mouse on
 
 # === Pane click: select only, NO send-keys -M ===
-# The default tmux binding (select-pane + send-keys -M) forwards the click
-# event to the running application. For Claude Code TUI this causes the input
-# box to lock up (mouse escape sequence enters selection sub-state).
-# Fix: just select the pane, let the user type — no click forwarding.
+# Fix: removed send-keys -M to prevent mouse click being forwarded to Claude Code TUI.
+# Without this fix: click selects pane AND sends click event → Claude Code TUI enters
+# text-selection state → input box becomes unresponsive until Ctrl+C.
 bind-key -T root MouseDown1Pane select-pane -t=
 
+# === Scroll: always forward to application, never auto-enter copy-mode ===
+# Fix: the default conditional (alternate_on || pane_in_mode || mouse_any_flag) is
+# unreliable — Claude Code's pane may not set alternate_on consistently.
+# When condition is false, tmux ran copy-mode -e → user typed 'f' → vi jump-forward prompt.
+# Solution: always send-keys -M (forward scroll to app). Claude Code handles it; dashboard
+# (watch) silently ignores unhandled mouse events.
+bind-key -T root WheelUpPane   send-keys -M
+bind-key -T root WheelDownPane send-keys -M
+
 # === Copy/Paste ===
-# Drag-select: copy to system clipboard, keep selection visible
+# Drag-select: enters copy-mode and copies to system clipboard
+bind-key -T root MouseDrag1Pane copy-mode -M
 bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe "pbcopy"
 bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe "pbcopy"
 # Click in copy-mode: clear selection but STAY in copy-mode (don't cancel)
@@ -29,7 +45,6 @@ bind-key -T copy-mode-vi MouseDown1Pane select-pane \; send-keys -X clear-select
 bind-key -T root DoubleClick1Pane select-pane -t= \; copy-mode \; send-keys -X select-word \; send-keys -X copy-pipe "pbcopy"
 
 # === Status bar click: switch windows ===
-# Click on a window tab in the status bar to switch to it
 bind-key -T root MouseDown1Status select-window -t =
 bind-key -T root MouseDown1StatusLeft select-window -t =
 
@@ -61,7 +76,7 @@ bind-key Tab select-pane -t :.+
 TMUXCONF
 
   tmux source-file "$CONF_FILE" 2>&1
-  echo "Mouse bindings v2 applied (input deadlock fix: no send-keys -M on pane click)."
+  echo "Mouse bindings v2 applied (click deadlock + copy-mode leak fixed)."
 }
 
 apply_bindings
