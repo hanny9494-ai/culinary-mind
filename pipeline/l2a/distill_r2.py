@@ -331,12 +331,16 @@ async def main(args: argparse.Namespace) -> None:
         raise SystemExit(f"ERROR: No R1 atoms found in {ATOMS_R1_DIR}")
     log.info(f"Found {len(r1_files)} R1 atoms")
 
-    # Resume: skip already-done R2 files
+    # Resume: skip already-done R2 files + previously failed atoms
     done_ids: set[str] = set()
     if args.resume:
         done_ids = {p.stem for p in ATOMS_R2_DIR.glob("*.json")
                     if not p.name.startswith("_")}
         log.info(f"Resume: {len(done_ids)} already done, skipping")
+        failed_ids = {p.stem for p in FAILED_DIR.glob("*.json")}
+        if failed_ids:
+            done_ids |= failed_ids
+            log.info(f"Resume: skipping {len(failed_ids)} previously failed atoms (permanent skip)")
 
     # Build work queue
     to_process: list[dict] = []
