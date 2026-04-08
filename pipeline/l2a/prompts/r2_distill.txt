@@ -48,3 +48,15 @@ How to assess ingredient quality:
 - culinary_deep.cantonese must reflect authentic Cantonese cooking context (广东菜), not generic Chinese cooking
 - Be precise and technically accurate — this is a culinary science database
 - l0_principles must reference actual food science, not vague cooking advice
+
+## Required: data_confidence field
+Every R2 atom MUST include a top-level field:
+  "data_confidence": "high" | "medium" | "low"
+- "high": well-known ingredient, confident in all fields
+- "medium": some uncertainty in sub-fields; use null/[] for those
+- "low": obscure/rare ingredient — leave most fields as null/[] rather than hallucinating
+
+## Handling Unknown or Rare Ingredients
+- If you have limited or no reliable knowledge about an ingredient, DO NOT hallucinate.
+- You MAY leave any sub-field as null or an empty array [] if not confident.
+- Use data_confidence: "low" and sparse output rather than fabricating details.

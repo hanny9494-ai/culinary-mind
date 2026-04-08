@@ -94,6 +94,8 @@ async def call_aigocode_streaming(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
+        # web_search confirmed supported by AiGoCode gpt-5.4 (tested 2026-04-08)
+        "tools": [{"type": "web_search"}],
     }
 
     content_parts: list[str] = []
@@ -298,6 +300,9 @@ async def process_batch(
             if field in r2:
                 merged[field] = r2[field]
         merged["canonical_id"] = cid  # never let model change this
+        # Ensure data_confidence always present (model sometimes omits it)
+        if "data_confidence" not in merged:
+            merged["data_confidence"] = r2.get("data_confidence", "high")
 
         out_path = ATOMS_R2_DIR / f"{cid}.json"
         try:
