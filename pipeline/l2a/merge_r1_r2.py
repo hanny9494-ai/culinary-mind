@@ -20,6 +20,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 ATOMS_R1_DIR = REPO_ROOT / "output" / "l2a" / "atoms"
 ATOMS_R2_DIR = REPO_ROOT / "output" / "l2a" / "atoms_r2"
 
+# R2 adds exactly these fields to R1 atoms (all other fields come from R1)
+R2_NEW_FIELDS = {'culinary_deep', 'substitutes', 'processing_effects',
+                 'quality_indicators', 'l0_principles'}
+
 
 def load_r1_map() -> dict[str, dict]:
     """Load all R1 atoms indexed by canonical_id."""
@@ -67,7 +71,11 @@ def main(inplace: bool) -> None:
             continue
 
         # Merge: R1 as base, R2 fields override, canonical_id always from R2
-        merged = {**r1_atom, **r2_atom}
+        # R1 is authoritative base; only graft the 5 new R2 fields
+        merged = {**r1_atom}
+        for field in R2_NEW_FIELDS:
+            if field in r2_atom:
+                merged[field] = r2_atom[field]
         merged["canonical_id"] = cid
 
         if inplace:

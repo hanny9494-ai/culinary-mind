@@ -45,6 +45,9 @@ PROMPT_FILE = REPO_ROOT / "pipeline" / "l2a" / "prompts" / "r2_distill.txt"
 MODEL = "gpt-5.4"
 AIGOCODE_ENDPOINT = os.environ.get("AIGOCODE_ENDPOINT", "https://api.aigocode.com/v1")
 CHECKPOINT_EVERY = 50   # write _progress.json every N atoms
+# R2 adds exactly these fields to R1 atoms (all other fields come from R1)
+R2_NEW_FIELDS = {'culinary_deep', 'substitutes', 'processing_effects',
+                 'quality_indicators', 'l0_principles'}
 MAX_RETRIES = 1  # fail fast — no retries, land in _failed/ immediately
 RETRY_DELAYS = [2, 8, 30]   # exponential backoff seconds
 
@@ -289,7 +292,11 @@ async def process_batch(
         r1 = batch[i]
         cid = r2.get("canonical_id") or r1["canonical_id"]
         # Merge: ensure all R1 fields are present (model might drop some)
-        merged = {**r1, **r2}
+        # R1 is authoritative base; only graft the 5 new R2 fields
+        merged = {**r1}
+        for field in R2_NEW_FIELDS:
+            if field in r2:
+                merged[field] = r2[field]
         merged["canonical_id"] = cid  # never let model change this
 
         out_path = ATOMS_R2_DIR / f"{cid}.json"
