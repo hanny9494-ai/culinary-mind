@@ -45,7 +45,7 @@ PROMPT_FILE = REPO_ROOT / "pipeline" / "l2a" / "prompts" / "r2_distill.txt"
 MODEL = "gpt-5.4"
 AIGOCODE_ENDPOINT = os.environ.get("AIGOCODE_ENDPOINT", "https://api.aigocode.com/v1")
 CHECKPOINT_EVERY = 50   # write _progress.json every N atoms
-MAX_RETRIES = 3
+MAX_RETRIES = 1  # fail fast — no retries, land in _failed/ immediately
 RETRY_DELAYS = [2, 8, 30]   # exponential backoff seconds
 
 # ── Logging ────────────────────────────────────────────────────────────────────
@@ -242,7 +242,15 @@ async def process_batch(
 
     async with semaphore:
         try:
-            user_msg = json.dumps(batch, ensure_ascii=False)
+            # Only send minimal seed to reduce input tokens — R1 data merged in post-processing
+            # (full R1 JSON caused streaming truncation / JSON parse errors)
+            seed_batch = [
+                {"canonical_id": a["canonical_id"],
+                 "display_name": a.get("display_name", {}),
+                 "category": a.get("category", "")}
+                for a in batch
+            ]
+            user_msg = json.dumps(seed_batch, ensure_ascii=False)
             raw, tokens = await call_with_retry(client, system_prompt, user_msg)
             latency_ms = int((time.time() - t0) * 1000)
         except Exception as e:
