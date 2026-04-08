@@ -94,8 +94,6 @@ async def call_aigocode_streaming(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
-        # web_search confirmed supported by AiGoCode gpt-5.4 (tested 2026-04-08)
-        "tools": [{"type": "web_search"}],
     }
 
     content_parts: list[str] = []
