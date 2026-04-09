@@ -36,13 +36,13 @@ bind-key -T root WheelDownPane send-keys -M
 # === Copy/Paste ===
 # Drag-select: enters copy-mode and copies to system clipboard
 bind-key -T root MouseDrag1Pane copy-mode -M
-bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe "pbcopy"
-bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe "pbcopy"
+bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"
+bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"
 # Click in copy-mode: clear selection but STAY in copy-mode (don't cancel)
 bind-key -T copy-mode MouseDown1Pane select-pane \; send-keys -X clear-selection
 bind-key -T copy-mode-vi MouseDown1Pane select-pane \; send-keys -X clear-selection
 # Double-click: select word + copy
-bind-key -T root DoubleClick1Pane select-pane -t= \; copy-mode \; send-keys -X select-word \; send-keys -X copy-pipe "pbcopy"
+bind-key -T root DoubleClick1Pane select-pane -t= \; copy-mode \; send-keys -X select-word \; send-keys -X copy-pipe-and-cancel "pbcopy"
 
 # === Status bar click: switch windows ===
 bind-key -T root MouseDown1Status select-window -t =
@@ -76,7 +76,7 @@ bind-key Tab select-pane -t :.+
 TMUXCONF
 
   tmux source-file "$CONF_FILE" 2>&1
-  echo "Mouse bindings v2 applied (click deadlock + copy-mode leak fixed)."
+  [ -n "$VERBOSE" ] && echo "Mouse bindings v2 applied." >&2 || true
 }
 
 apply_bindings
