@@ -42,7 +42,7 @@ RUN_LOG = ATOMS_R2_DIR / "_run.log"
 PROMPT_FILE = REPO_ROOT / "pipeline" / "l2a" / "prompts" / "r2_distill.txt"
 
 # ── AiGoCode config ────────────────────────────────────────────────────────────
-MODEL = "gemini-3-flash-preview-search"
+MODEL = "gemini-3.1-pro-preview-search"
 LINGYA_ENDPOINT = os.environ.get("LINGYA_API_ENDPOINT", "https://api.lingyaai.cn/v1")
 CHECKPOINT_EVERY = 50   # write _progress.json every N atoms
 # R2 adds exactly these fields to R1 atoms (all other fields come from R1)
