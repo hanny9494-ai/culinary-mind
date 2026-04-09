@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Y-S1-1: Import L0 50K atomic propositions into Neo4j.
 
+Embedding model: Gemini gemini-embedding-001 (3072-dim, commercial).
 Schema:
   Node: (p:Principle {id, statement, proposition_type, domain, confidence,
                        causal_chain_text, boundary_conditions, citation_quote,
-                       source_book, source_chunk_id, embedding})
-  Labels: :Principle + :Domain_<domain> (e.g., :Domain_protein_science)
-  Vector index: principles_embedding on Principle.embedding (dim=768)
+                       source_book, source_chunk_id, embedding, embed_model})
+  Vector index: principles_embedding on Principle.embedding (dim=3072, cosine)
 
 Usage:
   python scripts/y_s1/import_l0_neo4j.py [--dry-run] [--limit N] [--no-resume]
+  python scripts/y_s1/import_l0_neo4j.py --reindex   # Drop+recreate vector index only
 """
 from __future__ import annotations
 
@@ -29,18 +30,22 @@ os.environ["no_proxy"] = "localhost,127.0.0.1"
 import httpx
 from neo4j import GraphDatabase
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT  = Path(__file__).resolve().parents[2]
 OUTPUT_DIR = REPO_ROOT / "output"
 
 NEO4J_URI  = os.getenv("NEO4J_URI",  "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASS = os.getenv("NEO4J_PASS", "culinary123")
 
-OLLAMA_URL   = "http://localhost:11434"
-EMBED_MODEL  = os.getenv("EMBED_MODEL", "nomic-embed-text-v2-moe:latest")
-EMBED_DIM    = 768
+GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_EMBED_MODEL = "gemini-embedding-001"
+GEMINI_EMBED_DIM   = 3072
+GEMINI_EMBED_URL   = (
+    "https://generativelanguage.googleapis.com/v1beta/models/"
+    f"{GEMINI_EMBED_MODEL}:batchEmbedContents"
+)
 
-BATCH_SIZE    = 50
+BATCH_SIZE    = 100
 PROGRESS_PATH = REPO_ROOT / "output" / "l0_neo4j_import_progress.json"
 
 VALID_DOMAINS = {
@@ -53,12 +58,14 @@ VALID_DOMAINS = {
 
 
 def principle_id(record: dict, source_book: str) -> str:
-    key = f"{source_book}:{record.get('source_chunk_id','')}:{record.get('scientific_statement','')[:80]}"
+    key = (
+        f"{source_book}:{record.get('source_chunk_id','')}:"
+        f"{record.get('scientific_statement','')[:80]}"
+    )
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
 def iter_l0_records() -> Iterator[tuple[str, dict]]:
-    """Yield (source_book, record) from all l0_principles_open.jsonl files."""
     files = sorted(OUTPUT_DIR.rglob("l0_principles_open.jsonl"))
     for path in files:
         book = path.parent.name.replace("stage4_", "").replace("stage4", "stage4_base")
@@ -73,87 +80,69 @@ def iter_l0_records() -> Iterator[tuple[str, dict]]:
                     continue
 
 
-def get_embedding(texts: list[str], client: httpx.Client) -> list[list[float]]:
-    """Embed texts via Ollama one at a time."""
-    embeddings = []
-    for text in texts:
-        resp = client.post(
-            f"{OLLAMA_URL}/api/embeddings",
-            json={"model": EMBED_MODEL, "prompt": text[:2000]},  # truncate
-            timeout=30,
-        )
-        resp.raise_for_status()
-        emb = resp.json()["embedding"]
-        embeddings.append(emb)
-    return embeddings
+def get_embeddings_gemini(texts: list[str], client: httpx.Client) -> list[list[float]]:
+    """Batch embed via Gemini gemini-embedding-001 (3072-dim)."""
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY env var not set")
+    requests_payload = [
+        {
+            "model": f"models/{GEMINI_EMBED_MODEL}",
+            "content": {"parts": [{"text": t[:8000]}]},
+            "task_type": "RETRIEVAL_DOCUMENT",
+        }
+        for t in texts
+    ]
+    resp = client.post(
+        f"{GEMINI_EMBED_URL}?key={GEMINI_API_KEY}",
+        json={"requests": requests_payload},
+        timeout=120,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return [item["values"] for item in data["embeddings"]]
 
 
-def setup_neo4j(driver) -> int:
-    """Create constraints and vector index. Return actual embedding dimension."""
-    # First, detect actual embedding dim from Ollama
-    http = httpx.Client(trust_env=False, timeout=30)
-    try:
-        resp = http.post(f"{OLLAMA_URL}/api/embeddings",
-                        json={"model": EMBED_MODEL, "prompt": "test"})
-        actual_dim = len(resp.json()["embedding"])
-        print(f"  Detected embedding dim: {actual_dim}")
-    except Exception as e:
-        actual_dim = EMBED_DIM
-        print(f"  Could not detect dim ({e}), using {actual_dim}")
-    finally:
-        http.close()
-
+def setup_neo4j(driver) -> None:
     with driver.session() as s:
         s.run("""
             CREATE CONSTRAINT principle_id_unique IF NOT EXISTS
             FOR (p:Principle) REQUIRE p.id IS UNIQUE
         """)
-
-        result = s.run("SHOW INDEXES WHERE name = 'principles_embedding'")
-        if not result.single():
-            s.run(f"""
-                CREATE VECTOR INDEX principles_embedding IF NOT EXISTS
-                FOR (p:Principle) ON (p.embedding)
-                OPTIONS {{indexConfig: {{
-                  `vector.dimensions`: {actual_dim},
-                  `vector.similarity_function`: 'cosine'
-                }}}}
-            """)
-            print(f"  Vector index 'principles_embedding' created (dim={actual_dim})")
-        else:
-            print("  Vector index already exists")
-
-    return actual_dim
+        try:
+            s.run("DROP INDEX principles_embedding IF EXISTS")
+            print("  Dropped old vector index")
+        except Exception:
+            pass
+        s.run(f"""
+            CREATE VECTOR INDEX principles_embedding IF NOT EXISTS
+            FOR (p:Principle) ON (p.embedding)
+            OPTIONS {{indexConfig: {{
+              `vector.dimensions`: {GEMINI_EMBED_DIM},
+              `vector.similarity_function`: 'cosine'
+            }}}}
+        """)
+        print(f"  Vector index created (dim={GEMINI_EMBED_DIM}, cosine)")
 
 
 def import_batch_fn(tx, batch: list[dict]) -> int:
     query = """
     UNWIND $rows AS row
     MERGE (p:Principle {id: row.id})
-    SET p.statement          = row.statement,
-        p.proposition_type   = row.proposition_type,
-        p.domain             = row.domain,
-        p.confidence         = row.confidence,
-        p.causal_chain_text  = row.causal_chain_text,
-        p.boundary_conditions= row.boundary_conditions,
-        p.citation_quote     = row.citation_quote,
-        p.source_book        = row.source_book,
-        p.source_chunk_id    = row.source_chunk_id,
-        p.embedding          = row.embedding
+    SET p.statement           = row.statement,
+        p.proposition_type    = row.proposition_type,
+        p.domain              = row.domain,
+        p.confidence          = row.confidence,
+        p.causal_chain_text   = row.causal_chain_text,
+        p.boundary_conditions = row.boundary_conditions,
+        p.citation_quote      = row.citation_quote,
+        p.source_book         = row.source_book,
+        p.source_chunk_id     = row.source_chunk_id,
+        p.embedding           = row.embedding,
+        p.embed_model         = row.embed_model
     RETURN count(p) AS n
     """
     result = tx.run(query, rows=batch)
     return result.single()["n"]
-
-
-def add_domain_labels(tx, batch: list[dict]) -> None:
-    """Add domain labels separately (APOC or dynamic labels)."""
-    for row in batch:
-        for label in row["domain_labels"]:
-            tx.run(
-                "MATCH (p:Principle {id: $id}) CALL apoc.create.addLabels(p, [$label]) YIELD node RETURN node",
-                id=row["id"], label=label
-            )
 
 
 def load_progress() -> set[str]:
@@ -171,10 +160,15 @@ def main() -> None:
     parser.add_argument("--dry-run",   action="store_true")
     parser.add_argument("--limit",     type=int, default=0)
     parser.add_argument("--no-resume", action="store_true")
-    parser.add_argument("--no-embed",  action="store_true",
-                        help="Skip embedding (import without vectors — for testing)")
+    parser.add_argument("--reindex",   action="store_true",
+                        help="Drop+recreate vector index only, then exit")
     args = parser.parse_args()
 
+    if not GEMINI_API_KEY:
+        print("ERROR: GEMINI_API_KEY env var required")
+        sys.exit(1)
+
+    print(f"Embedding: Gemini {GEMINI_EMBED_MODEL} ({GEMINI_EMBED_DIM}-dim)")
     print(f"Connecting to Neo4j at {NEO4J_URI}...")
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASS))
     try:
@@ -184,17 +178,24 @@ def main() -> None:
         sys.exit(1)
     print("  Connected.")
 
-    actual_dim = EMBED_DIM
     if not args.dry_run:
-        print("Setting up schema...")
-        actual_dim = setup_neo4j(driver)
+        print("Setting up schema (3072-dim Gemini index)...")
+        setup_neo4j(driver)
+
+    if args.reindex:
+        print("Reindex complete.")
+        driver.close()
+        return
 
     done_ids: set[str] = set() if args.no_resume else load_progress()
     print(f"Resume: {len(done_ids)} already imported")
 
     print("Scanning L0 files...")
     all_records = list(iter_l0_records())
-    print(f"  Found {len(all_records)} records")
+    total = len(all_records)
+    print(f"  Found {total} records")
+    # Cost: Gemini embedding-001 is free tier via API v1beta as of 2026-04
+    print(f"  Estimated embedding cost: ~$0.00 (Gemini free tier, {total} records)")
 
     pending = [(book, rec) for book, rec in all_records
                if principle_id(rec, book) not in done_ids]
@@ -206,63 +207,49 @@ def main() -> None:
         print("\n[dry-run] First 3 records:")
         for book, rec in pending[:3]:
             pid = principle_id(rec, book)
-            print(f"  {pid} | {book} | {rec['scientific_statement'][:70]}...")
+            print(f"  {pid} | {book} | {rec.get('scientific_statement','')[:70]}...")
         driver.close()
         return
 
-    http_client = httpx.Client(trust_env=False, timeout=60)
+    http_client = httpx.Client(trust_env=False, timeout=120)
     total_imported = 0
     t0 = time.time()
 
     for batch_start in range(0, len(pending), BATCH_SIZE):
         batch = pending[batch_start:batch_start + BATCH_SIZE]
         texts = [
-            (rec.get("scientific_statement") or rec.get("causal_chain_text") or "")
+            (rec.get("scientific_statement") or rec.get("causal_chain_text") or "")[:8000]
             for _, rec in batch
         ]
 
-        # Embed
-        if args.no_embed:
-            embeddings = [[0.0] * actual_dim for _ in batch]
-        else:
-            try:
-                embeddings = get_embedding(texts, http_client)
-            except Exception as e:
-                print(f"  [warn] Embedding failed at {batch_start}: {e} — using zeros")
-                embeddings = [[0.0] * actual_dim for _ in batch]
+        try:
+            embeddings = get_embeddings_gemini(texts, http_client)
+        except Exception as e:
+            print(f"  [warn] Gemini embed failed at {batch_start}: {e} — using zeros")
+            embeddings = [[0.0] * GEMINI_EMBED_DIM for _ in batch]
 
-        # Build rows
         rows = []
         for (book, rec), emb in zip(batch, embeddings):
             pid = principle_id(rec, book)
             domain = rec.get("domain", "unclassified")
-            safe_domain = domain.replace("-", "_").replace(" ", "_")
-            domain_labels = [f"Domain_{safe_domain}"]
-            if domain not in VALID_DOMAINS:
-                domain_labels.append("Domain_unclassified")
             rows.append({
-                "id":                 pid,
-                "statement":          rec.get("scientific_statement", ""),
-                "proposition_type":   rec.get("proposition_type", ""),
-                "domain":             domain,
-                "confidence":         float(rec.get("confidence", 0.7)),
-                "causal_chain_text":  rec.get("causal_chain_text", ""),
-                "boundary_conditions": json.dumps(rec.get("boundary_conditions", []),
-                                                  ensure_ascii=False),
-                "citation_quote":     rec.get("citation_quote", ""),
-                "source_book":        book,
-                "source_chunk_id":    rec.get("source_chunk_id", ""),
-                "embedding":          emb,
-                "domain_labels":      domain_labels,
+                "id":                  pid,
+                "statement":           rec.get("scientific_statement", ""),
+                "proposition_type":    rec.get("proposition_type", ""),
+                "domain":              domain,
+                "confidence":          float(rec.get("confidence", 0.7)),
+                "causal_chain_text":   rec.get("causal_chain_text", ""),
+                "boundary_conditions": json.dumps(
+                    rec.get("boundary_conditions", []), ensure_ascii=False),
+                "citation_quote":      rec.get("citation_quote", ""),
+                "source_book":         book,
+                "source_chunk_id":     rec.get("source_chunk_id", ""),
+                "embedding":           emb,
+                "embed_model":         GEMINI_EMBED_MODEL,
             })
 
         with driver.session() as s:
             s.execute_write(import_batch_fn, rows)
-            # Add domain labels (best-effort, APOC may not be available)
-            try:
-                s.execute_write(add_domain_labels, rows)
-            except Exception:
-                pass  # APOC not required for core functionality
 
         total_imported += len(rows)
         for book, rec in batch:
@@ -278,10 +265,9 @@ def main() -> None:
 
     http_client.close()
     driver.close()
-
     print(f"\nImport complete: {total_imported} new records")
     print(f"Total done: {len(done_ids)}")
-    print(f"Progress: {PROGRESS_PATH}")
+    print(f"Embed model: {GEMINI_EMBED_MODEL} ({GEMINI_EMBED_DIM}-dim)")
 
 
 if __name__ == "__main__":

@@ -187,7 +187,7 @@ export class FileWatcher {
     const from = (data.from || data.dispatched_by || "cc-lead") as string;
     const taskId = data.task_id as string;
     const status = data.status as string;
-    const summary = data.summary as string;
+    const summary = (data.summary as string) || (data.content as string) || '';
     const outputFiles = data.output_files as string[] || [];
 
     console.log(`[FileWatcher] result: ${from} completed ${taskId}: ${status}`);
@@ -221,7 +221,7 @@ export class FileWatcher {
         ensureDir(originInbox);
         writeFileSync(join(originInbox, `result_${from}_${Date.now()}.json`), JSON.stringify({
           id: `result_${Date.now()}`, from, type: 'result',
-          content: `[${from} ${status}] ${summary}`, task_id: taskId,
+          content: `[${from} ${status}] ${summary || '(no summary)'}`, task_id: taskId,
           output_files: outputFiles, created_at: new Date().toISOString(),
         }, null, 2));
 
