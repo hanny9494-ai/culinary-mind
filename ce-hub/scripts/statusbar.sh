@@ -39,7 +39,7 @@ set-option -g status-left-length 10
 set-option -g status-left "#[fg=colour214,bold] # #[default]"
 
 # Status right: compact info + time
-set-option -g status-right-length 60
+set-option -g status-right-length 35
 set-option -g status-right "#[fg=colour245]#(bash ${SCRIPTS}/statusbar-right.sh) #[fg=colour239]| #[fg=colour245]%H:%M"
 
 # Refresh frequently so attention changes appear quickly
@@ -55,4 +55,4 @@ set-option -g pane-border-format " #{?pane_active,#[fg=colour214 bold],#[fg=colo
 set-hook -g after-select-window 'run-shell -b "CE_HUB_CWD=${CE_HUB_CWD} bash ${SCRIPTS}/clear-attention.sh #{window_name} 2>/dev/null"'
 TMUXCONF
 
-tmux source-file "$CONF_FILE" 2>/dev/null && echo "Statusbar v2 applied." || echo "Statusbar: apply failed (session may not exist yet)"
+tmux source-file "$CONF_FILE" 2>/dev/null || { echo "Statusbar: apply failed (session may not exist yet)" >&2; }
