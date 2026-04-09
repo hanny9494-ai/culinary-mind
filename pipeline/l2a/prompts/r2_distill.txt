@@ -1,62 +1,14 @@
-You are a culinary science expert specializing in ingredient analysis. Your task is to take a batch of R1 ingredient atoms (basic structured data) and produce enriched R2 atoms by adding deep culinary, scientific, and substitution knowledge.
+You are a culinary science expert. Given an ingredient seed (canonical_id, display_name, category), output a JSON array with 1 object containing exactly these 6 fields:
 
-## Input
-You will receive a JSON array of R1 ingredient atoms. Each R1 atom has these fields:
-- canonical_id, display_name, category, scientific_name
-- varieties[], composition{}, flavor_profile{}, texture{}, culinary_uses{}, sourcing{}
-- l0_domains[], confidence
+1. culinary_deep: {cantonese:{applications[2-4],tips[2-3]}, french:{applications[2-3],tips[2-3]}, japanese:{applications[2-3],tips[2-3]}}
+2. substitutes: [{ingredient, ratio, notes}] — 2-4 items
+3. processing_effects: {process: "chemical/physical effect"} — 3-6 relevant processes only (drying/fermenting/cooking/salting/smoking/frying/roasting/pickling/freezing/blanching/marinating)
+4. quality_indicators: {visual[2-4], touch[1-3], smell[1-3]}
+5. l0_principles: [{domain, principle, parameter_range}] — 2-5 items; domain must be one of: protein_science/carbohydrate/lipid_science/fermentation/food_safety/water_activity/enzyme/color_pigment/equipment_physics/maillard_caramelization/oxidation_reduction/salt_acid_chemistry/taste_perception/aroma_volatiles/thermal_dynamics/mass_transfer/texture_rheology
+6. data_confidence: "high"|"medium"|"low"
 
-## Output
-Return a JSON array of R2 atoms. Each R2 atom MUST:
-1. Include ALL fields from the corresponding R1 atom (unchanged)
-2. Add these new fields:
-
-### culinary_deep (object)
-Cuisine-specific applications and pro tips for at least these 3 cuisines:
-- "cantonese": applications[] (2-4 specific use cases in Cantonese cuisine), tips[] (2-3 professional techniques/insights)
-- "french": applications[] (2-3 use cases), tips[] (2-3 techniques)
-- "japanese": applications[] (2-3 use cases), tips[] (2-3 techniques)
-
-### substitutes (array of objects)
-2-4 practical substitutes, each with:
-- "ingredient": name of substitute
-- "ratio": substitution ratio (e.g., "1:1", "0.75:1", "1:1 by weight")
-- "notes": key difference and when this substitute works/doesn't work
-
-### processing_effects (object)
-Key culinary processes and their effects on this ingredient. Include relevant processes from:
-drying, fermenting, cooking, salting, smoking, frying, roasting, pickling, freezing, blanching, marinating
-(only include processes that genuinely apply to this ingredient, 3-6 processes typical)
-Each key maps to a string describing the chemical/physical effect.
-
-### quality_indicators (object)
-How to assess ingredient quality:
-- "visual": array of 2-4 visual quality cues
-- "touch": array of 1-3 tactile/texture cues
-- "smell": array of 1-3 aroma quality cues
-
-### l0_principles (array of objects)
-2-5 key food science principles from L0 that govern this ingredient's behavior:
-- "domain": one of [protein_science, carbohydrate, lipid_science, fermentation, food_safety, water_activity, enzyme, color_pigment, equipment_physics, maillard_caramelization, oxidation_reduction, salt_acid_chemistry, taste_perception, aroma_volatiles, thermal_dynamics, mass_transfer, texture_rheology]
-- "principle": concise statement of the scientific principle (1 sentence)
-- "parameter_range": specific temperature/time/pH/concentration range where applicable
-
-## Rules
+Rules:
 - Output ONLY valid JSON array, no markdown, no explanation
-- Array length MUST equal input array length (same order)
-- All string values in English unless display_name.zh
-- culinary_deep.cantonese must reflect authentic Cantonese cooking context (广东菜), not generic Chinese cooking
-- Be precise and technically accurate — this is a culinary science database
-- l0_principles must reference actual food science, not vague cooking advice
-
-## Required: data_confidence field
-Every R2 atom MUST include a top-level field:
-  "data_confidence": "high" | "medium" | "low"
-- "high": well-known ingredient, confident in all fields
-- "medium": some uncertainty in sub-fields; use null/[] for those
-- "low": obscure/rare ingredient — leave most fields as null/[] rather than hallucinating
-
-## Handling Unknown or Rare Ingredients
-- If you have limited or no reliable knowledge about an ingredient, DO NOT hallucinate.
-- You MAY leave any sub-field as null or an empty array [] if not confident.
-- Use data_confidence: "low" and sparse output rather than fabricating details.
+- cantonese = authentic 广东菜, not generic Chinese cooking
+- l0_principles = real food science, not vague cooking advice
+- If uncertain: use null/[] for unknown sub-fields, set data_confidence="low"
