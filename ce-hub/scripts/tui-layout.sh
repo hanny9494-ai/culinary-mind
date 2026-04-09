@@ -98,11 +98,13 @@ setup_window() {
   tmux split-window -d -t "${win_ref}.0" -v -l $((SCREEN_H - DASH_H - 2)) -c "$CE_HUB_CWD"
 
   # Dashboard pane (top, pane 0)
+  # Use a portable while loop instead of 'watch' (not installed by default on macOS)
   tmux select-pane -t "${win_ref}.0" -T "dashboard"
   tmux send-keys -t "${win_ref}.0" \
     "export CE_HUB_CWD=$CE_HUB_CWD no_proxy=localhost,127.0.0.1" Enter
+  sleep 0.3
   tmux send-keys -t "${win_ref}.0" \
-    "watch -n 5 -t bash $SCRIPTS/dashboard.sh $agent" Enter
+    "while true; do clear; bash $SCRIPTS/dashboard.sh $agent; sleep 5; done" Enter
 
   # Agent pane (bottom, pane 1)
   tmux select-pane -t "${win_ref}.1" -T "$agent"
@@ -136,7 +138,7 @@ for arg in "$@"; do
 tui-layout.sh — ce-hub TUI v2
 
 Creates 9 tmux windows, each with:
-  pane 0 (top, 20 rows)   : dashboard (watch -n5 dashboard.sh)
+  pane 0 (top, 20 rows)   : dashboard (while loop, portable — no watch dependency)
   pane 1 (bottom, 96 rows): agent (claude --agent NAME)
 
 Idempotent: windows with correct 2-pane structure are skipped unless --force.
