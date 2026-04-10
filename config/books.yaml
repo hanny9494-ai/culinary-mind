@@ -410,3 +410,194 @@ books:
   recipe_status: done
   purpose: recipe_only
   recipe_count: 802
+
+# ── 中文粤菜书籍 (2026-04-11 added, PaddleOCR-VL 1.5) ─────────────────────────
+- id: shijing
+  title: 食经
+  title_en: Shijing (Classic of Food)
+  author: 陈梦因
+  language: zh
+  format: pdf
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/食经 (陈梦因) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
+  purpose: recipe_only
+  l0_status: pending
+  recipe_status: pending
+  note: "带(1)的重复版本已跳过"
+
+- id: chuantong_yc
+  title: 传统粤菜精华录
+  title_en: Classic Cantonese Cuisine Essentials
+  author: 陈梦因, 江献珠
+  language: zh
+  format: pdf
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/传统粤菜精华录 (陈梦因，江献珠著) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
+  purpose: recipe_only
+  l0_status: pending
+  recipe_status: pending
+
+- id: gufa_yc
+  title: 古法粤菜新谱
+  title_en: New Recipes of Classic Cantonese Cooking
+  author: 陈梦因, 江献珠
+  language: zh
+  format: pdf
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/古法粤菜新谱 (陈梦因, 江献珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
+  purpose: recipe_only
+  l0_status: pending
+  recipe_status: pending
+
+- id: zhujixiaoguan_6
+  title: 珠璣小館家常菜譜（第六集）
+  title_en: Pearl of the Orient Home Cooking Vol.6
+  author: 江献珠
+  language: zh
+  format: pdf
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家常菜譜 （第六集） (江献珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
+  purpose: recipe_only
+  l0_status: pending
+  recipe_status: pending
+
+- id: zhujixiaoguan_3
+  title: 珠璣小館家饌3
+  title_en: Pearl of the Orient Home Cuisine Vol.3
+  author: 江獻珠
+  language: zh
+  format: pdf
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家饌3 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
+  purpose: recipe_only
+  l0_status: pending
+  recipe_status: pending
+
+- id: zhujixiaoguan_4
+  title: 珠璣小館家饌4
+  title_en: Pearl of the Orient Home Cuisine Vol.4
+  author: 江獻珠
+  language: zh
+  format: pdf
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家饌4 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
+  purpose: recipe_only
+  l0_status: pending
+  recipe_status: pending
+
+- id: zhujixiaoguan_2
+  title: 珠璣小館家馔2
+  title_en: Pearl of the Orient Home Cuisine Vol.2
+  author: 江獻珠
+  language: zh
+  format: pdf
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家馔2 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
+  purpose: recipe_only
+  l0_status: pending
+  recipe_status: pending
+
+- id: zhujixiaoguan_v6b
+  title: 珠璣小館家馔6
+  title_en: Pearl of the Orient Home Cuisine Vol.6b
+  author: 江獻珠
+  language: zh
+  format: pdf
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家馔6 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
+  purpose: recipe_only
+  l0_status: pending
+  recipe_status: pending
+
+- id: zhujixiaoguan_dimsim2
+  title: 珠璣小館：中國點心2
+  title_en: Pearl of the Orient - Chinese Dim Sum Vol.2
+  author: 江獻珠
+  language: zh
+  format: pdf
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館：中國點心2 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
+  purpose: recipe_only
+  l0_status: pending
+  recipe_status: pending
+
+- id: fenbuxiangjiena_yc
+  title: 分步詳解南粵家鄉菜
+  title_en: Step-by-Step Cantonese Home Cooking
+  author: 江獻珠
+  language: zh
+  format: pdf
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/分步詳解-南粵家鄉菜 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
+  purpose: recipe_only
+  l0_status: pending
+  recipe_status: pending
+
+- id: yuecan_zhenwei_meat
+  title: 粤菜真味：肉食篇
+  title_en: True Flavors of Cantonese Cuisine - Meats
+  author: 江献珠
+  language: zh
+  format: pdf
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/粤菜真味：肉食篇 (江献珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
+  purpose: recipe_only
+  l0_status: pending
+  recipe_status: pending
+
+- id: guangdong_pengtiao_quanshu
+  title: 廣東菜烹調全書
+  title_en: Complete Book of Cantonese Cooking Techniques
+  author: 陳淑儀
+  language: zh
+  format: pdf
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/廣東菜烹調全書 (陳淑儀) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
+  purpose: recipe_only
+  l0_status: pending
+  recipe_status: pending
+
+- id: hk_yuecan_yanxi
+  title: 香港粵菜筵席譜
+  title_en: Hong Kong Cantonese Banquet Menu
+  author: 鲁夫
+  language: zh
+  format: pdf
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/香港粵菜筵席譜 (鲁夫) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
+  purpose: recipe_only
+  l0_status: pending
+  recipe_status: pending
+
+- id: zhongguo_caipu_guangdong
+  title: 中国菜谱 广东
+  title_en: Chinese Recipes - Guangdong Volume
+  author: 《中国菜谱》编写组
+  language: zh
+  format: pdf
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/中国菜谱 广东 (《中国菜谱》编写组编) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
+  purpose: recipe_only
+  l0_status: pending
+  recipe_status: pending
+
+- id: zhongguo_yinshi_meixueshi
+  title: 中国饮食美学史
+  title_en: History of Chinese Food Aesthetics
+  author: 赵建军
+  language: zh
+  format: pdf
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/中国饮食美学史 (赵建军著, 赵建军, 1958- author, Zhao Jianjun zhu etc.) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
+  purpose: science+recipe
+  l0_status: pending
+  recipe_status: pending
+
+- id: yuecan_wangliang
+  title: 粤菜（王亮）
+  title_en: Cantonese Cuisine (Wang Liang)
+  author: 王亮
+  language: zh
+  format: epub
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/粤菜 (王亮　著) (z-library.sk, 1lib.sk, z-lib.sk).epub"
+  purpose: recipe_only
+  l0_status: pending
+  recipe_status: pending
+  note: "EPUB格式，需先转PDF再OCR"
+
+- id: xidage_xunwei_hk
+  title: 西打哥的尋味香港
+  title_en: Xidage's Flavor Hunt in Hong Kong
+  author: 西打哥
+  language: zh
+  format: epub
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/西打哥的尋味香港：從街頭小吃到餐館美饌，品嚐最道地的香港好味！ (西打哥) (z-library.sk, 1lib.sk, z-lib.sk).epub"
+  purpose: recipe_only
+  l0_status: pending
+  recipe_status: pending
+  note: "EPUB格式，需先转PDF再OCR"
