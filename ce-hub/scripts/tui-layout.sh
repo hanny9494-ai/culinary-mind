@@ -101,8 +101,11 @@ setup_window() {
   tmux select-pane -t "${win_ref}.0" -T "dashboard"
   tmux send-keys -t "${win_ref}.0" \
     "export CE_HUB_CWD=$CE_HUB_CWD no_proxy=localhost,127.0.0.1" Enter
-  tmux send-keys -t "${win_ref}.0" \
-    "/Users/jeff/miniforge3/bin/python3 $CE_HUB_CWD/src/dashboard/app.py --agent=$agent" Enter
+  local dashboard_cmd="/Users/jeff/miniforge3/bin/python3 $CE_HUB_CWD/src/dashboard/app.py --agent=$agent"
+  if [ "$agent" = "cc-lead" ]; then
+    dashboard_cmd="$dashboard_cmd --global"
+  fi
+  tmux send-keys -t "${win_ref}.0" "$dashboard_cmd" Enter
 
   # Agent pane (bottom, pane 1)
   tmux select-pane -t "${win_ref}.1" -T "$agent"

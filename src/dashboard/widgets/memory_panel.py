@@ -1,65 +1,30 @@
-"""
-memory_panel.py — Agent memory / output recency panel.
-Shows last write time per agent raw/ dir; highlights stale > 24h.
-"""
+from rich.text import Text
+from textual.widgets import Static
 
-from textual.app import ComposeResult
-from textual.widgets import Static, DataTable
-from textual.reactive import reactive
+from dashboard.data import AgentMemoryStatus, MemoryFileInfo, fmt_age
 
 
 class MemoryPanel(Static):
-    """Right sidebar: agent output recency + wiki + memory files."""
-
-    DEFAULT_CSS = """
-    MemoryPanel {
-        height: 1fr;
-        border: solid $accent;
-        padding: 0 1;
-    }
-    MemoryPanel DataTable {
-        height: auto;
-    }
-    """
-
-    def compose(self) -> ComposeResult:
-        yield Static("📝 Memory & Output Recency", classes="panel-title")
-        yield DataTable(id="memory-table", show_cursor=False)
-
-    def on_mount(self) -> None:
-        table = self.query_one("#memory-table", DataTable)
-        table.add_columns("Agent", "Files", "Last Write")
-        self._refresh_data()
-        self.set_interval(30, self._refresh_data)
-
-    def _refresh_data(self) -> None:
-        from ..data import fetch_memory, fetch_wiki_mtime, fetch_memory_files
-
-        table = self.query_one("#memory-table", DataTable)
-        table.clear()
-
-        memories = fetch_memory()
-        for m in memories:
-            name = m.name
-            count = str(m.file_count) if m.file_count > 0 else "0"
-            ago = m.last_write_ago
-            # Yellow styling for stale agents
-            if m.stale:
-                row = (f"[yellow]{name}[/yellow]",
-                       f"[yellow]{count}[/yellow]",
-                       f"[yellow]{ago}[/yellow]")
-            else:
-                row = (f"[green]{name}[/green]", count, f"[dim]{ago}[/dim]")
-            table.add_row(*row)
-
-        # Wiki row
-        wiki_ago = fetch_wiki_mtime()
-        table.add_row("[cyan]wiki/[/cyan]", "—", f"[dim]{wiki_ago}[/dim]")
-
-        # Memory files section
-        mem_files = fetch_memory_files()
-        if mem_files:
-            self.query_one("#memory-table").add_row("", "", "")
-            for fname, ago in mem_files[:5]:
-                short = fname[:20] + "…" if len(fname) > 20 else fname
-                table.add_row(f"[dim].ce-hub/memory[/dim]", short, f"[dim]{ago}[/dim]")
+    def render_memory(
+        self,
+        agent_memory: list[AgentMemoryStatus],
+        wiki_modified_ts: float | None,
+        memory_files: list[MemoryFileInfo],
+    ) -> None:
+        text = Text()
+        text.append("Memory / Recency\n", style="bold")
+        for item in agent_memory:
+            style = "yellow" if item.stale else "green"
+            text.append(f"{item.name:<18}", style=style)
+            text.append(f" {item.file_count:>2} files ", style="white")
+            text.append(fmt_age(item.last_output_ts), style=style)
+            text.append("\n")
+        text.append("\nwiki/ ", style="bold")
+        text.append(fmt_age(wiki_modified_ts), style="yellow" if not wiki_modified_ts else "green")
+        text.append("\n\n.ce-hub/memory\n", style="bold")
+        if not memory_files:
+            text.append("?\n", style="white")
+        for file_info in memory_files:
+            text.append(f"{file_info.path}\n", style="cyan")
+            text.append(f"  {fmt_age(file_info.modified_ts)}\n", style="white")
+        self.update(text)
