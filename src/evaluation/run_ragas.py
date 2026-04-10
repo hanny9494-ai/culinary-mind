@@ -1,39 +1,21 @@
 """Y-S1-3: RAGAS evaluation scaffold for the Y-system retrieval API.
 
-Adapted from LightRAG evaluation/ pattern.
+Judge model: Gemini 2.0 Flash (avoids self-bias — Y-system answers are Claude).
 Runs 4 RAGAS metrics: Context Precision, Context Recall, Faithfulness, Answer Relevancy.
 
 Usage:
-  # Dummy test (5 questions, no real API needed):
   python -m src.evaluation.run_ragas dummy
-
-  # Real evaluation:
   python -m src.evaluation.run_ragas eval_set.json --output results.json
 
-  # Golden set:
-  python -m src.evaluation.run_ragas data/golden_set/golden_v0.json
-
 Input JSON format:
-  [
-    {
-      "question": "为什么烤鸡胸柴？",
-      "ground_truth": "鸡胸肌肉纤维细，..."   (optional, needed for recall/faithfulness)
-    },
-    ...
-  ]
+  [{"question": "...", "ground_truth": "..."},  ...]
 
 Output:
-  {
-    "context_precision":    0.xx,
-    "context_recall":       0.xx,
-    "faithfulness":         0.xx,
-    "answer_relevancy":     0.xx,
-    "per_question": [...]
-  }
+  {"context_precision": 0.xx, "context_recall": 0.xx,
+   "faithfulness": 0.xx, "answer_relevancy": 0.xx, "per_question": [...]}
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import sys
@@ -48,13 +30,27 @@ os.environ["no_proxy"] = "localhost,127.0.0.1"
 import httpx
 
 RETRIEVAL_API_URL = os.getenv("RETRIEVAL_API_URL", "http://localhost:8760")
-OLLAMA_URL        = os.getenv("OLLAMA_URL", "http://localhost:11434")
-JUDGE_MODEL       = os.getenv("JUDGE_MODEL", "qwen3.5:9b")
 
+# ── Judge model: Gemini (avoids self-bias vs Claude-generated answers) ──────
+GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY", "")
+JUDGE_MODEL     = os.getenv("JUDGE_MODEL", "gemini-2.0-flash")
+GEMINI_API_URL  = "https://generativelanguage.googleapis.com/v1beta/models"
+
+# Configurable via config/evaluation.yaml (loaded at startup if present)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+def load_eval_config() -> dict:
+    cfg_path = REPO_ROOT / "config" / "evaluation.yaml"
+    if cfg_path.exists():
+        try:
+            import yaml
+            return yaml.safe_load(cfg_path.read_text()) or {}
+        except ImportError:
+            pass
+    return {}
 
-# ─── Dummy data ─────────────────────────────────────────────────────────────────
+
+# ── Dummy data ────────────────────────────────────────────────────────────────
 
 DUMMY_QUESTIONS = [
     {
@@ -80,10 +76,9 @@ DUMMY_QUESTIONS = [
 ]
 
 
-# ─── Retrieval call ─────────────────────────────────────────────────────────────
+# ── Retrieval call ────────────────────────────────────────────────────────────
 
 def call_retrieve(client: httpx.Client, question: str, top_k: int = 8) -> dict:
-    """Call the retrieval API and return raw response."""
     resp = client.post(
         f"{RETRIEVAL_API_URL}/retrieve",
         json={"q": question, "top_k": top_k, "return_contexts": True,
@@ -94,32 +89,32 @@ def call_retrieve(client: httpx.Client, question: str, top_k: int = 8) -> dict:
     return resp.json()
 
 
-# ─── RAGAS-style scoring (local, no OpenAI required) ────────────────────────────
+# ── Gemini judge ──────────────────────────────────────────────────────────────
 
 def llm_judge(client: httpx.Client, prompt: str) -> float:
-    """Call local LLM to score on 0-1 scale. Returns float."""
-    resp = client.post(
-        f"{OLLAMA_URL}/api/generate",
-        json={
-            "model": JUDGE_MODEL,
-            "prompt": "/no_think\n" + prompt + "\n\nOnly respond with a number between 0 and 1 (e.g., 0.75). No explanation.",
-            "stream": False,
-            "think": False,
-            "options": {"temperature": 0.0, "num_predict": 16},
-        },
-        timeout=90,
-    )
+    """Call Gemini to score on 0-1 scale. Returns float."""
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY not set — required for RAGAS judge")
+
+    model_url = f"{GEMINI_API_URL}/{JUDGE_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt + "\n\nOnly respond with a number between 0 and 1 (e.g., 0.75). No explanation."}]}],
+        "generationConfig": {
+            "temperature": 0.0,
+            "maxOutputTokens": 16,
+            "candidateCount": 1,
+        }
+    }
+    resp = client.post(model_url, json=payload, timeout=60)
     resp.raise_for_status()
-    text = resp.json()["response"].strip()
-    # Parse first float found
+    text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
     import re
-    nums = re.findall(r"0?\.\d+|1\.0|0|1", text)
+    nums = re.findall(r"0?\.\d+|1\.0|^0$|^1$", text)
     return float(nums[0]) if nums else 0.5
 
 
 def score_context_precision(client: httpx.Client, question: str,
                              contexts: list[dict], ground_truth: str) -> float:
-    """Context Precision: fraction of retrieved contexts that are relevant."""
     if not contexts:
         return 0.0
     scores = []
@@ -134,7 +129,6 @@ Relevant (0-1)?"""
 
 def score_context_recall(client: httpx.Client, question: str,
                           contexts: list[dict], ground_truth: str) -> float:
-    """Context Recall: how much of the ground truth is covered by retrieved contexts."""
     if not ground_truth or not contexts:
         return 0.0
     ctx_combined = " ".join(c["text"][:300] for c in contexts[:5])
@@ -147,7 +141,6 @@ Coverage score (0-1)?"""
 
 def score_faithfulness(client: httpx.Client, answer: str,
                         contexts: list[dict]) -> float:
-    """Faithfulness: fraction of answer claims supported by contexts."""
     if not answer or not contexts:
         return 0.0
     ctx_combined = " ".join(c["text"][:300] for c in contexts[:5])
@@ -159,7 +152,6 @@ Faithfulness score (0-1, where 1 = fully supported)?"""
 
 
 def score_answer_relevancy(client: httpx.Client, question: str, answer: str) -> float:
-    """Answer Relevancy: how well the answer addresses the question."""
     if not answer:
         return 0.0
     prompt = f"""Evaluate how relevant and complete this answer is for the given question.
@@ -169,13 +161,19 @@ Relevancy score (0-1)?"""
     return llm_judge(client, prompt)
 
 
-# ─── Main evaluation loop ────────────────────────────────────────────────────────
+# ── Main evaluation loop ──────────────────────────────────────────────────────
 
 def run_evaluation(questions: list[dict], output_path: Path | None = None,
                    verbose: bool = True) -> dict:
+    cfg = load_eval_config()
+    judge_model_name = cfg.get("judge_model", JUDGE_MODEL)
+
     client = httpx.Client(trust_env=False, timeout=120)
     results = []
     t0 = time.time()
+
+    if verbose:
+        print(f"Judge model: {judge_model_name} (Gemini — independent of Claude answer gen)")
 
     for i, item in enumerate(questions):
         q = item["question"]
@@ -183,7 +181,6 @@ def run_evaluation(questions: list[dict], output_path: Path | None = None,
         if verbose:
             print(f"\n[{i+1}/{len(questions)}] Q: {q[:60]}...")
 
-        # 1. Retrieve
         try:
             resp = call_retrieve(client, q)
         except Exception as e:
@@ -197,7 +194,6 @@ def run_evaluation(questions: list[dict], output_path: Path | None = None,
             print(f"  contexts: {len(contexts)}, latency: {resp.get('latency_ms')}ms")
             print(f"  answer: {answer[:80]}...")
 
-        # 2. Score
         cp  = score_context_precision(client, q, contexts, gt)
         cr  = score_context_recall(client, q, contexts, gt)
         f   = score_faithfulness(client, answer, contexts)
@@ -211,6 +207,7 @@ def run_evaluation(questions: list[dict], output_path: Path | None = None,
             "context_recall":     round(cr, 3),
             "faithfulness":       round(f, 3),
             "answer_relevancy":   round(ar, 3),
+            "judge_model":        judge_model_name,
             "contexts":           [{"source": c["source"], "score": c["score"],
                                     "text": c["text"][:200]} for c in contexts[:3]],
         }
@@ -220,7 +217,6 @@ def run_evaluation(questions: list[dict], output_path: Path | None = None,
 
     client.close()
 
-    # Aggregate
     valid = [r for r in results if "error" not in r]
     if not valid:
         print("No valid results!")
@@ -231,6 +227,7 @@ def run_evaluation(questions: list[dict], output_path: Path | None = None,
         "context_recall":     round(sum(r["context_recall"]     for r in valid) / len(valid), 3),
         "faithfulness":       round(sum(r["faithfulness"]        for r in valid) / len(valid), 3),
         "answer_relevancy":   round(sum(r["answer_relevancy"]    for r in valid) / len(valid), 3),
+        "judge_model":        judge_model_name,
         "n_questions":        len(valid),
         "elapsed_s":          round(time.time() - t0, 1),
         "per_question":       results,
@@ -238,6 +235,7 @@ def run_evaluation(questions: list[dict], output_path: Path | None = None,
 
     print(f"\n{'='*50}")
     print(f"RAGAS Results ({len(valid)} questions, {agg['elapsed_s']}s)")
+    print(f"  Judge: {judge_model_name}")
     print(f"  Context Precision:  {agg['context_precision']:.3f}")
     print(f"  Context Recall:     {agg['context_recall']:.3f}")
     print(f"  Faithfulness:       {agg['faithfulness']:.3f}")
@@ -251,15 +249,14 @@ def run_evaluation(questions: list[dict], output_path: Path | None = None,
     return agg
 
 
-# ─── CLI ─────────────────────────────────────────────────────────────────────────
+# ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="RAGAS evaluation for Y-system")
     parser.add_argument("input", nargs="?", default="dummy",
                         help="Input JSON file or 'dummy' for built-in test questions")
-    parser.add_argument("--output", "-o", type=str, default=None,
-                        help="Output JSON file for results")
+    parser.add_argument("--output", "-o", type=str, default=None)
     parser.add_argument("--limit", type=int, default=0)
     args = parser.parse_args()
 

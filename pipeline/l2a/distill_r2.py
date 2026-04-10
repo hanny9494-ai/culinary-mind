@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""distill_r2.py — L2a R2 deep distillation via AiGoCode gpt-5.4 (streaming)
+"""distill_r2.py — L2a R2 deep distillation via Lingya gemini-3-flash-preview-search (streaming)
 
 Usage:
   python pipeline/l2a/distill_r2.py [--limit N] [--concurrency 4] [--batch-size 5]
@@ -42,8 +42,8 @@ RUN_LOG = ATOMS_R2_DIR / "_run.log"
 PROMPT_FILE = REPO_ROOT / "pipeline" / "l2a" / "prompts" / "r2_distill.txt"
 
 # ── AiGoCode config ────────────────────────────────────────────────────────────
-MODEL = "gpt-5.4"
-AIGOCODE_ENDPOINT = os.environ.get("AIGOCODE_ENDPOINT", "https://api.aigocode.com/v1")
+MODEL = "gemini-3.1-pro-preview-search"
+LINGYA_ENDPOINT = os.environ.get("LINGYA_API_ENDPOINT", "https://api.lingyaai.cn/v1")
 CHECKPOINT_EVERY = 50   # write _progress.json every N atoms
 # R2 adds exactly these fields to R1 atoms (all other fields come from R1)
 R2_NEW_FIELDS = {'culinary_deep', 'substitutes', 'processing_effects',
@@ -77,11 +77,11 @@ async def call_aigocode_streaming(
     Returns (full_content, total_tokens).
     Non-streaming mode has a server-side bug where message.content is None.
     """
-    api_key = os.environ.get("AIGOCODE_API_KEY", "")
+    api_key = os.environ.get("LINGYA_API_KEY", "")
     if not api_key:
-        raise RuntimeError("AIGOCODE_API_KEY is not set")
+        raise RuntimeError("LINGYA_API_KEY is not set")
 
-    url = AIGOCODE_ENDPOINT.rstrip("/") + "/chat/completions"
+    url = LINGYA_ENDPOINT.rstrip("/") + "/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -123,7 +123,7 @@ async def call_aigocode_streaming(
                 content_parts.append(text)
 
             # Capture usage if present (some providers emit it in the last chunk)
-            if "usage" in chunk:
+            if chunk.get("usage"):  # guard: usage can be None
                 total_tokens = chunk["usage"].get("total_tokens", 0)
 
     return "".join(content_parts), total_tokens
@@ -201,8 +201,8 @@ class Progress:
         speed = self.done / elapsed  # atoms/sec
         remaining = self.total - self.done - self.failed
         eta = int(remaining / speed) if speed > 0 else -1
-        # Cost estimate: gpt-5.4 ~$15/M tokens (rough estimate)
-        cost_usd = self.total_tokens / 1_000_000 * 15.0
+        # Cost estimate: gemini-3-flash-preview-search ~$0.15/M tokens (rough estimate)
+        cost_usd = self.total_tokens / 1_000_000 * 0.15
 
         data = {
             "done": self.done,
@@ -316,9 +316,9 @@ async def process_batch(
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 async def main(args: argparse.Namespace) -> None:
-    api_key = os.environ.get("AIGOCODE_API_KEY", "")
+    api_key = os.environ.get("LINGYA_API_KEY", "")
     if not api_key:
-        raise SystemExit("ERROR: AIGOCODE_API_KEY env var not set")
+        raise SystemExit("ERROR: LINGYA_API_KEY env var not set")
 
     # Load system prompt
     if not PROMPT_FILE.exists():
@@ -362,7 +362,7 @@ async def main(args: argparse.Namespace) -> None:
         log.info("Nothing to process — all done!")
         return
 
-    log.info(f"Processing {total} atoms (concurrency={args.concurrency}, "
+    log.info(f"Processing {total} atoms via {MODEL} (concurrency={args.concurrency}, "
              f"batch_size={args.batch_size})")
 
     started_at = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -395,17 +395,17 @@ async def main(args: argparse.Namespace) -> None:
     await progress._write()
     log.info(f"Done: {progress.done} success, {progress.failed} failed out of {total} new")
     log.info(f"Progress: {PROGRESS_FILE}")
-    log.info(f"Cost estimate: ${progress.total_tokens/1_000_000*15:.4f} USD ({progress.total_tokens} tokens)")
+    log.info(f"Cost estimate: ${progress.total_tokens/1_000_000*0.15:.4f} USD ({progress.total_tokens} tokens @ gemini-3-flash-preview-search)")
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="L2a R2 deep distillation via AiGoCode gpt-5.4")
+    p = argparse.ArgumentParser(description="L2a R2 deep distillation via Lingya gemini-3-flash-preview-search")
     p.add_argument("--limit", type=int, default=None,
                    help="Process only first N atoms (for testing)")
     p.add_argument("--concurrency", type=int, default=4,
                    help="Number of concurrent API calls (default: 4)")
-    p.add_argument("--batch-size", type=int, default=5,
-                   help="Atoms per API call (default: 5)")
+    p.add_argument("--batch-size", type=int, default=1,
+                   help="Atoms per API call (default: 1; batch>1 causes count mismatches with gemini-3-flash)")
     p.add_argument("--no-resume", action="store_false", dest="resume",
                    help="Disable resume (reprocess already-done atoms)")
     p.set_defaults(resume=True)

@@ -33,12 +33,12 @@ NEO4J_URI  = os.getenv("NEO4J_URI",  "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASS = os.getenv("NEO4J_PASS", "culinary123")
 
-OLLAMA_URL   = "http://localhost:11434"
-EMBED_MODEL  = os.getenv("EMBED_MODEL", "nomic-embed-text-v2-moe:latest")
+OLLAMA_URL   = "http://localhost:11434"  # used for embedding queries
+EMBED_MODEL  = os.getenv("EMBED_MODEL", "nomic-embed-text-v2-moe:latest")  # query embedding only
 
 LINGYAI_ENDPOINT = os.getenv("L0_API_ENDPOINT", "")
 LINGYAI_KEY      = os.getenv("L0_API_KEY", "")
-ANSWER_MODEL     = os.getenv("ANSWER_MODEL", "gpt-4o-mini")  # or qwen3.5:9b via Ollama
+ANSWER_MODEL     = os.getenv("ANSWER_MODEL", "claude-sonnet-4-5")  # Claude via LingYai
 
 TOP_K_VECTOR  = 15
 TOP_K_KEYWORD = 10
@@ -196,7 +196,7 @@ def hybrid_merge(vector_results: list[dict], keyword_results: list[dict],
 # ─── Answer generation ──────────────────────────────────────────────────────────
 
 def generate_answer(question: str, contexts: list[dict]) -> str:
-    """Generate answer from contexts using LLM."""
+    """Generate answer from contexts using Claude via LingYai API (primary)."""
     context_text = "\n\n".join(
         f"[{i+1}] ({c['source']}) {c['text']}"
         for i, c in enumerate(contexts[:8])
@@ -212,26 +212,7 @@ def generate_answer(question: str, contexts: list[dict]) -> str:
 
 ## 回答（中文，简洁专业，引用原理编号）
 """
-    # Try Ollama first (local, no proxy)
-    # Use /no_think to disable thinking mode for qwen3.x models
-    try:
-        resp = get_http().post(
-            f"{OLLAMA_URL}/api/generate",
-            json={
-                "model": "qwen3.5:9b",
-                "prompt": "/no_think\n" + prompt,
-                "stream": False,
-                "think": False,
-                "options": {"temperature": 0.3, "num_predict": 768},
-            },
-            timeout=90,
-        )
-        resp.raise_for_status()
-        return resp.json()["response"].strip()
-    except Exception as e:
-        pass
-
-    # Fallback: LingYai API
+    # Primary: Claude via LingYai API (OpenAI-compatible)
     if LINGYAI_ENDPOINT and LINGYAI_KEY:
         try:
             resp = get_http().post(
@@ -241,16 +222,16 @@ def generate_answer(question: str, contexts: list[dict]) -> str:
                     "model": ANSWER_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.3,
-                    "max_tokens": 512,
+                    "max_tokens": 768,
                 },
-                timeout=60,
+                timeout=90,
             )
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"].strip()
         except Exception as e:
             return f"[Answer generation failed: {e}]"
 
-    return "[No answer generated — set L0_API_ENDPOINT/L0_API_KEY or ensure Ollama is running]"
+    return "[No answer generated — set L0_API_ENDPOINT/L0_API_KEY env vars]"
 
 
 # ─── Endpoints ──────────────────────────────────────────────────────────────────
