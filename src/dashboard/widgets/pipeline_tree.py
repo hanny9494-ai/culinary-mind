@@ -25,11 +25,11 @@ class PipelineTree(Tree[str]):
         self._add_pipeline_node(tier3, "user_layer")
 
     def _add_pipeline_node(self, parent, key: str) -> None:
-        node = parent.add(f"{key}", expand=False)
-        schema = node.add("schema", expand=False)
-        method = node.add("method", expand=False)
-        deps = node.add("deps", expand=False)
-        blockers = node.add("blockers", expand=False)
+        node = parent.add(f"{key}", expand=True)
+        schema = node.add("schema", expand=True)
+        method = node.add("method", expand=True)
+        deps = node.add("deps", expand=True)
+        blockers = node.add("blockers", expand=True)
         self._node_refs[key] = node
         self._detail_refs[key] = {
             "schema": schema,
