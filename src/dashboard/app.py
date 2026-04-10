@@ -7,8 +7,10 @@ import sys
 import time
 from pathlib import Path
 
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Ensure src/ is on sys.path for both `python3 src/dashboard/app.py` and `python -m src.dashboard.app`
+_src_dir = str(Path(__file__).resolve().parents[1])
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
 try:
     from rich.text import Text
