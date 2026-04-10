@@ -21,7 +21,7 @@ except ModuleNotFoundError:
     print("Textual is not installed. Run: pip install textual")
     raise SystemExit(1)
 
-from dashboard.data import DashboardDataSource, DashboardSnapshot, fmt_uptime
+from dashboard.data import DashboardDataSource, DashboardSnapshot, JifyStatus, fmt_uptime
 from dashboard.widgets.agent_panel import AgentPanel
 from dashboard.widgets.memory_panel import MemoryPanel
 from dashboard.widgets.pipeline_tree import PipelineTree
@@ -208,9 +208,17 @@ class DashboardApp(App):
         restart_bits = f" | attempts {snapshot.daemon_restart_attempts}"
         if self.header_restart_note:
             restart_bits += self.header_restart_note
+        # JIFY status
+        jify = snapshot.jify
+        if jify is None or not jify.online:
+            jify_part = " | [red]○[/red] JIFY offline"
+        else:
+            orch = "[green]●[/green]" if jify.orchestrator == "running" else "[dim]○[/dim]"
+            claw = "[green]●[/green]" if jify.openclaw == "running" else "[dim]○[/dim]"
+            jify_part = f" | [green]●[/green] JIFY  q:{jify.queue} done:{jify.done} {orch}orch {claw}claw"
         self.header.update(
             Text.from_markup(
-                f"[b]culinary-mind dashboard[/b] | {dot} {status} | uptime {uptime} | scope {scope}{restart_bits}"
+                f"[b]culinary-mind dashboard[/b] | {dot} {status} | uptime {uptime} | scope {scope}{restart_bits}{jify_part}"
             )
         )
 

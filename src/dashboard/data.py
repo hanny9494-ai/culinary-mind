@@ -154,6 +154,7 @@ class DashboardSnapshot:
     wiki_modified_ts: float | None
     memory_files: list[MemoryFileInfo]
     agent_statuses: list[AgentStatus]
+    jify: "JifyStatus | None" = None
     fetched_at: float = field(default_factory=time.time)
 
 
@@ -559,6 +560,7 @@ class DashboardDataSource:
             wiki_modified_ts=latest_mtime(WIKI_DIR),
             memory_files=build_memory_files(),
             agent_statuses=build_agent_statuses(health if isinstance(health, dict) else None, task_rows),
+            jify=fetch_jify_status(),
         )
 
     def send_restart_clear(self, agent_name: str) -> tuple[bool, str]:
@@ -595,3 +597,76 @@ class DashboardDataSource:
             return True, ""
         except Exception as exc:
             return False, str(exc)
+
+
+# ── JIFY (Mac Mini) status ────────────────────────────────────────────────────
+
+_JIFY_CACHE_FILE = Path("/tmp/cehub-jify-status")
+_JIFY_CACHE_TTL = 60  # seconds
+
+
+@dataclass
+class JifyStatus:
+    online: bool = False
+    queue: str = "?"
+    done: str = "?"
+    orchestrator: str = "?"   # "running" | "idle"
+    openclaw: str = "?"       # "running" | "idle"
+
+
+def fetch_jify_status() -> JifyStatus:
+    """SSH to jify, cache result 60s. Never raises."""
+    now = time.time()
+    # Serve from cache if fresh
+    try:
+        if _JIFY_CACHE_FILE.exists():
+            age = now - _JIFY_CACHE_FILE.stat().st_mtime
+            if age < _JIFY_CACHE_TTL:
+                raw = _JIFY_CACHE_FILE.read_text().strip()
+                return _parse_jify_cache(raw)
+    except Exception:
+        pass
+
+    # Refresh via SSH
+    ssh_cmd = [
+        "ssh", "-o", "ConnectTimeout=2", "-o", "BatchMode=yes", "jify",
+        (
+            'queue=$(grep -hvc "^#\\|^$" '
+            '~/culinary-mind-mini/config/harvest-queue.txt '
+            '~/culinary-mind-mini/config/flavor-databases.txt '
+            '~/culinary-mind-mini/config/serious-eats-foodlab.txt '
+            '~/culinary-mind-mini/config/tds-brands.txt 2>/dev/null '
+            '| awk \'{s+=$1} END {print s}\'); '
+            'done=$(find ~/culinary-mind-mini/data/raw -type f 2>/dev/null | wc -l | tr -d " "); '
+            'orch=$(pgrep -f harvest-orchestrator >/dev/null && echo running || echo idle); '
+            'claw=$(pgrep -f openclaw >/dev/null && echo running || echo idle); '
+            'echo "$queue|$done|$orch|$claw"'
+        ),
+    ]
+    try:
+        result = subprocess.run(
+            ssh_cmd, capture_output=True, text=True, timeout=4
+        )
+        raw = result.stdout.strip() if result.returncode == 0 else "offline|||"
+    except Exception:
+        raw = "offline|||"
+
+    try:
+        _JIFY_CACHE_FILE.write_text(raw)
+    except Exception:
+        pass
+
+    return _parse_jify_cache(raw)
+
+
+def _parse_jify_cache(raw: str) -> JifyStatus:
+    parts = (raw + "|||").split("|")
+    if parts[0] == "offline" or not parts[0]:
+        return JifyStatus(online=False)
+    return JifyStatus(
+        online=True,
+        queue=parts[0] or "?",
+        done=parts[1] or "?",
+        orchestrator=parts[2] or "?",
+        openclaw=parts[3] or "?",
+    )
