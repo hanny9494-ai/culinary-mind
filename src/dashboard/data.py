@@ -103,6 +103,7 @@ PIPELINE_META: dict[str, dict[str, Any]] = {
         "blockers": "Chainlit integration not found in this repo snapshot",
     },
 }
+_COUNT_CACHE: dict[str, tuple[float, int]] = {}
 
 
 @dataclass
@@ -251,6 +252,33 @@ def parse_books_registry() -> dict[str, int]:
     }
 
 
+def count_lines_cached(cache_key: str, paths: list[Path], ttl_seconds: int = 30) -> int:
+    now = time.time()
+    cached = _COUNT_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < ttl_seconds:
+        return cached[1]
+    total = 0
+    for path in paths:
+        try:
+            with path.open("r", encoding="utf-8", errors="ignore") as handle:
+                for _ in handle:
+                    total += 1
+        except OSError:
+            continue
+    _COUNT_CACHE[cache_key] = (now, total)
+    return total
+
+
+def detect_l0_total() -> int:
+    paths = list(CE_HUB_CWD.glob("output/**/l0_principles_open.jsonl"))
+    return count_lines_cached("l0_total", paths)
+
+
+def detect_l2b_total() -> int:
+    paths = list(CE_HUB_CWD.glob("output/**/stage5/stage5_results.jsonl"))
+    return count_lines_cached("l2b_total", paths)
+
+
 def detect_external_dataset_statuses() -> dict[str, bool]:
     checks = {
         "FooDB": RAW_DIR / "coder" / "audit-foodb.md",
@@ -278,7 +306,8 @@ def build_pipeline_data() -> dict[str, PipelineNodeData]:
     l2a_progress = read_json(L2A_PROGRESS) or {}
     external = detect_external_dataset_statuses()
     external_bits = [f"{name} {'✅' if ok else '❌'}" for name, ok in external.items()]
-    recipe_total = books["recipe_total"]
+    l0_total = detect_l0_total() or books["l0_total"]
+    recipe_total = detect_l2b_total() or books["recipe_total"]
     step_b_done = detect_step_b_done()
     crawl_report = RAW_DIR / "open-data-collector" / "crawl-fullscale-progress.md"
     crawl_recent = crawl_report.exists() and (time.time() - crawl_report.stat().st_mtime) < 172800
@@ -294,8 +323,8 @@ def build_pipeline_data() -> dict[str, PipelineNodeData]:
     chainlit_ready = any(path.name.lower().startswith("chainlit") for path in CE_HUB_CWD.glob("*"))
     l6_ready = False
 
-    l0_summary = f"✅ {books['l0_total']:,} 条 | Neo4j: ❌"
-    if books["l0_total"] == 0:
+    l0_summary = f"✅ {l0_total:,} 条 | Neo4j: ❌"
+    if l0_total == 0:
         l0_summary = "? | Neo4j: ?"
 
     l2b_summary = f"✅ {fmt_count(recipe_total)} | Step B: {'❌' if step_b_done == 0 else '🔄'} {step_b_done}/{fmt_count(recipe_total)}"
@@ -317,8 +346,8 @@ def build_pipeline_data() -> dict[str, PipelineNodeData]:
             key="l0",
             title=PIPELINE_META["l0"]["title"],
             summary=l0_summary,
-            icon="✅" if books["l0_total"] else "?",
-            style="green" if books["l0_total"] else "white",
+            icon="✅" if l0_total else "?",
+            style="green" if l0_total else "white",
             schema=PIPELINE_META["l0"]["schema"],
             method=PIPELINE_META["l0"]["method"],
             dependencies=PIPELINE_META["l0"]["dependencies"],
