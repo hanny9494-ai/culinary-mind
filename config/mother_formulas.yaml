@@ -1,0 +1,359 @@
+# Mother Formula Registry — culinary-engine
+# 28 canonical formulas for quantitative parameter extraction
+# Version: 2026-04-13
+# Maintained by: architect agent + Jeff decisions
+# CRITICAL: canonical_name is the key used in ParameterSet.mother_formula
+
+# ═══════════════════════════════════════════════════════════
+# Tier 1 — Thermal & Kinetic Core (10 formulas)
+# ═══════════════════════════════════════════════════════════
+
+- id: MF-T01
+  canonical_name: Fourier_1D
+  display_name: "Fourier's 2nd Law (1D Heat Conduction)"
+  equation_latex: "\\frac{\\partial T}{\\partial t} = \\alpha \\nabla^2 T"
+  sympy_expression: "alpha * (T_prev - 2*T + T_next) / dx**2"
+  domain: [thermal_dynamics]
+  parameters_needed: [alpha, k, rho, Cp]
+  units: {alpha: "m²/s", k: "W/(m·K)", rho: "kg/m³", Cp: "J/(kg·K)"}
+  applicable_range: {T: {min: -40, max: 300, unit: "°C"}}
+  source_books: ["Singh_Heldman_Ch4", "Toledo_Ch7", "Sahin_Sumnu_Ch3"]
+  notes: "alpha = k / (rho * Cp)"
+
+- id: MF-T02
+  canonical_name: Choi_Okos
+  display_name: "Choi-Okos Thermal Property Prediction"
+  equation_latex: "C_p^{mix} = \\sum_i X_i C_{p,i}(T)"
+  sympy_expression: "Xw*Cp_water + Xp*Cp_protein + Xf*Cp_fat + Xc*Cp_carb + Xa*Cp_ash"
+  domain: [thermal_dynamics]
+  parameters_needed: [Xw, Xp, Xf, Xc, Xa]
+  units: {Xi: "dimensionless (mass fraction)", T: "°C", Cp: "J/(kg·K)", k: "W/(m·K)", rho: "kg/m³"}
+  applicable_range: {T: {min: -40, max: 150, unit: "°C"}, moisture: {min: 0, max: 1}}
+  source_books: ["Singh_Heldman_Ch4", "Rao_Engineering_Ch4"]
+  notes: "Choi, Y. & Okos, M.R. (1986). Three properties: Cp (mass-weighted), rho (volume-parallel), k (volume-fraction-weighted)"
+
+- id: MF-T03
+  canonical_name: Arrhenius
+  display_name: "Arrhenius Rate Equation"
+  equation_latex: "k = A \\cdot e^{-E_a/RT}"
+  sympy_expression: "A * exp(-Ea / (R * T))"
+  domain: [protein_science, maillard_caramelization, enzyme, food_safety, lipid_science]
+  parameters_needed: [Ea, A, R]
+  units: {Ea: "J/mol", A: "same unit as k (varies)", R: "8.314 J/(mol·K)", T: "K (NOT °C!)"}
+  applicable_range: {T: {min: 273, max: 573, unit: "K"}}
+  source_books: ["van_Boekel_Ch5", "Toledo_Ch8", "Handbook_Ch3"]
+  notes: "WARNING: T must be in Kelvin. Common mistake: using °C gives wrong result by ~273K offset"
+
+- id: MF-T04
+  canonical_name: Nusselt_Correlation
+  display_name: "Nusselt Number Correlation (Convective h)"
+  equation_latex: "Nu = C \\cdot Re^m \\cdot Pr^n"
+  sympy_expression: "C * Re**m * Pr**n"
+  domain: [thermal_dynamics]
+  parameters_needed: [C, m, n]
+  units: {Nu: "dimensionless", Re: "dimensionless", Pr: "dimensionless", h: "W/(m²·K)"}
+  applicable_range: {}
+  source_books: ["Singh_Heldman_Ch4", "Toledo_Ch7"]
+  notes: "h = Nu * k_fluid / L_characteristic; C/m/n depend on geometry and flow regime"
+
+- id: MF-T05
+  canonical_name: Plank_Freezing
+  display_name: "Plank's Equation (Freezing Time)"
+  equation_latex: "t_f = \\frac{\\rho L_f}{T_f - T_m} \\left(\\frac{Pa}{h} + \\frac{R_c a^2}{k}\\right)"
+  sympy_expression: "(rho * L_f) / (T_f - T_m) * (P * a / h + R_c * a**2 / k)"
+  domain: [thermal_dynamics]
+  parameters_needed: [rho, L_f, T_f, T_m, P, R_c, a, h, k]
+  units: {L_f: "J/kg", T_f: "°C (freezing point)", T_m: "°C (medium)", a: "m (half-thickness)", h: "W/(m²·K)"}
+  applicable_range: {}
+  source_books: ["Singh_Heldman_Ch7", "Handbook_Ch7"]
+  notes: "P=1/2, R_c=1/8 for slab; P=1/4, R_c=1/16 for cylinder; P=1/6, R_c=1/24 for sphere"
+
+# ── Microbial Kinetics ──────────────────────────────────────
+
+- id: MF-K01
+  canonical_name: Michaelis_Menten
+  display_name: "Michaelis-Menten Enzyme Kinetics"
+  equation_latex: "v = \\frac{V_{max} [S]}{K_m + [S]}"
+  sympy_expression: "Vmax * S / (Km + S)"
+  domain: [enzyme, food_safety]
+  parameters_needed: [Vmax, Km]
+  units: {Vmax: "mol/(L·s)", Km: "mol/L", S: "mol/L", v: "mol/(L·s)"}
+  applicable_range: {S: {min: 0, max: "inf"}}
+  source_books: ["van_Boekel_Ch9", "Belitz_Ch2", "Fennema_Ch6"]
+  notes: "At S >> Km: v ≈ Vmax (zeroth order); at S << Km: v ≈ Vmax*S/Km (first order)"
+
+- id: MF-K02
+  canonical_name: D_Value
+  display_name: "D-Value (Decimal Reduction Time)"
+  equation_latex: "N = N_0 \\cdot 10^{-t/D}"
+  sympy_expression: "N0 * 10**(-t / D)"
+  domain: [food_safety]
+  parameters_needed: [D]
+  units: {D: "min", t: "min", N: "CFU/mL or CFU/g"}
+  applicable_range: {T: {min: 60, max: 140, unit: "°C"}}
+  source_books: ["Jay_Ch17", "Toledo_Ch9", "van_Boekel_Ch13"]
+  notes: "D = time for 1 log reduction (90% kill) at constant temperature"
+
+- id: MF-K03
+  canonical_name: z_Value
+  display_name: "z-Value (Thermal Resistance)"
+  equation_latex: "D_2 = D_1 \\cdot 10^{(T_1 - T_2)/z}"
+  sympy_expression: "D1 * 10**((T1 - T2) / z)"
+  domain: [food_safety]
+  parameters_needed: [z]
+  units: {z: "°C", D: "min", T: "°C"}
+  applicable_range: {z: {min: 2, max: 40, unit: "°C"}}
+  source_books: ["Jay_Ch17", "Toledo_Ch9", "Singh_Heldman_Ch5"]
+  notes: "Typical: z=10°C for vegetative bacteria, z=7°C for Clostridium spores"
+
+- id: MF-K04
+  canonical_name: F_Value
+  display_name: "F-Value / Sterilizing Value (F0)"
+  equation_latex: "F_0 = \\int_0^t 10^{(T-121.1)/z} \\, dt"
+  sympy_expression: "Integral(10**((T - 121.1) / z), t)"
+  domain: [food_safety]
+  parameters_needed: [z]
+  units: {F0: "min (equiv. at 121.1°C)", T: "°C", z: "°C"}
+  applicable_range: {}
+  source_books: ["Toledo_Ch9", "Jay_Ch17", "Handbook_Ch12"]
+  notes: "12-D concept for C. botulinum: F0 ≥ 2.52 min (minimum)"
+
+- id: MF-K05
+  canonical_name: Gompertz_Microbial
+  display_name: "Gompertz Microbial Growth Model"
+  equation_latex: "\\ln(N) = A + C \\cdot e^{-e^{-B(t-M)}}"
+  sympy_expression: "A + C * exp(-exp(-B * (t - M)))"
+  domain: [food_safety, fermentation]
+  parameters_needed: [A, C, B, M]
+  units: {A: "ln(N0)", C: "ln(Nmax/N0)", B: "1/h (max growth rate)", M: "h (inflection time)"}
+  applicable_range: {}
+  source_books: ["van_Boekel_Ch12", "Jay_Ch3"]
+  notes: "Modified Gompertz; B = μmax * e / C; lag time = M - 1/B"
+
+# ═══════════════════════════════════════════════════════════
+# Tier 2 — Mass Transfer & Water Activity (6 formulas)
+# ═══════════════════════════════════════════════════════════
+
+- id: MF-M01
+  canonical_name: Fick_2nd_Law
+  display_name: "Fick's 2nd Law (Unsteady Diffusion)"
+  equation_latex: "\\frac{\\partial C}{\\partial t} = D_{eff} \\nabla^2 C"
+  sympy_expression: "D_eff * (C_prev - 2*C + C_next) / dx**2"
+  domain: [mass_transfer, water_activity, aroma_volatiles]
+  parameters_needed: [D_eff]
+  units: {D_eff: "m²/s", C: "kg/m³ or mol/m³", x: "m", t: "s"}
+  applicable_range: {}
+  source_books: ["Rao_Engineering_Ch8", "van_Boekel_Ch11", "Handbook_Ch8"]
+  notes: "D_eff for water in food: 1e-12 to 1e-9 m²/s; for aroma: 1e-11 to 1e-8 m²/s"
+
+- id: MF-M02
+  canonical_name: GAB_Isotherm
+  display_name: "GAB Water Activity Isotherm"
+  equation_latex: "X = \\frac{X_m C K a_w}{(1 - K a_w)(1 - K a_w + C K a_w)}"
+  sympy_expression: "Xm * C * K * aw / ((1 - K*aw) * (1 - K*aw + C*K*aw))"
+  domain: [water_activity]
+  parameters_needed: [Xm, C, K]
+  units: {Xm: "g_water/g_dry", C: "dimensionless", K: "dimensionless", aw: "dimensionless (0-1)"}
+  applicable_range: {aw: {min: 0, max: 0.95}, K: {min: 0.5, max: 1.0}, C: {min: 0.1, max: 100}}
+  source_books: ["Rao_Engineering_Ch7", "Toledo_Ch12", "Handbook_Ch11", "Sahin_Sumnu_Ch5"]
+  notes: "BET is special case where K=1; preferred over BET for aw > 0.5"
+
+- id: MF-M03
+  canonical_name: Antoine_Equation
+  display_name: "Antoine Vapor Pressure Equation"
+  equation_latex: "\\log_{10}(P) = A - \\frac{B}{C + T}"
+  sympy_expression: "10**(A - B / (C + T))"
+  domain: [aroma_volatiles, water_activity]
+  parameters_needed: [A, B, C]
+  units: {P: "mmHg or Pa (check per compound)", T: "°C or K (check per compound)"}
+  applicable_range: {}
+  source_books: ["Sahin_Sumnu_Ch5", "Toledo_Ch4"]
+  notes: "A/B/C constants are compound-specific; NIST database is authoritative source"
+
+- id: MF-M04
+  canonical_name: Henderson_Hasselbalch
+  display_name: "Henderson-Hasselbalch (Buffer pH)"
+  equation_latex: "pH = pK_a + \\log_{10}\\frac{[A^-]}{[HA]}"
+  sympy_expression: "pKa + log(A_conc / HA_conc, 10)"
+  domain: [salt_acid_chemistry]
+  parameters_needed: [pKa]
+  units: {pH: "dimensionless", concentrations: "mol/L"}
+  applicable_range: {}
+  source_books: ["Fennema_Ch2", "Belitz_Ch0"]
+  notes: "Valid for 10% < A-/HA < 1000%; for food buffers: acetic acid pKa=4.76, citric acid pKa1=3.13"
+
+- id: MF-M05
+  canonical_name: Henry_Law_Aroma
+  display_name: "Henry's Law (Aroma Partition)"
+  equation_latex: "p = H \\cdot c"
+  sympy_expression: "H * c"
+  domain: [aroma_volatiles]
+  parameters_needed: [H]
+  units: {H: "Pa·m³/mol or dimensionless (Hcc)", p: "Pa", c: "mol/m³"}
+  applicable_range: {T: {min: 20, max: 80, unit: "°C"}}
+  source_books: ["Rao_Engineering_Ch8", "Belitz_Ch5"]
+  notes: "H increases with T; Hcc (dimensionless) = Hcp / (RT); critical for flavor retention in cooking"
+
+- id: MF-M06
+  canonical_name: Latent_Heat
+  display_name: "Latent Heat Phase Change"
+  equation_latex: "Q = m \\cdot L_{fg}"
+  sympy_expression: "m * L_fg"
+  domain: [thermal_dynamics, water_activity]
+  parameters_needed: [L_fg]
+  units: {L_fg: "J/kg", m: "kg", Q: "J"}
+  applicable_range: {}
+  source_books: ["Toledo_Ch5", "Singh_Heldman_Ch7"]
+  notes: "Water: L_fg=2260 kJ/kg (vaporization at 100°C), L_f=334 kJ/kg (fusion/freezing)"
+
+# ═══════════════════════════════════════════════════════════
+# Tier 3 — Rheology & Structure (7 formulas)
+# ═══════════════════════════════════════════════════════════
+
+- id: MF-R01
+  canonical_name: Power_Law
+  display_name: "Power Law (Ostwald-de Waele)"
+  equation_latex: "\\tau = K \\dot{\\gamma}^n"
+  sympy_expression: "K * gamma_dot**n"
+  domain: [texture_rheology]
+  parameters_needed: [K, n]
+  units: {K: "Pa·sⁿ", n: "dimensionless", tau: "Pa", gamma_dot: "1/s"}
+  applicable_range: {n: {min: 0, max: 2}}
+  source_books: ["Rao_Engineering_Ch2", "Bourne_Ch3", "Handbook_Ch1"]
+  notes: "n<1: pseudoplastic (most foods); n=1: Newtonian; n>1: dilatant. K=consistency index"
+
+- id: MF-R02
+  canonical_name: Herschel_Bulkley
+  display_name: "Herschel-Bulkley Model"
+  equation_latex: "\\tau = \\tau_0 + K \\dot{\\gamma}^n"
+  sympy_expression: "tau_0 + K * gamma_dot**n"
+  domain: [texture_rheology]
+  parameters_needed: [tau_0, K, n]
+  units: {tau_0: "Pa (yield stress)", K: "Pa·sⁿ", n: "dimensionless"}
+  applicable_range: {n: {min: 0, max: 2}}
+  source_books: ["Rao_Engineering_Ch2", "Bourne_Ch3", "Sahin_Sumnu_Ch2"]
+  notes: "Generalization of Power Law + Bingham; useful for ketchup, starch gels, chocolate"
+
+- id: MF-R03
+  canonical_name: Casson_Model
+  display_name: "Casson Model"
+  equation_latex: "\\sqrt{\\tau} = \\sqrt{\\tau_c} + \\sqrt{\\eta_c \\dot{\\gamma}}"
+  sympy_expression: "sqrt(tau_c) + sqrt(eta_c * gamma_dot)"
+  domain: [texture_rheology, lipid_science]
+  parameters_needed: [tau_c, eta_c]
+  units: {tau_c: "Pa (Casson yield stress)", eta_c: "Pa·s (Casson viscosity)"}
+  applicable_range: {}
+  source_books: ["Rao_Engineering_Ch2", "Bourne_Ch3"]
+  notes: "Standard model for chocolate; ISO 2884 specifies Casson for molten chocolate"
+
+- id: MF-R04
+  canonical_name: Gordon_Taylor
+  display_name: "Gordon-Taylor Equation (Glass Transition)"
+  equation_latex: "T_g = \\frac{w_1 T_{g1} + k w_2 T_{g2}}{w_1 + k w_2}"
+  sympy_expression: "(w1 * Tg1 + k * w2 * Tg2) / (w1 + k * w2)"
+  domain: [texture_rheology, water_activity, carbohydrate]
+  parameters_needed: [k, Tg1, Tg2]
+  units: {Tg: "°C or K", w: "mass fraction", k: "dimensionless (Gordon-Taylor constant)"}
+  applicable_range: {}
+  source_books: ["Rao_Engineering_Ch3", "Handbook_Ch4", "Belitz_Ch0"]
+  notes: "k = rho1*DeltaCp1 / (rho2*DeltaCp2); for sugar-water: k ≈ 4.5-7; Tg_water = -135°C"
+
+- id: MF-R05
+  canonical_name: WLF_Equation
+  display_name: "WLF Equation (Time-Temperature Superposition)"
+  equation_latex: "\\log_{10}(a_T) = \\frac{-C_1(T - T_g)}{C_2 + T - T_g}"
+  sympy_expression: "-C1 * (T - Tg) / (C2 + T - Tg)"
+  domain: [texture_rheology, water_activity]
+  parameters_needed: [C1, C2, Tg]
+  units: {C1: "dimensionless", C2: "°C or K", Tg: "°C or K", aT: "dimensionless shift factor"}
+  applicable_range: {T: {min: "Tg", max: "Tg + 100", unit: "°C"}}
+  source_books: ["Rao_Engineering_Ch3", "Handbook_Ch4", "Belitz_Ch0"]
+  notes: "Universal constants: C1=17.44, C2=51.6 (referenced to Tg); valid for Tg < T < Tg+100"
+
+- id: MF-R06
+  canonical_name: Stevens_Power_Law
+  display_name: "Stevens' Power Law (Psychophysical Perception)"
+  equation_latex: "\\psi = k \\phi^n"
+  sympy_expression: "k * phi**n"
+  domain: [taste_perception, texture_rheology]
+  parameters_needed: [k, n]
+  units: {psi: "perceived magnitude", phi: "physical stimulus intensity", k: "modality constant"}
+  applicable_range: {}
+  source_books: ["Bourne_Ch8"]
+  notes: "n=0.67 for saltiness, n=1.1 for sweetness, n=1.3 for hardness (approximate)"
+
+- id: MF-R07
+  canonical_name: Griffith_Fracture
+  display_name: "Griffith Fracture Criterion"
+  equation_latex: "\\sigma_c = \\sqrt{\\frac{2 E \\gamma_s}{\\pi a}}"
+  sympy_expression: "sqrt(2 * E * gamma_s / (pi * a))"
+  domain: [texture_rheology]
+  parameters_needed: [E, gamma_s, a]
+  units: {sigma_c: "Pa (critical fracture stress)", E: "Pa (Young's modulus)", gamma_s: "J/m² (surface energy)", a: "m (crack half-length)"}
+  applicable_range: {}
+  source_books: ["Bourne_Ch3"]
+  notes: "For brittle foods (crackers, chips); critical for crispy/crunchy texture prediction"
+
+# ═══════════════════════════════════════════════════════════
+# Tier 4 — Colloidal & Surface (5 formulas)
+# ═══════════════════════════════════════════════════════════
+
+- id: MF-C01
+  canonical_name: Stokes_Sedimentation
+  display_name: "Stokes' Law (Sedimentation/Creaming)"
+  equation_latex: "v = \\frac{2 r^2 (\\rho_p - \\rho_f) g}{9 \\mu}"
+  sympy_expression: "2 * r**2 * (rho_p - rho_f) * g / (9 * mu)"
+  domain: [texture_rheology, lipid_science]
+  parameters_needed: [r, rho_p, rho_f, mu]
+  units: {v: "m/s", r: "m (particle radius)", rho: "kg/m³", mu: "Pa·s", g: "9.81 m/s²"}
+  applicable_range: {Re: {max: 0.5}}
+  source_books: ["Sahin_Sumnu_Ch6", "Fennema_Ch13"]
+  notes: "Valid for Re < 0.5 (laminar regime); negative v means creaming (droplet rises)"
+
+- id: MF-C02
+  canonical_name: HLB_Griffin
+  display_name: "HLB Number (Griffin Method)"
+  equation_latex: "HLB = 20 \\cdot \\frac{M_h}{M}"
+  sympy_expression: "20 * Mh / M"
+  domain: [lipid_science, texture_rheology]
+  parameters_needed: [Mh, M]
+  units: {HLB: "dimensionless (0-20)", Mh: "g/mol (hydrophilic part)", M: "g/mol (total)"}
+  applicable_range: {}
+  source_books: ["Belitz_Ch8", "Fennema_Ch13"]
+  notes: "HLB 1-6: W/O emulsifier; HLB 8-18: O/W emulsifier; 3-6: anti-foam"
+
+- id: MF-C03
+  canonical_name: DLVO_Theory
+  display_name: "DLVO Colloidal Stability"
+  equation_latex: "V_{total} = V_{vdW} + V_{EDL}"
+  sympy_expression: "V_vdW + V_EDL"
+  domain: [texture_rheology, lipid_science]
+  parameters_needed: [A_hamaker, kappa, zeta]
+  units: {V: "J", A_hamaker: "J", kappa: "m⁻¹ (inverse Debye length)"}
+  applicable_range: {}
+  source_books: ["Sahin_Sumnu_Ch6", "Fennema_Ch13"]
+  notes: "Simplified; full expression: V_vdW = -A/(6h) * [r1*r2/(r1+r2)] for spheres"
+
+- id: MF-C04
+  canonical_name: Laplace_Pressure
+  display_name: "Laplace Pressure (Capillary)"
+  equation_latex: "\\Delta P = \\frac{2 \\gamma}{r}"
+  sympy_expression: "2 * gamma / r"
+  domain: [texture_rheology, lipid_science]
+  parameters_needed: [gamma, r]
+  units: {delta_P: "Pa", gamma: "N/m (surface tension)", r: "m (droplet radius)"}
+  applicable_range: {}
+  source_books: ["Sahin_Sumnu_Ch6"]
+  notes: "For spherical droplet; for cylindrical: ΔP = γ/r; critical for emulsion stability"
+
+- id: MF-C05
+  canonical_name: Q10_Rule
+  display_name: "Q10 Temperature Coefficient"
+  equation_latex: "Q_{10} = \\left(\\frac{k_2}{k_1}\\right)^{10/(T_2-T_1)}"
+  sympy_expression: "(k2 / k1)**(10 / (T2 - T1))"
+  domain: [maillard_caramelization, protein_science, food_safety]
+  parameters_needed: [Q10]
+  units: {Q10: "dimensionless", k: "same units cancel", T: "°C"}
+  applicable_range: {T: {min: 0, max: 200, unit: "°C"}}
+  source_books: ["Toledo_Ch8", "van_Boekel_Ch5"]
+  notes: "Maillard reaction: Q10 ≈ 2-3 (rate doubles or triples per 10°C); simpler than Arrhenius"
