@@ -18,18 +18,18 @@ STATE="${2:-inactive}"  # "active" or "inactive"
 CE_HUB_CWD="${CE_HUB_CWD:-$HOME/culinary-mind}"
 ATTN_FILE="$CE_HUB_CWD/.ce-hub/state/attention.json"
 
-# Map agent name → 9-char padded display label
+# Map agent name → 13-char padded display label (15 chars/cell = 13 + 2 padding in format string)
 case "$WINDOW" in
-  cc-lead)              LABEL="cc-lead  " ;;
-  coder)                LABEL="coder    " ;;
-  researcher)           LABEL="research " ;;
-  architect)            LABEL="arch     " ;;
-  pipeline-runner)      LABEL="pipeline " ;;
-  code-reviewer)        LABEL="reviewer " ;;
-  ops)                  LABEL="ops      " ;;
-  open-data-collector)  LABEL="datacol  " ;;
-  wiki-curator)         LABEL="wiki-cur " ;;
-  *)                    LABEL="$(printf '%-9s' "$WINDOW")" ;;
+  cc-lead)              LABEL="cc-lead      " ;;
+  coder)                LABEL="coder        " ;;
+  researcher)           LABEL="researcher   " ;;
+  architect)            LABEL="architect    " ;;
+  pipeline-runner)      LABEL="pipeline-run " ;;
+  code-reviewer)        LABEL="code-reviewer" ;;
+  ops)                  LABEL="ops          " ;;
+  open-data-collector)  LABEL="data-collect " ;;
+  wiki-curator)         LABEL="wiki-curator " ;;
+  *)                    LABEL="$(printf '%-13s' "$WINDOW")" ;;
 esac
 
 # Check attention flag (fast: single python3 call, cached file read)
