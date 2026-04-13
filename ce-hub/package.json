@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@fastify/cors": "^9.0.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^12.8.0",
     "eventemitter2": "^6.4.0",
     "fastify": "^4.28.0",

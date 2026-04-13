@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { v4 as uuidv4 } from 'uuid';
@@ -48,6 +48,9 @@ export class StateStore {
     this.db.pragma('foreign_keys = ON');
     const migrationPath = resolve(__dirname, '..', 'migrations', '001_init.sql');
     this.db.exec(readFileSync(migrationPath, 'utf-8'));
+    // Run additional migrations if present
+    const migration2Path = resolve(__dirname, '..', 'migrations', '002_pipeline.sql');
+    if (existsSync(migration2Path)) this.db.exec(readFileSync(migration2Path, 'utf-8'));
   }
 
   // Tasks
