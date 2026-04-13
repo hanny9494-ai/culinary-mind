@@ -240,6 +240,11 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'get_model_routing',
+    description: 'Get current model routing table (which model handles which task/skill).',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
     name: 'batch_extract',
     description: 'Extract from multiple chunks in parallel (max 5 concurrent).',
     inputSchema: {
@@ -295,6 +300,7 @@ async function callTool(name: string, params: AnyParams, ctx: McpToolContext): P
     // Extract
     case 'extract_chunk':         return tools.extract_chunk(ctx, params as Parameters<typeof tools.extract_chunk>[1]);
     case 'classify_chunk':        return tools.classify_chunk(ctx, params as Parameters<typeof tools.classify_chunk>[1]);
+    case 'get_model_routing':     return tools.get_model_routing(ctx, {} as never);
     case 'batch_extract':         return tools.batch_extract(ctx, params as Parameters<typeof tools.batch_extract>[1]);
     default: return { content: [{ type: 'text', text: JSON.stringify({ error: `Unknown tool: ${name}` }) }], isError: true };
   }

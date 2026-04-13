@@ -23,6 +23,7 @@ import type { CostTracker } from './cost-tracker.js';
 import { ResourceLock } from './resource-lock.js';
 import { BookDispatcher } from './book-dispatcher.js';
 import { antigravityClient } from './antigravity-client.js';
+import { getModelForSkill, toAntigravityModelPref, getRoutingTable } from './model-router.js';
 import Database from 'better-sqlite3';
 
 function getCwd(): string { return process.env.CE_HUB_CWD || process.cwd(); }
@@ -387,20 +388,44 @@ export async function report_cost(ctx: McpToolContext, params: {
 // EXTRACT TOOLS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Skill name → file mapping
+const SKILL_FILES: Record<string, string> = {
+  'A': 'parameter-extractor-a',
+  'B': 'parameter-extractor-b',
+  'C': 'ingredient-atom-extractor',
+  'D': 'flavor-terminology-extractor',
+  // Also accept full file names
+  'parameter-extractor-a': 'parameter-extractor-a',
+  'parameter-extractor-b': 'parameter-extractor-b',
+  'ingredient-atom-extractor': 'ingredient-atom-extractor',
+  'flavor-terminology-extractor': 'flavor-terminology-extractor',
+};
+
 export async function extract_chunk(_ctx: McpToolContext, params: {
   chunk_text: string;
-  skill: string;
+  skill: string;  // 'A'|'B'|'C'|'D' or full skill file name
   model?: 'pro' | 'flash' | 'lingya';
   book_id?: string;
 }): Promise<ToolResult> {
   try {
+    // Resolve skill file name
+    const skillKey = params.skill.toUpperCase() as 'A'|'B'|'C'|'D';
+    const skillFile = SKILL_FILES[params.skill] ?? SKILL_FILES[skillKey] ?? params.skill;
+    
+    // Auto-select model based on skill (unless explicitly overridden)
+    let modelPref = params.model;
+    if (!modelPref && ['A','B','C','D'].includes(skillKey)) {
+      const choice = getModelForSkill(skillKey);
+      modelPref = toAntigravityModelPref(choice);
+    }
+    
     const result = await antigravityClient.extractChunk({
       chunkText: params.chunk_text,
-      skill: params.skill,
-      model: params.model ?? 'pro',
+      skill: skillFile,
+      model: modelPref ?? 'pro',
       bookId: params.book_id,
     });
-    return ok(result);
+    return ok({ ...result, skill_used: skillFile, model_routed: modelPref });
   } catch (e) {
     return err(String(e));
   }
@@ -410,11 +435,16 @@ export async function classify_chunk(_ctx: McpToolContext, params: {
   chunk_text: string;
 }): Promise<ToolResult> {
   try {
-    const result = await antigravityClient.classifyChunk(params.chunk_text);
+    const result = await antigravityClient.classifyChunkMultiLabel(params.chunk_text);
     return ok(result);
   } catch (e) {
     return err(String(e));
   }
+}
+
+// Extra tool: get current model routing table
+export async function get_model_routing(_ctx: McpToolContext, _params: Record<string, never>): Promise<ToolResult> {
+  return ok(getRoutingTable());
 }
 
 export async function batch_extract(_ctx: McpToolContext, params: {

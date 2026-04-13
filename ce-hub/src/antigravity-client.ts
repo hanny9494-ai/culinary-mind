@@ -49,6 +49,15 @@ export interface ClassifyResult {
   reasoning?: string;
 }
 
+// Multi-label classification (new)
+export type ChunkLabel = 'science' | 'recipe' | 'ingredient' | 'sensory' | 'terminology' | 'narrative' | 'table' | 'reference';
+
+export interface MultiLabelClassifyResult {
+  types: ChunkLabel[];  // labels with confidence > 0.5
+  confidence: Partial<Record<ChunkLabel, number>>;
+  reasoning?: string;
+}
+
 // ── Skill loading ─────────────────────────────────────────────────────────────
 
 const skillCache: Record<string, string> = {};
@@ -286,6 +295,61 @@ Respond with ONLY valid JSON: {"chunk_type": "...", "confidence": 0.0-1.0, "reas
     return {
       chunk_type: (parsed.chunk_type as ClassifyResult['chunk_type']) ?? 'unknown',
       confidence: (parsed.confidence as number) ?? 0.5,
+      reasoning: parsed.reasoning as string | undefined,
+    };
+  }
+
+  /**
+   * Multi-label chunk classification (T5 upgrade).
+   * Returns all chunk types with confidence > threshold.
+   * Used by Claw 2 to decide which Skills to apply.
+   */
+  async classifyChunkMultiLabel(chunkText: string, threshold = 0.5): Promise<MultiLabelClassifyResult> {
+    const systemPrompt = `You are a food science book content classifier.
+Classify the following text chunk by assigning confidence scores (0.0-1.0) to each type:
+
+Types to evaluate:
+- "science": scientific principles, equations, kinetics, heat transfer, experimental data
+- "recipe": ingredient lists, cooking instructions, proportions, step-by-step procedures
+- "ingredient": ingredient descriptions, varieties, parts, substitutions, composition data
+- "sensory": taste/texture/aroma descriptions, flavor profiles, quality evaluation
+- "terminology": culinary terminology, technique names, dialect terms, technical jargon
+- "narrative": story, history, general description — no actionable quantitative data
+- "table": data table (may overlap with science/recipe/ingredient)
+- "reference": bibliography, index, footnotes
+
+A single chunk can have multiple types (e.g., a paragraph can be both "science" and "ingredient").
+
+Respond ONLY with valid JSON:
+{
+  "confidence": {
+    "science": 0.0, "recipe": 0.0, "ingredient": 0.0, "sensory": 0.0,
+    "terminology": 0.0, "narrative": 0.0, "table": 0.0, "reference": 0.0
+  },
+  "reasoning": "one sentence summary"
+}`;
+
+    const fullMessage = `${systemPrompt}\n\n---\n\nClassify:\n${chunkText.slice(0, 2000)}`;
+
+    let rawText = '';
+    try {
+      const r = await callAntigravity(fullMessage, 'flash');
+      rawText = r.text;
+    } catch {
+      return { types: ['narrative'], confidence: { narrative: 0.5 } };
+    }
+
+    const parsed = extractJsonFromText(rawText) as Record<string, unknown> | null;
+    if (!parsed) return { types: ['narrative'], confidence: { narrative: 0.5 } };
+
+    const conf = (parsed.confidence ?? {}) as Record<string, number>;
+    const types = (Object.entries(conf) as [ChunkLabel, number][])
+      .filter(([, v]) => v >= threshold)
+      .map(([k]) => k);
+
+    return {
+      types: types.length > 0 ? types : ['narrative'],
+      confidence: conf as Partial<Record<ChunkLabel, number>>,
       reasoning: parsed.reasoning as string | undefined,
     };
   }
