@@ -1,0 +1,70 @@
+{
+  "name": "culinary-bridge",
+  "displayName": "Culinary Bridge",
+  "description": "HTTP bridge — exposes Antigravity built-in LM (Gemini 3.1 Pro) via local API for OpenClaw/ce-hub distillation pipelines",
+  "version": "0.1.0",
+  "publisher": "culinary-engine",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.99.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Culinary Bridge",
+      "properties": {
+        "culinaryBridge.port": {
+          "type": "number",
+          "default": 3456,
+          "minimum": 1024,
+          "maximum": 65535,
+          "description": "Local HTTP server port for the inference API. Reload the window to apply changes."
+        },
+        "culinaryBridge.bearerToken": {
+          "type": "string",
+          "default": "culinary-bridge-local",
+          "markdownDescription": "Bearer token required in `Authorization: Bearer <token>` header. Use a long random string in production."
+        },
+        "culinaryBridge.defaultVendor": {
+          "type": "string",
+          "default": "google",
+          "description": "Default model vendor hint passed to vscode.lm.selectChatModels(). Leave empty for any vendor."
+        },
+        "culinaryBridge.defaultFamily": {
+          "type": "string",
+          "default": "gemini-3.1-pro",
+          "description": "Default model family hint. Clients can override per-request via the 'model' field."
+        },
+        "culinaryBridge.requestTimeoutMs": {
+          "type": "number",
+          "default": 120000,
+          "minimum": 5000,
+          "description": "Maximum milliseconds to wait for a model response before returning 504."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "culinaryBridge.showStatus",
+        "title": "Culinary Bridge: Show Server Status"
+      },
+      {
+        "command": "culinaryBridge.restartServer",
+        "title": "Culinary Bridge: Restart HTTP Server"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.99.0",
+    "typescript": "^5.4.0"
+  }
+}
