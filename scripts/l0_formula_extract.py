@@ -65,8 +65,8 @@ QUOTE_FORMULA_MARKERS = re.compile(
 
 DIGIT_RE = re.compile(r"\d")
 
-# ── Opus system prompt (verbatim from Gemini Round 2 + Round 3 patches) ────────
-OPUS_SYSTEM_PROMPT = """You are an expert Scientific Knowledge Extractor. Your task is to analyze scientific statements and citation quotes, and extract underlying mathematical formulas or physical laws into a strict JSON format.
+# ── Opus system prompts ───────────────────────────────────────────────────────
+TRACK_B_PROMPT = """You are an expert Scientific Knowledge Extractor. Your task is to analyze scientific statements and citation quotes, and extract underlying mathematical formulas or physical laws into a strict JSON format.
 
 ## Extraction Rules & SymPy Syntax
 1. **Chain of Thought (CoT)**: Always write your reasoning in the `reasoning` field BEFORE extracting the formula. Analyze if a formula exists, identify its components, and determine if it's complete or partial.
@@ -104,6 +104,107 @@ Output schema:
     "constants": [{"symbol": "string", "description": "string", "unit": "string or null"}]
   }
 }"""
+
+TRACK_A_PROMPT = """You are an expert Food Engineering and Thermodynamics Extractor.
+Your task is to analyze engineering textbook chunks and extract strictly mathematical relationships
+(PDEs, ODEs, algebraic laws, empirical correlations, thermophysical property tables).
+
+## Role Definitions (CRITICAL)
+- **state** = computed output / dependent variable that the formula solves for (e.g., T, C, v)
+- **parameter** = user-supplied input / independent variable that drives the calculation (e.g., T_env, h_conv, moisture_content)
+- **constant** = fixed physical constant that never changes (e.g., R=8.314, g=9.81, σ=5.67e-8)
+
+Do NOT extract:
+- Cooking doneness thresholds ("beef is done at 63°C") — these are threshold_constants, not engineering equations
+- Qualitative causal chains ("higher temperature causes faster reaction")
+- Dimensionless numbers without their full correlation equation
+
+## MotherFormula Matching (REQUIRED)
+Every extracted formula MUST be matched to one of the 53 registered MotherFormulas below.
+Use the exact `formula_id` string. If no match, set formula_id to "NEW" and justify in reasoning.
+
+53 REGISTERED MOTHERFORMULAS:
+MF_001: Fourier Heat Conduction — ∂T/∂t = α·∂²T/∂x² — domain: thermal_dynamics
+MF_002: Choi-Okos Model — Cp = Σ(Xi·Cpi(T)) — domain: thermal_dynamics
+MF_003: Newton's Law of Cooling — q = h·A·(Ts − T_env) — domain: thermal_dynamics
+MF_004: Stefan-Boltzmann Law — q = ε·σ·A·T⁴ — domain: thermal_dynamics
+MF_005: Latent Heat of Vaporization — q_vap = m_dot·h_fg — domain: thermal_dynamics
+MF_006: Nusselt Number Correlation — Nu = c·Re^m·Pr^n — domain: thermal_dynamics
+MF_007: Heat Transfer Biot Number — Bi = (h·L)/k — domain: thermal_dynamics
+MF_008: Arrhenius Equation — k = A·exp(−Ea/(RT)) — domain: maillard_caramelization, protein_science
+MF_009: D/Z/F Value Model — F = D·(log10(N0)−log10(Nt)) — domain: food_safety
+MF_010: Michaelis-Menten Kinetics — v = (v_max·[S])/(Km+[S]) — domain: enzyme
+MF_011: Monod Equation — μ = (μ_max·[S])/(Ks+[S]) — domain: fermentation
+MF_012: Gompertz Growth Model — y(t) = a·exp(−exp(b−c·t)) — domain: food_safety
+MF_013: Avrami Equation — X(t) = 1−exp(−k·t^n) — domain: carbohydrate
+MF_014: Fick's Second Law — ∂C/∂t = D·∂²C/∂x² — domain: mass_transfer
+MF_015: GAB Isotherm Equation — X = (Xm·C·K·aw)/((1−K·aw)(1−K·aw+C·K·aw)) — domain: water_activity
+MF_016: Gordon-Taylor Equation — Tg = (w1·Tg1+k·w2·Tg2)/(w1+k·w2) — domain: texture_rheology
+MF_017: Henderson-Hasselbalch Equation — pH = pKa + log10([A−]/[HA]) — domain: salt_acid_chemistry
+MF_018: Nernst Equation — E = E0−(RT/zF)·ln(Q) — domain: oxidation_reduction
+MF_019: Antoine Equation — log10(P) = A−B/(T+C) — domain: aroma_volatiles
+MF_020: Power Law Model — τ = K·(γ_dot)^n — domain: texture_rheology
+MF_021: Herschel-Bulkley Model — τ = τ0 + K·(γ_dot)^n — domain: texture_rheology
+MF_022: Casson Plastic Model — sqrt(τ) = sqrt(τ0) + sqrt(η_p·γ_dot) — domain: texture_rheology
+MF_023: WLF Equation — log10(aT) = −C1·(T−Tg)/(C2+T−Tg) — domain: texture_rheology
+MF_024: Weber-Fechner Law — R = k·log10(S/S0) — domain: taste_perception
+MF_025: Odor Activity Value (OAV) — OAV = Ci/T_threshold_i — domain: aroma_volatiles
+MF_026: Gas-Liquid Partition Coefficient — Ki = C_gas_i/C_liquid_i — domain: aroma_volatiles
+MF_027: Buffer Capacity (Van Slyke) — β = 2.303·(Kw/[H+]+[H+]+([C]·Ka·[H+])/(Ka+[H+])²) — domain: salt_acid_chemistry
+MF_028: Young-Laplace Equation — ΔP = γ·(1/R1+1/R2) — domain: texture_rheology
+MF_029: Nusselt Number Film Condensation — h_avg = 0.943·((k³·ρ·(ρ−ρv)·g·hfg)/(L·μ·(Tsat−Ts)))^0.25 — domain: thermal_dynamics
+MF_030: Leidenfrost Equation — q_film = h_film·(Tw−Tsat) — domain: thermal_dynamics
+MF_031: Peleg's Extraction Model — M(t) = M0 + t/(k1+k2·t) — domain: mass_transfer
+MF_032: DLVO Colloidal Stability — V_total = V_A + V_R — domain: lipid_science
+MF_033: Stokes' Law — v = (2·g·r²·(ρp−ρf))/(9·η) — domain: mass_transfer
+MF_034: Lumry-Eyring Protein Denaturation — N <-> U -> A (ODE system) — domain: protein_science
+MF_035: Damköhler Number — Da = ReactionRate/DiffusionRate — domain: cross_domain
+MF_036: Flory-Huggins Solution Theory — ΔG_mix = RT·(n1·lnφ1+n2·lnφ2+χ·n1·φ2) — domain: carbohydrate
+MF_037: van't Hoff Osmotic Pressure — Π = i·C·R·T — domain: water_activity
+MF_038: Poroelasticity (Biot) — ∇·G∇u+∇(λ+G)∇·u−α∇p = 0 — domain: texture_rheology
+MF_039: Biot Number for Mass Transfer — Bi_m = (hm·L)/D_eff — domain: mass_transfer
+MF_040: Kubelka-Munk Theory — K/S = (1−R_inf)²/(2·R_inf) — domain: color_pigment
+MF_041: Washburn's Equation — L² = (γ·rc·cosθ/(2η))·t — domain: mass_transfer
+MF_042: Clausius-Clapeyron Equation — ln(P2/P1) = (ΔHvap/R)·(1/T1−1/T2) — domain: thermal_dynamics
+MF_043: Lambert's Law for Microwave — P(z) = P0·exp(−2αz) — domain: equipment_physics
+MF_044: Kedem-Katchalsky Equations — Jv = Lp·(ΔP−σ·ΔΠ) — domain: mass_transfer
+MF_045: Griffith Fracture Theory — σf = sqrt((2·E·γ)/(π·a)) — domain: texture_rheology
+MF_046: Rayleigh-Plesset Equation — R·d²R/dt²+(3/2)·(dR/dt)² = (Pb−Pinf−2γ/R)/ρ — domain: equipment_physics
+MF_047: Reynolds Number — Re = (ρ·v·L)/μ — domain: cross_domain
+MF_048: Schmidt Number — Sc = μ/(ρ·D) — domain: cross_domain
+MF_049: Grashof Number — Gr = (g·β·(Ts−T_inf)·L³)/ν² — domain: thermal_dynamics
+MF_050: Raoult's Law — Pi = xi·Pi_star — domain: aroma_volatiles
+MF_051: Marangoni Effect — τ = dγ/dx — domain: texture_rheology
+MF_052: Hertzian Contact Theory — a = ((3·F·R)/(4·E_star))^(1/3) — domain: texture_rheology
+MF_053: Beidler Receptor Binding — R = (Rmax·C)/(Kd+C) — domain: taste_perception
+
+## SymPy Syntax Rules
+- Use ** for exponentiation (NEVER ^)
+- Use exp() for exponential (NEVER e**x)
+- ALL formulas must be wrapped in Eq(dependent_var, expression) — NO bare expressions
+  ✅ Correct: "Eq(k, A * exp(-Ea / (R * T)))"
+  ❌ Wrong: "A * exp(-Ea / (R * T))"
+- For thresholds: Eq(T_denature_myosin, 50)
+- For conditionals: Piecewise((expr1, cond1), (expr2, cond2))
+
+## Output Format
+CRITICAL: Output ONLY valid raw JSON starting with { — no markdown fences.
+
+{
+  "has_formula": boolean,
+  "formula_id": "MF_XXX" | "NEW",
+  "reasoning": "Step-by-step: what formula this is, which MF it matches (or why NEW), what role each symbol plays",
+  "formula_type": "scientific_law" | "empirical_rule" | "threshold_constant" | null,
+  "formula_name": string | null,
+  "sympy_expression": "Eq(dependent_var, expression_in_sympy_syntax)" | null,
+  "symbols": {
+    "variables": [{"symbol": "string", "description": "string", "unit": "string or null", "role": "state"}],
+    "parameters": [{"symbol": "string", "description": "string", "unit": "string or null", "role": "parameter"}],
+    "constants": [{"symbol": "string", "description": "string", "unit": "string or null", "role": "constant", "value": number_or_null}]
+  },
+  "applicable_range": {"variable_name": {"min": number, "max": number, "unit": "string"}}
+}
+CRITICAL: You must output ONLY valid, raw JSON. Do NOT wrap the JSON in markdown code blocks."""
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -219,10 +320,10 @@ def call_ollama_9b(stmt: str, quote: str) -> bool:
     )
 
     payload = json.dumps({
-        "model": "qwen3.5:9b",
+        "model": "qwen2.5:7b",
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": 0, "num_predict": 10},
+        "options": {"temperature": 0, "num_predict": 20},
     }).encode()
 
     req = urllib.request.Request(
@@ -232,10 +333,14 @@ def call_ollama_9b(stmt: str, quote: str) -> bool:
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             result = json.loads(resp.read().decode())
             response_text = result.get("response", "").strip().upper()
-            return response_text.startswith("YES")
+            if response_text:
+                return response_text.startswith("YES")
+            # Fallback: check thinking field (qwen3.5 thinking mode)
+            thinking = result.get("thinking", "").strip().upper()
+            return "YES" in thinking[-100:]
     except Exception as e:
         print(f"  [Ollama error] {e}", file=sys.stderr)
         return False
@@ -369,12 +474,12 @@ def parse_opus_response(raw: str) -> dict | None:
         return None
 
 
-async def call_opus_async(session, endpoint: str, api_key: str, entry: dict) -> dict | None:
+async def call_opus_async(session, endpoint: str, api_key: str, entry: dict, system_prompt: str) -> dict | None:
     """Call Opus via Lingya API asynchronously. Returns parsed formula dict or None."""
     try:
         import aiohttp as _aiohttp
     except ImportError:
-        return call_opus_sync(endpoint, api_key, entry)
+        return call_opus_sync(endpoint, api_key, entry, system_prompt)
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -384,7 +489,7 @@ async def call_opus_async(session, endpoint: str, api_key: str, entry: dict) -> 
         "model": "claude-opus-4-5",
         "max_tokens": 2000,
         "temperature": 0,
-        "system": OPUS_SYSTEM_PROMPT,
+        "system": system_prompt,
         "messages": [{"role": "user", "content": build_opus_user_message(entry)}],
     }
 
@@ -407,7 +512,7 @@ async def call_opus_async(session, endpoint: str, api_key: str, entry: dict) -> 
         return None
 
 
-def call_opus_sync(endpoint: str, api_key: str, entry: dict) -> dict | None:
+def call_opus_sync(endpoint: str, api_key: str, entry: dict, system_prompt: str) -> dict | None:
     """Sync fallback for Opus API call using urllib."""
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -418,7 +523,7 @@ def call_opus_sync(endpoint: str, api_key: str, entry: dict) -> dict | None:
         "model": "claude-opus-4-5",
         "max_tokens": 2000,
         "temperature": 0,
-        "system": OPUS_SYSTEM_PROMPT,
+        "system": system_prompt,
         "messages": [{"role": "user", "content": build_opus_user_message(entry)}],
     }).encode()
 
@@ -448,6 +553,7 @@ async def run_step3_async(
     outf,
     processed_ids: set[str],
     count_formulas: list,
+    system_prompt: str,
 ) -> None:
     """Process entries 3 at a time with asyncio."""
     try:
@@ -460,7 +566,7 @@ async def run_step3_async(
             async def process_one(entry: dict):
                 async with semaphore:
                     eid = entry["id"]
-                    formula = await call_opus_async(session, endpoint, api_key, entry)
+                    formula = await call_opus_async(session, endpoint, api_key, entry, system_prompt)
 
                     if formula is None:
                         print(f"  [skip] {eid} — API error or null response")
@@ -493,7 +599,7 @@ async def run_step3_async(
         print("  [aiohttp not available, using sync mode]")
         for entry in entries_to_process:
             eid = entry["id"]
-            formula = call_opus_sync(endpoint, api_key, entry)
+            formula = call_opus_sync(endpoint, api_key, entry, system_prompt)
             if formula and formula.get("has_formula"):
                 count_formulas.append(1)
                 entry_out = {k: v for k, v in entry.items()}
@@ -505,7 +611,7 @@ async def run_step3_async(
             time.sleep(0.2)  # rate limit
 
 
-def run_step3(limit: int = 0, dry_run: bool = False) -> int:
+def run_step3(limit: int = 0, dry_run: bool = False, track: str = "B") -> int:
     """Step 3: Opus extraction. Returns count of extracted formulas."""
     if not CLASSIFIED_FILE.exists():
         print("ERROR: mvp_classified.jsonl not found. Run Step 2 first.")
@@ -519,8 +625,10 @@ def run_step3(limit: int = 0, dry_run: bool = False) -> int:
         sys.exit(1)
 
     print("\n" + "=" * 60)
-    print("STEP 3: Opus formula extraction (Lingya API, 3 concurrent)")
+    print(f"STEP 3: Opus formula extraction (Lingya API, 3 concurrent) [Track {track.upper()}]")
     print("=" * 60)
+
+    system_prompt = TRACK_A_PROMPT if track.upper() == "A" else TRACK_B_PROMPT
 
     # Load resume state
     processed_ids: set[str] = set()
@@ -567,7 +675,7 @@ def run_step3(limit: int = 0, dry_run: bool = False) -> int:
     count_formulas: list = []
 
     with open(FORMULAS_FILE, "a", encoding="utf-8") as outf:
-        asyncio.run(run_step3_async(to_process, endpoint, api_key, outf, processed_ids, count_formulas))
+        asyncio.run(run_step3_async(to_process, endpoint, api_key, outf, processed_ids, count_formulas, system_prompt))
 
     STEP3_PROGRESS.write_text(json.dumps({"processed_ids": list(processed_ids)}))
 
@@ -610,11 +718,18 @@ def main():
         action="store_true",
         help="Print what would be done without calling APIs",
     )
+    parser.add_argument(
+        "--track",
+        choices=["A", "B", "a", "b"],
+        default="B",
+        help="Extraction track: A (Engineering Math) or B (Culinary Rules)",
+    )
     args = parser.parse_args()
 
     step = args.step
     limit = args.limit
     dry_run = args.dry_run
+    track = args.track.upper()
 
     if dry_run:
         print("[DRY RUN MODE — no APIs will be called, no files written]\n")
@@ -628,7 +743,7 @@ def main():
         run_step2(limit=limit, dry_run=dry_run)
 
     if step in ("3", "all"):
-        run_step3(limit=limit, dry_run=dry_run)
+        run_step3(limit=limit, dry_run=dry_run, track=track)
 
     print("\nDone.")
 
