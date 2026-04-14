@@ -69,6 +69,18 @@ dashscope:
   api_key: "${DASHSCOPE_API_KEY}"
   model: "qwen3-vl-plus"
 
+# qwen3.5-flash 信号路由升级路径（DashScope 直连，阿里系走这里）
+dashscope_router:
+  url: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+  api_key: "${DASHSCOPE_API_KEY}"
+  models:
+    flash: "qwen3.5-flash"
+    turbo: "qwen-turbo-latest"
+  options:
+    enable_thinking: false
+    temperature: 0
+    max_tokens: 512
+
 # PaddleOCR VL 1.5（OCR 主力，百度 AI Studio 托管）
 paddleocr:
   url: "https://t1m0ybsdk3d2hcyc.aistudio-app.com/layout-parsing"

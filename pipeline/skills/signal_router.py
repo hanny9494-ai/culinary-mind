@@ -225,80 +225,66 @@ def default_signal(page_num: int, skip_reason: str | None = None, all_true: bool
         "skip_reason": skip_reason,
     }
 
-# ── Lingya (灵雅) API call — qwen3.5-flash fallback ──────────────────────────
+# ── DashScope API call — qwen3.5-flash escalation path ────────────────────────
 
-def call_lingya(
+def call_dashscope(
     page_num: int,
     page_text: str,
     model: str = "qwen3.5-flash",
-    api_endpoint: str = "",
     api_key: str = "",
     retries: int = 3,
     logger: logging.Logger | None = None,
 ) -> dict[str, Any]:
     """
-    Call 灵雅 (L0_API_ENDPOINT) for signal routing via Anthropic-compatible API.
-    Used as escalation when 9b/27b local models don't meet recall targets.
+    Call qwen3.5-flash via DashScope compatible-mode API (OpenAI format).
+    Used as escalation when local 9b/27b models don't meet recall targets.
+    阿里系模型走 DashScope，灵雅只给 Gemini/Claude 用。
     """
     log = logger or logging.getLogger(__name__)
-    if not api_endpoint:
-        api_endpoint = os.environ.get("L0_API_ENDPOINT", "")
     if not api_key:
-        api_key = os.environ.get("L0_API_KEY", "")
-    if not api_endpoint:
-        log.error("[router] L0_API_ENDPOINT not set — cannot use lingya provider")
-        return default_signal(page_num, skip_reason="lingya_unconfigured")
+        api_key = os.environ.get("DASHSCOPE_API_KEY", "")
+    if not api_key:
+        log.error("[router] DASHSCOPE_API_KEY not set — cannot use dashscope provider")
+        return default_signal(page_num, skip_reason="dashscope_unconfigured")
 
-    endpoint = api_endpoint.rstrip("/") + "/v1/messages"
+    endpoint = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
     text_snippet = page_text[:3000] if len(page_text) > 3000 else page_text
     user_content = USER_TEMPLATE.format(page_number=page_num, page_text=text_snippet)
 
     headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
     }
     body = {
         "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user",   "content": user_content},
+        ],
+        "temperature": 0,
         "max_tokens": 512,
-        "stream": True,
-        "system": SYSTEM_PROMPT,
-        "messages": [{"role": "user", "content": user_content}],
+        "stream": False,
+        "enable_thinking": False,  # 禁用 qwen3 思考模式
     }
 
     for attempt in range(1, retries + 1):
         try:
-            chunks: list[str] = []
             with httpx.Client(trust_env=False, timeout=60, follow_redirects=False) as client:
-                with client.stream("POST", endpoint, headers=headers, json=body) as resp:
-                    resp.raise_for_status()
-                    for line in resp.iter_lines():
-                        if not line.startswith("data: "):
-                            continue
-                        data_str = line[6:]
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            ev = json.loads(data_str)
-                            if ev.get("type") == "content_block_delta":
-                                delta = ev.get("delta", {})
-                                if delta.get("type") == "text_delta":
-                                    chunks.append(delta["text"])
-                        except Exception:
-                            pass
-            text = "".join(chunks).strip()
+                resp = client.post(endpoint, headers=headers, json=body)
+            resp.raise_for_status()
+            data = resp.json()
+            text = data["choices"][0]["message"]["content"].strip()
             return parse_signal_json(text, page_num, log)
         except Exception as e:
-            log.warning(f"[router] lingya page {page_num} attempt {attempt} failed: {e}")
+            log.warning(f"[router] dashscope page {page_num} attempt {attempt} failed: {e}")
             if attempt == retries:
-                log.error(f"[router] lingya page {page_num} all retries failed")
-                return default_signal(page_num, skip_reason=f"lingya_error: {e}")
+                log.error(f"[router] dashscope page {page_num} all retries failed")
+                return default_signal(page_num, skip_reason=f"dashscope_error: {e}")
             time.sleep(2 ** attempt)
 
     return default_signal(page_num)
 
 
-# ── Resume helpers ────────────────────────────────────────────────────────────
 
 def load_existing_signals(path: Path) -> dict[int, dict]:
     """Load existing signals.json, keyed by page number."""
@@ -328,6 +314,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-resume", dest="resume", action="store_false")
     p.add_argument("--force", action="store_true", help="Re-run all pages")
     p.add_argument("--pilot", action="store_true", help="Print detailed output for each page (debug)")
+    p.add_argument("--provider", choices=["ollama", "dashscope"], default="ollama",
+                   help="Router backend: ollama (local 9b/27b) or dashscope (qwen3.5-flash via DashScope)")
+    p.add_argument("--dashscope-model", default="qwen3.5-flash",
+                   help="Model for dashscope provider (default: qwen3.5-flash)")
     return p.parse_args()
 
 def main() -> None:
@@ -389,8 +379,8 @@ def main() -> None:
 
         if not page_text.strip():
             sig = default_signal(page_num, skip_reason="blank_page")
-        elif args.provider == "lingya":
-            sig = call_lingya(page_num, page_text, model=args.lingya_model, logger=log)
+        elif args.provider == "dashscope":
+            sig = call_dashscope(page_num, page_text, model=args.dashscope_model, logger=log)
         else:
             sig = call_ollama(page_num, page_text, model=args.model, logger=log)
 
