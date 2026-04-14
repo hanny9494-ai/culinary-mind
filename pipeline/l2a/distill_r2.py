@@ -3,12 +3,15 @@
 
 Usage:
   python pipeline/l2a/distill_r2.py [--limit N] [--concurrency 4] [--batch-size 5]
+  python pipeline/l2a/distill_r2.py --retry-failed   # retry _failed/ atoms
 
 Notes:
   - stream=True is REQUIRED — AiGoCode non-streaming has a bug where
     message.content is None.
   - Resume is enabled by default: atoms with existing R2 files are skipped.
   - Progress checkpoint written to atoms_r2/_progress.json every 50 atoms.
+  - --retry-failed: reprocesses atoms in _failed/*.json (JSON parse errors etc.)
+    On success, removes files from _failed/ and writes to atoms_r2/.
 """
 from __future__ import annotations
 
@@ -17,6 +20,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -48,7 +52,7 @@ CHECKPOINT_EVERY = 50   # write _progress.json every N atoms
 # R2 adds exactly these fields to R1 atoms (all other fields come from R1)
 R2_NEW_FIELDS = {'culinary_deep', 'substitutes', 'processing_effects',
                  'quality_indicators', 'l0_principles'}
-MAX_RETRIES = 1  # fail fast — no retries, land in _failed/ immediately
+MAX_RETRIES = 3  # increased for retry-failed mode
 RETRY_DELAYS = [2, 8, 30]   # exponential backoff seconds
 
 # ── Logging ────────────────────────────────────────────────────────────────────
@@ -155,9 +159,48 @@ async def call_with_retry(
     raise RuntimeError(f"All {MAX_RETRIES} attempts failed") from last_exc
 
 
-# ── JSON extraction ────────────────────────────────────────────────────────────
+# ── JSON extraction + repair ───────────────────────────────────────────────────
+def repair_json(text: str) -> str:
+    """Attempt light repair of common JSON issues from model output.
+
+    Handles:
+    - Trailing commas before ] or }
+    - Missing closing braces/brackets (count mismatch)
+    """
+    # Remove trailing commas before } or ]
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+
+    # Balance braces/brackets by appending missing closers
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    for ch in text:
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if ch == '"' and not escape:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack and stack[-1] == ch:
+                stack.pop()
+
+    # Append missing closers in reverse
+    if stack:
+        text = text.rstrip() + "".join(reversed(stack))
+
+    return text
+
+
 def extract_json_array(text: str) -> list[dict]:
-    """Extract JSON array from model response (handles markdown fences)."""
+    """Extract JSON array from model response (handles markdown fences + repair)."""
     t = text.strip()
     # Strip markdown code fence
     if t.startswith("```"):
@@ -168,7 +211,20 @@ def extract_json_array(text: str) -> list[dict]:
     end = t.rfind("]")
     if start == -1 or end == -1 or end < start:
         raise ValueError(f"No JSON array found in response (len={len(t)})")
-    return json.loads(t[start:end + 1])
+
+    candidate = t[start:end + 1]
+    # First try clean parse
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        pass
+
+    # Try with repair
+    repaired = repair_json(candidate)
+    try:
+        return json.loads(repaired)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"JSON parse failed even after repair: {e}") from e
 
 
 # ── Progress tracking ──────────────────────────────────────────────────────────
@@ -237,10 +293,14 @@ async def process_batch(
     system_prompt: str,
     progress: Progress,
     semaphore: asyncio.Semaphore,
+    retry_mode: bool = False,
 ) -> None:
-    """Process a batch of R1 atoms, write R2 files, update progress."""
+    """Process a batch of R1 atoms, write R2 files, update progress.
+
+    In retry_mode=True: on success, also remove the corresponding _failed/ files.
+    """
     canonical_ids = [a["canonical_id"] for a in batch]
-    log.info(f"Batch [{', '.join(canonical_ids)}] — sending to API")
+    log.info(f"{'[RETRY] ' if retry_mode else ''}Batch [{', '.join(canonical_ids)}] — sending to API")
     t0 = time.time()
 
     async with semaphore:
@@ -309,8 +369,15 @@ async def process_batch(
         try:
             out_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2))
             log.info(f"  ✓ {cid} ({latency_ms}ms)")
-            log_atom_result(cid, "done", tokens_per_atom, latency_ms)
+            log_atom_result(cid, "done" if not retry_mode else "retry_ok", tokens_per_atom, latency_ms)
             await progress.update(done_delta=1, tokens=tokens_per_atom, canonical_id=cid)
+            # Clean up _failed/ on successful retry
+            if retry_mode:
+                for ext in (".json", ".err"):
+                    p = FAILED_DIR / f"{cid}{ext}"
+                    if p.exists():
+                        p.unlink()
+                log.info(f"  ↩ removed {cid} from _failed/")
         except Exception as e:
             log.error(f"  ✗ write failed for {cid}: {e}")
             log_atom_result(cid, "fail_write", 0, latency_ms)
@@ -328,6 +395,54 @@ async def main(args: argparse.Namespace) -> None:
         raise SystemExit(f"ERROR: Prompt file not found: {PROMPT_FILE}")
     system_prompt = PROMPT_FILE.read_text(encoding="utf-8").strip()
 
+    # ── Retry-failed mode ──────────────────────────────────────────────────────
+    if args.retry_failed:
+        failed_jsons = sorted(FAILED_DIR.glob("*.json"))
+        if not failed_jsons:
+            log.info("No failed atoms found in _failed/. Nothing to retry.")
+            return
+        to_process: list[dict] = []
+        for f in failed_jsons:
+            try:
+                atom = json.loads(f.read_text(encoding="utf-8"))
+                # Ensure canonical_id matches stem (some failed atoms keep R1 data)
+                atom.setdefault("canonical_id", f.stem)
+                to_process.append(atom)
+            except Exception as e:
+                log.warning(f"Skip unreadable failed atom {f.name}: {e}")
+        if args.limit:
+            to_process = to_process[:args.limit]
+        total = len(to_process)
+        log.info(f"Retry mode: {total} failed atoms to reprocess (concurrency={args.concurrency})")
+
+        started_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+        progress = Progress(total=total, started_at=started_at)
+
+        # Always batch_size=1 for retry — avoids compound JSON parse failures
+        batches = [[atom] for atom in to_process]
+        semaphore = asyncio.Semaphore(args.concurrency)
+
+        async with httpx.AsyncClient(
+            trust_env=False,
+            follow_redirects=False,
+            timeout=httpx.Timeout(120.0),
+        ) as client:
+            tasks = [
+                asyncio.create_task(
+                    process_batch(client, [atom], system_prompt, progress, semaphore, retry_mode=True)
+                )
+                for atom in to_process
+            ]
+            await asyncio.gather(*tasks)
+
+        await progress._write()
+        remaining_failed = len(list(FAILED_DIR.glob("*.json")))
+        log.info(f"Retry done: {progress.done} recovered, {progress.failed} still failing")
+        log.info(f"Remaining in _failed/: {remaining_failed} atoms")
+        return
+
+    # ── Normal mode ────────────────────────────────────────────────────────────
+
     # Discover R1 atoms
     r1_files = sorted(ATOMS_R1_DIR.glob("*.json"))
     if not r1_files:
@@ -343,10 +458,10 @@ async def main(args: argparse.Namespace) -> None:
         failed_ids = {p.stem for p in FAILED_DIR.glob("*.json")}
         if failed_ids:
             done_ids |= failed_ids
-            log.info(f"Resume: skipping {len(failed_ids)} previously failed atoms (permanent skip)")
+            log.info(f"Resume: skipping {len(failed_ids)} previously failed atoms (use --retry-failed to reprocess)")
 
     # Build work queue
-    to_process: list[dict] = []
+    to_process = []
     for f in r1_files:
         cid = f.stem
         if cid in done_ids:
@@ -362,7 +477,7 @@ async def main(args: argparse.Namespace) -> None:
 
     total = len(to_process)
     if total == 0:
-        log.info("Nothing to process — all done!")
+        log.info("Nothing to process — all done! (use --retry-failed to reprocess failed atoms)")
         return
 
     log.info(f"Processing {total} atoms via {MODEL} (concurrency={args.concurrency}, "
@@ -411,7 +526,9 @@ def parse_args() -> argparse.Namespace:
                    help="Atoms per API call (default: 1; batch>1 causes count mismatches with gemini-3-flash)")
     p.add_argument("--no-resume", action="store_false", dest="resume",
                    help="Disable resume (reprocess already-done atoms)")
-    p.set_defaults(resume=True)
+    p.add_argument("--retry-failed", action="store_true",
+                   help="Retry atoms in _failed/ (JSON parse errors etc.). Uses batch_size=1.")
+    p.set_defaults(resume=True, retry_failed=False)
     return p.parse_args()
 
 
