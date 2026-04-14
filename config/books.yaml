@@ -885,6 +885,8 @@
   track_a_status: skip
   parameter_density: low
   recipe_status: done
+  l0_status: pending
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/食经 (陈梦因) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
   note: "L2b提取完成(88 recipes)"
 
 - id: chuantong_yc
@@ -900,6 +902,8 @@
   track_a_status: skip
   parameter_density: low
   recipe_status: done
+  l0_status: pending
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/传统粤菜精华录 (陈梦因，江献珠著) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: gufa_yc
   skills: ["B", "C", "D"]
@@ -914,6 +918,8 @@
   track_a_status: skip
   parameter_density: low
   recipe_status: done
+  l0_status: pending
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/古法粤菜新谱 (陈梦因, 江献珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
   note: "L2b提取完成(237 recipes)"
 
 - id: zhujixiaoguan_6
@@ -929,6 +935,8 @@
   track_a_status: skip
   parameter_density: low
   recipe_status: done
+  l0_status: pending
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家常菜譜 （第六集） (江献珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: zhujixiaoguan_3
   skills: ["B", "C", "D"]
@@ -943,6 +951,8 @@
   track_a_status: skip
   parameter_density: low
   recipe_status: done
+  l0_status: pending
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家饌3 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: zhujixiaoguan_4
   skills: ["B", "C", "D"]
@@ -957,6 +967,8 @@
   track_a_status: skip
   parameter_density: low
   recipe_status: done
+  l0_status: pending
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家饌4 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: zhujixiaoguan_2
   skills: ["B", "C", "D"]
@@ -971,6 +983,8 @@
   track_a_status: skip
   parameter_density: low
   recipe_status: done
+  l0_status: pending
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家馔2 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: zhujixiaoguan_v6b
   skills: ["B", "C", "D"]
@@ -985,6 +999,8 @@
   track_a_status: skip
   parameter_density: low
   recipe_status: done
+  l0_status: pending
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家馔6 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
   note: "L2b提取完成(110 recipes)"
 
 - id: zhujixiaoguan_dimsim2
@@ -1000,6 +1016,8 @@
   track_a_status: skip
   parameter_density: low
   recipe_status: done
+  l0_status: pending
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館：中國點心2 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: fenbuxiangjiena_yc
   skills: ["B", "C", "D"]
@@ -1014,6 +1032,8 @@
   track_a_status: skip
   parameter_density: low
   recipe_status: done
+  l0_status: pending
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/分步詳解-南粵家鄉菜 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: yuecan_zhenwei_meat
   skills: ["B", "C", "D"]
@@ -1028,6 +1048,8 @@
   track_a_status: skip
   parameter_density: low
   recipe_status: done
+  l0_status: pending
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/粤菜真味：肉食篇 (江献珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: guangdong_pengtiao_quanshu
   skills: ["B", "C", "D"]
@@ -1042,6 +1064,8 @@
   track_a_status: skip
   parameter_density: low
   recipe_status: done
+  l0_status: pending
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/廣東菜烹調全書 (陳淑儀) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: hk_yuecan_yanxi
   skills: ["B", "C", "D"]
@@ -1056,6 +1080,8 @@
   track_a_status: skip
   parameter_density: low
   recipe_status: done
+  l0_status: pending
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/香港粵菜筵席譜 (鲁夫) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
   note: "L2b提取完成(76 recipes)"
 
 - id: zhongguo_caipu_guangdong
@@ -1071,6 +1097,8 @@
   track_a_status: skip
   parameter_density: low
   recipe_status: done
+  l0_status: pending
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/中国菜谱 广东 (《中国菜谱》编写组编) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: zhongguo_yinshi_meixueshi
   skills: ["B", "C", "D"]
@@ -1085,6 +1113,8 @@
   track_a_status: skip
   parameter_density: low
   recipe_status: pending
+  l0_status: pending
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/中国饮食美学史 (赵建军著, 赵建军, 1958- author, Zhao Jianjun zhu etc.) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
   note: "美学史，非食谱书"
 
 - id: yuecan_wangliang
@@ -1100,6 +1130,8 @@
   track_a_status: skip
   parameter_density: low
   recipe_status: done
+  l0_status: pending
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/粤菜 (王亮　著) (z-library.sk, 1lib.sk, z-lib.sk).epub"
 
 - id: xidage_xunwei_hk
   skills: ["B", "C", "D"]
@@ -1114,6 +1146,8 @@
   track_a_status: skip
   parameter_density: low
   recipe_status: done
+  l0_status: pending
+  source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/西打哥的尋味香港：從街頭小吃到餐館美饌，品嚐最道地的香港好味！ (西打哥) (z-library.sk, 1lib.sk, z-lib.sk).epub"
   note: "游记类，2条食谱"
 
 # ══════════════════════════════════════════════════════════════════
