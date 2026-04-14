@@ -38,8 +38,15 @@ SYSTEM_PROMPT = """\
 输出纯 JSON，不要解释。
 
 判断规则：
-- A (定量参数): 页面包含数学公式、数据表格、物理常数、动力学参数、温度-时间曲线。\
-关键词：Ea, k, D-value, Cp, viscosity, correlation, coefficient, 活化能, 速率常数
+- A (定量参数): 页面含有任何可量化的科学数据，包括但不限于：
+  * 明确数值：温度（60°C, 160°F）、时间（30 min）、百分比（20%）、能量（37 J/g）、pH、重量
+  * 数学公式或方程（任何含变量的表达式）
+  * 数据表格或图表中的数值
+  * 物理/化学常数（活化能 Ea、速率常数 k、扩散系数 D）
+  * 定量比较陈述：如"fat explains 20% of variation"、"3 times more myoglobin"
+  * 科学阈值：如"above 60°C collagen shrinks"、"water activity below 0.85"
+  ⚠️ 宁可多标！只要页面里有任何具体数字或可测量的量，就标 A=true。
+  关键词：%, °C, °F, J/g, kJ/mol, mg, mM, ppm, ratio, coefficient, correlation
 - B (食谱): 页面包含配料表、烹饪步骤、温度/时间指令、份量。\
 关键词：ingredients, preheat, bake at, 材料, 做法, 步骤
 - C (食材): 页面描述食材属性——品种、产地、季节、部位、营养成分、替代品。\
@@ -49,7 +56,24 @@ SYSTEM_PROMPT = """\
 
 跳过规则：如果页面是目录、索引、版权页、空白页、纯图片说明，所有 signal 设为 false 并填写 skip_reason。
 
-宁可多标不可漏标。如果不确定，标为 true。
+⚠️ 核心原则：宁可多标不可漏标。如果不确定，标为 true。
+
+Few-shot 示例（A 信号判断）：
+
+示例1 — 输入："fat content explains only about 20% of the variation in tenderness"
+→ A=true（包含具体百分比 20%，定量陈述）
+
+示例2 — 输入："Animal fat stores energy quite densely—about 37 joules per gram, comparable to gasoline"
+→ A=true（包含具体能量密度 37 J/g）
+
+示例3 — 输入："temperatures above 60°C cause collagen to contract and squeeze out moisture"
+→ A=true（包含温度阈值 60°C）
+
+示例4 — 输入："Duck breasts are made up mainly of intermediate fibers containing myoglobin"
+→ A=false（纯描述性，无具体数值）
+
+示例5 — 输入："Table 3.2: Collagen content (%) — beef chuck 1.8%, beef tenderloin 0.3%"
+→ A=true（含数据表格和百分比）
 
 hints 字段：
 - 如果 A=true，尝试识别可能匹配的 MF 编号\
@@ -201,6 +225,79 @@ def default_signal(page_num: int, skip_reason: str | None = None, all_true: bool
         "skip_reason": skip_reason,
     }
 
+# ── Lingya (灵雅) API call — qwen3.5-flash fallback ──────────────────────────
+
+def call_lingya(
+    page_num: int,
+    page_text: str,
+    model: str = "qwen3.5-flash",
+    api_endpoint: str = "",
+    api_key: str = "",
+    retries: int = 3,
+    logger: logging.Logger | None = None,
+) -> dict[str, Any]:
+    """
+    Call 灵雅 (L0_API_ENDPOINT) for signal routing via Anthropic-compatible API.
+    Used as escalation when 9b/27b local models don't meet recall targets.
+    """
+    log = logger or logging.getLogger(__name__)
+    if not api_endpoint:
+        api_endpoint = os.environ.get("L0_API_ENDPOINT", "")
+    if not api_key:
+        api_key = os.environ.get("L0_API_KEY", "")
+    if not api_endpoint:
+        log.error("[router] L0_API_ENDPOINT not set — cannot use lingya provider")
+        return default_signal(page_num, skip_reason="lingya_unconfigured")
+
+    endpoint = api_endpoint.rstrip("/") + "/v1/messages"
+    text_snippet = page_text[:3000] if len(page_text) > 3000 else page_text
+    user_content = USER_TEMPLATE.format(page_number=page_num, page_text=text_snippet)
+
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    body = {
+        "model": model,
+        "max_tokens": 512,
+        "stream": True,
+        "system": SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": user_content}],
+    }
+
+    for attempt in range(1, retries + 1):
+        try:
+            chunks: list[str] = []
+            with httpx.Client(trust_env=False, timeout=60, follow_redirects=False) as client:
+                with client.stream("POST", endpoint, headers=headers, json=body) as resp:
+                    resp.raise_for_status()
+                    for line in resp.iter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            ev = json.loads(data_str)
+                            if ev.get("type") == "content_block_delta":
+                                delta = ev.get("delta", {})
+                                if delta.get("type") == "text_delta":
+                                    chunks.append(delta["text"])
+                        except Exception:
+                            pass
+            text = "".join(chunks).strip()
+            return parse_signal_json(text, page_num, log)
+        except Exception as e:
+            log.warning(f"[router] lingya page {page_num} attempt {attempt} failed: {e}")
+            if attempt == retries:
+                log.error(f"[router] lingya page {page_num} all retries failed")
+                return default_signal(page_num, skip_reason=f"lingya_error: {e}")
+            time.sleep(2 ** attempt)
+
+    return default_signal(page_num)
+
+
 # ── Resume helpers ────────────────────────────────────────────────────────────
 
 def load_existing_signals(path: Path) -> dict[int, dict]:
@@ -292,6 +389,8 @@ def main() -> None:
 
         if not page_text.strip():
             sig = default_signal(page_num, skip_reason="blank_page")
+        elif args.provider == "lingya":
+            sig = call_lingya(page_num, page_text, model=args.lingya_model, logger=log)
         else:
             sig = call_ollama(page_num, page_text, model=args.model, logger=log)
 

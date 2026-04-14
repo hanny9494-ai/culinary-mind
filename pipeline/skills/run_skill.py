@@ -40,9 +40,10 @@ def load_api_config() -> dict:
         return yaml.safe_load(f)
 
 def resolve_env(val: Any) -> Any:
-    if isinstance(val, str) and val.startswith("${") and val.endswith("}"):
-        return os.environ.get(val[2:-1], "")
-    return val
+    """Replace ${VAR} placeholders anywhere in a string."""
+    if not isinstance(val, str):
+        return val
+    return re.sub(r"\$\{([^}]+)\}", lambda m: os.environ.get(m.group(1), ""), val)
 
 # ── System prompts (from config/skill-routes.md) ──────────────────────────────
 
@@ -168,19 +169,36 @@ SKILL_SIGNAL_KEY = {"a": "A", "b": "B", "c": "C", "d": "D"}
 
 # ── LLM API callers ───────────────────────────────────────────────────────────
 
-def call_aigocode(
+# Backoff delays for retry: 2s / 4s / 8s on 429/503
+_RETRY_DELAYS = [2, 4, 8]
+_RETRY_STATUS = {429, 500, 502, 503, 504}
+
+
+def _should_retry(exc: Exception) -> bool:
+    """Return True if this exception warrants a retry with backoff."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in _RETRY_STATUS
+    return isinstance(exc, (httpx.RequestError, httpx.TimeoutException))
+
+
+def call_anthropic_stream(
     system: str,
     user: str,
-    cfg: dict,
+    endpoint: str,
+    api_key: str,
+    model: str,
+    timeout_sec: float = 120,
     retries: int = 3,
     log: logging.Logger | None = None,
+    label: str = "llm",
 ) -> str:
-    """Call aigocode API with SSE streaming (non-streaming drops content)."""
+    """
+    Generic Anthropic-format SSE streaming call.
+    Works for aigocode AND 灵雅 (L0_API_ENDPOINT) — both use /v1/messages.
+    Non-streaming mode is known to drop message.content on some servers,
+    so we always use stream=True and accumulate text_delta events.
+    """
     l = log or logging.getLogger(__name__)
-    endpoint = resolve_env(cfg["endpoint"])
-    api_key  = resolve_env(cfg["api_key"])
-    model    = cfg["models"]["opus"]
-
     headers = {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
@@ -188,7 +206,7 @@ def call_aigocode(
     }
     body = {
         "model": model,
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "stream": True,
         "system": system,
         "messages": [{"role": "user", "content": user}],
@@ -197,7 +215,7 @@ def call_aigocode(
     for attempt in range(1, retries + 1):
         try:
             chunks: list[str] = []
-            with httpx.Client(trust_env=False, timeout=cfg.get("timeout_sec", 120), follow_redirects=False) as client:
+            with httpx.Client(trust_env=False, timeout=timeout_sec, follow_redirects=False) as client:
                 with client.stream("POST", endpoint, headers=headers, json=body) as resp:
                     resp.raise_for_status()
                     for line in resp.iter_lines():
@@ -216,11 +234,38 @@ def call_aigocode(
                             pass
             return "".join(chunks).strip()
         except Exception as e:
-            l.warning(f"[skill] aigocode attempt {attempt} failed: {e}")
+            l.warning(f"[skill] {label} attempt {attempt}/{retries} failed: {e}")
             if attempt == retries:
                 raise
-            time.sleep(2 ** attempt)
+            delay = _RETRY_DELAYS[min(attempt - 1, len(_RETRY_DELAYS) - 1)]
+            if _should_retry(e):
+                l.info(f"[skill] {label} backoff {delay}s (429/5xx)")
+                time.sleep(delay)
+            else:
+                time.sleep(delay)
     return ""
+
+
+def call_aigocode(
+    system: str,
+    user: str,
+    cfg: dict,
+    retries: int = 3,
+    log: logging.Logger | None = None,
+) -> str:
+    """Call aigocode API with SSE streaming (non-streaming drops content)."""
+    return call_anthropic_stream(
+        system=system,
+        user=user,
+        endpoint=resolve_env(cfg["endpoint"]),
+        api_key=resolve_env(cfg["api_key"]),
+        model=cfg["models"]["opus"],
+        timeout_sec=cfg.get("timeout_sec", 120),
+        retries=retries,
+        log=log,
+        label="aigocode",
+    )
+
 
 def call_gemini_flash(
     system: str,
@@ -229,38 +274,22 @@ def call_gemini_flash(
     retries: int = 3,
     log: logging.Logger | None = None,
 ) -> str:
-    """Call Gemini Flash via Google REST API."""
-    l = log or logging.getLogger(__name__)
-    base     = resolve_env(cfg["endpoint"])
-    api_key  = resolve_env(cfg["api_key"])
-    model    = cfg["models"]["flash"]
-    url      = f"{base}/models/{model}:generateContent?key={api_key}"
+    """
+    Call Gemini Flash via 灵雅 (L0_API_ENDPOINT) — Anthropic-compatible /v1/messages.
+    Switched from Google REST API to 灵雅 to avoid 429 rate limits (2026-04-15).
+    """
+    return call_anthropic_stream(
+        system=system,
+        user=user,
+        endpoint=resolve_env(cfg["endpoint"]),
+        api_key=resolve_env(cfg["api_key"]),
+        model=cfg["models"]["flash"],
+        timeout_sec=cfg.get("timeout_sec", 60),
+        retries=retries,
+        log=log,
+        label="lingya_flash",
+    )
 
-    body = {
-        "systemInstruction": {"parts": [{"text": system}]},
-        "contents": [{"role": "user", "parts": [{"text": user}]}],
-        "generationConfig": {"maxOutputTokens": 8192, "temperature": 0},
-    }
-
-    for attempt in range(1, retries + 1):
-        try:
-            with httpx.Client(trust_env=False, timeout=cfg.get("timeout_sec", 60), follow_redirects=False) as client:
-                resp = client.post(url, json=body)
-            resp.raise_for_status()
-            data = resp.json()
-            # Parse Gemini response
-            candidates = data.get("candidates", [])
-            if not candidates:
-                raise ValueError(f"Empty candidates in Gemini response: {data}")
-            content = candidates[0].get("content", {})
-            parts = content.get("parts", [])
-            return "".join(p.get("text","") for p in parts).strip()
-        except Exception as e:
-            l.warning(f"[skill] gemini_flash attempt {attempt} failed: {e}")
-            if attempt == retries:
-                raise
-            time.sleep(2 ** attempt)
-    return ""
 
 def call_llm(skill: str, user_text: str, cfg: dict, log: logging.Logger) -> str:
     system = SKILL_PROMPTS[skill]
