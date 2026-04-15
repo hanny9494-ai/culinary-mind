@@ -13,7 +13,8 @@
   purpose: science+recipe
   skills: ["A", "B", "C", "D"]
   priority: P0
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: done
@@ -31,7 +32,8 @@
   purpose: science+recipe
   skills: ["A", "B", "C", "D"]
   priority: P0
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: done
@@ -49,7 +51,8 @@
   purpose: science+recipe
   skills: ["A", "B", "C", "D"]
   priority: P0
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: done
@@ -67,7 +70,8 @@
   purpose: science+recipe
   skills: ["A", "B", "C", "D"]
   priority: P0
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: done
@@ -85,7 +89,8 @@
   purpose: science+recipe
   skills: ["A", "B", "C", "D"]
   priority: P0
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: done
@@ -103,7 +108,8 @@
   purpose: science+recipe
   skills: ["A", "B", "C", "D"]
   priority: P0
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: done
@@ -121,7 +127,8 @@
   purpose: science+recipe
   skills: ["A", "B", "C", "D"]
   priority: P0
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: done
@@ -139,7 +146,8 @@
   purpose: science+recipe
   skills: ["A", "B", "C", "D"]
   priority: P0
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: done
@@ -160,7 +168,8 @@
   purpose: science+recipe
   skills: ["A", "B", "C", "D"]
   priority: P1
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: done
@@ -177,7 +186,8 @@
   purpose: science+recipe
   skills: ["A", "B", "C", "D"]
   priority: P1
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: done
@@ -194,7 +204,8 @@
   purpose: science+recipe
   skills: ["A", "B", "C", "D"]
   priority: P1
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: done
@@ -211,7 +222,8 @@
   purpose: science+recipe
   skills: ["A", "B", "C", "D"]
   priority: P1
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: done
@@ -228,7 +240,8 @@
   purpose: science+recipe
   skills: ["A", "B", "C", "D"]
   priority: P1
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: done
@@ -245,7 +258,8 @@
   purpose: science+recipe
   skills: ["A", "B", "C", "D"]
   priority: P1
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: done
@@ -262,7 +276,8 @@
   purpose: science+recipe
   skills: ["A", "B", "C", "D"]
   priority: P1
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: done
@@ -279,7 +294,8 @@
   purpose: science+recipe
   skills: ["A", "B", "C", "D"]
   priority: P1
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: done
@@ -296,7 +312,8 @@
   purpose: science+recipe
   skills: ["A", "B", "C", "D"]
   priority: P1
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: done
@@ -313,7 +330,8 @@
   purpose: science+recipe
   skills: ["A", "B", "C", "D"]
   priority: P1
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: done
@@ -332,7 +350,8 @@
   purpose: science+recipe
   skills: ["A", "C", "D"]
   priority: P2
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: skip
@@ -350,6 +369,7 @@
   purpose: science+recipe
   skills: ["B", "C", "D"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -366,6 +386,7 @@
   purpose: science+recipe
   skills: ["B", "C", "D"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -382,6 +403,7 @@
   purpose: science+recipe
   skills: ["B", "C", "D"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -398,6 +420,7 @@
   purpose: science+recipe
   skills: ["B", "C", "D"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -414,6 +437,7 @@
   purpose: science+recipe
   skills: ["B", "C", "D"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -430,6 +454,7 @@
   skills: ["B", "C", "D"]
   priority: P2
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -445,6 +470,7 @@
   purpose: science+recipe
   skills: ["B", "C", "D"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -460,6 +486,7 @@
   purpose: science+recipe
   skills: ["B", "C", "D"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -475,6 +502,7 @@
   purpose: science+recipe
   skills: ["B", "C", "D"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -490,6 +518,7 @@
   purpose: science+recipe
   skills: ["B", "C", "D"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -505,7 +534,8 @@
   purpose: science+recipe
   skills: ["A", "C", "D"]
   priority: P2
-  ocr_status: done
+  ocr_status: needs_reocr
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: pending
   skill_b_status: skip
@@ -522,6 +552,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -537,6 +568,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -556,6 +588,7 @@
   purpose: science+recipe
   skills: ["B", "C", "D"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -571,6 +604,7 @@
   purpose: science+recipe
   skills: ["B", "C", "D"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -590,7 +624,8 @@
   language: en
   purpose: science+recipe
   skills: ["B", "C", "D"]
-  ocr_status: pending
+  ocr_status: done
+  ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -605,7 +640,8 @@
   language: en
   purpose: science+recipe
   skills: ["B", "C", "D"]
-  ocr_status: pending
+  ocr_status: done
+  ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -622,6 +658,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -636,7 +673,8 @@
   language: en
   purpose: science+recipe
   skills: ["B", "C", "D"]
-  ocr_status: pending
+  ocr_status: done
+  ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -650,7 +688,8 @@
   language: en
   purpose: science+recipe
   skills: ["B", "C", "D"]
-  ocr_status: pending
+  ocr_status: done
+  ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -665,7 +704,8 @@
   language: en
   purpose: science+recipe
   skills: ["B", "C", "D"]
-  ocr_status: pending
+  ocr_status: done
+  ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -680,7 +720,8 @@
   language: en
   purpose: science+recipe
   skills: ["B", "C", "D"]
-  ocr_status: pending
+  ocr_status: done
+  ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -695,7 +736,8 @@
   language: en
   purpose: science+recipe
   skills: ["B", "C", "D"]
-  ocr_status: pending
+  ocr_status: done
+  ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -710,7 +752,8 @@
   language: en
   purpose: science+recipe
   skills: ["B", "C", "D"]
-  ocr_status: pending
+  ocr_status: done
+  ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -725,7 +768,8 @@
   language: en
   purpose: science+recipe
   skills: ["B", "C", "D"]
-  ocr_status: pending
+  ocr_status: done
+  ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -740,7 +784,8 @@
   language: en
   purpose: science+recipe
   skills: ["B", "C", "D"]
-  ocr_status: pending
+  ocr_status: done
+  ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -761,6 +806,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -774,6 +820,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -787,6 +834,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -800,6 +848,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -813,6 +862,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -826,6 +876,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -839,6 +890,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -852,6 +904,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -865,6 +918,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -878,6 +932,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -891,6 +946,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -904,6 +960,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -917,6 +974,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -930,6 +988,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -943,6 +1002,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -956,6 +1016,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -969,6 +1030,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -982,6 +1044,7 @@
   purpose: recipe_only
   skills: ["C"]
   ocr_status: done
+  ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
@@ -1003,6 +1066,7 @@
   purpose: aesthetic_culture
   skills: ["B", "C", "D"]
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -1021,6 +1085,7 @@
   purpose: aesthetic_culture
   skills: ["B", "C", "D"]
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -1038,6 +1103,7 @@
   purpose: aesthetic_culture
   skills: ["B", "C", "D"]
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -1056,6 +1122,7 @@
   purpose: aesthetic_culture
   skills: ["B", "C", "D"]
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -1073,6 +1140,7 @@
   purpose: aesthetic_culture
   skills: ["B", "C", "D"]
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -1090,6 +1158,7 @@
   purpose: aesthetic_culture
   skills: ["B", "C", "D"]
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -1107,6 +1176,7 @@
   purpose: aesthetic_culture
   skills: ["B", "C", "D"]
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -1124,6 +1194,7 @@
   purpose: aesthetic_culture
   skills: ["B", "C", "D"]
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -1142,6 +1213,7 @@
   purpose: aesthetic_culture
   skills: ["B", "C", "D"]
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -1159,6 +1231,7 @@
   purpose: aesthetic_culture
   skills: ["B", "C", "D"]
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -1176,6 +1249,7 @@
   purpose: aesthetic_culture
   skills: ["B", "C", "D"]
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -1193,6 +1267,7 @@
   purpose: aesthetic_culture
   skills: ["B", "C", "D"]
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -1210,6 +1285,7 @@
   purpose: aesthetic_culture
   skills: ["B", "C", "D"]
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -1228,6 +1304,7 @@
   purpose: aesthetic_culture
   skills: ["B", "C", "D"]
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -1245,6 +1322,7 @@
   purpose: aesthetic_culture
   skills: ["B", "C", "D"]
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: skip
   skill_b_status: pending
@@ -1263,6 +1341,7 @@
   purpose: aesthetic_culture
   skills: ["B", "C", "D"]
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -1280,6 +1359,7 @@
   purpose: aesthetic_culture
   skills: ["B", "C", "D"]
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
@@ -1300,6 +1380,7 @@
   skills: ["A"]
   priority: P0
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: pending
   skill_b_status: skip
@@ -1318,6 +1399,7 @@
   skills: ["A"]
   priority: P0
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: pending
   skill_b_status: skip
@@ -1335,6 +1417,7 @@
   skills: ["A"]
   priority: P0
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: pending
   skill_b_status: skip
@@ -1355,6 +1438,7 @@
   skills: ["A"]
   priority: P1
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: pending
   skill_b_status: skip
@@ -1373,6 +1457,7 @@
   skills: ["A"]
   priority: P1
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: pending
   skill_b_status: skip
@@ -1390,6 +1475,7 @@
   skills: ["A"]
   priority: P1
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: pending
   skill_b_status: skip
@@ -1407,6 +1493,7 @@
   skills: ["A"]
   priority: P1
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: pending
   skill_b_status: skip
@@ -1424,6 +1511,7 @@
   skills: ["A"]
   priority: P1
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: pending
   skill_b_status: skip
@@ -1444,6 +1532,7 @@
   skills: ["A"]
   priority: P2
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: pending
   skill_b_status: skip
@@ -1462,6 +1551,7 @@
   skills: ["A"]
   priority: P2
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: pending
   skill_b_status: skip
@@ -1479,6 +1569,7 @@
   skills: ["A"]
   priority: P2
   ocr_status: pending
+  ocr_tool: none
   signal_status: pending
   skill_a_status: pending
   skill_b_status: skip
