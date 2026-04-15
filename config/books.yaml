@@ -1,1312 +1,1490 @@
-# 书目注册表 v3 — Architecture v2.1 双轨制 (2026-04-13 updated)
-#
-# 字段说明:
-#   purpose: science+recipe | recipe_only | engineering_textbook | aesthetic_culture
-#   track: dual_track | track_a_only | track_b_only
-#   track_a_status: done | running | pending | skip  (定量参数提取)
-#   track_b_status: done | running | pending | skip  (定性L0因果链提取)
-#   track_a_priority: P0 | P1 | P2                   (Track A 执行优先级)
-#   parameter_density: extreme | high | medium | low  (参数密度评估)
-#   recipe_status: done | pending
-#   target_formulas: 匹配的 MotherFormula ID
+# 书目注册表 v4 — 6-Claw OpenClaw 体系 (2026-04-16)
+# 每本书 6 个状态字段，一目了然
+# ocr → signal → skill_a/b/c/d
+# skills: 该书需要哪些 skill（不在列表里的自动 skip）
 
-# ══════════════════════════════════════════════════════════════════
-# 一、已完成 Track B 的科学书 (32本)
-# ══════════════════════════════════════════════════════════════════
 
 # ── Track A P0: 参数金矿 (8本, Wave 1 本周启动) ──
 
 - id: mc_vol1
-  skills: ["A", "B", "C", "D"]
-  title: Modernist Cuisine Vol 1 - History and Fundamentals
-  author: Nathan Myhrvold
+  title: "Modernist Cuisine Vol 1 - History and Fundamentals"
+  author: "Nathan Myhrvold"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P0
+  skills: ["A", "B", "C", "D"]
+  priority: P0
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: extreme
   l0_count: 3110
-  recipe_status: done
   recipe_count: 2145
   note: "sous-vide矩阵、精确温度/时间表，L2b Cache冷启动首选"
 
 - id: mc_vol2
-  skills: ["A", "B", "C", "D"]
-  title: Modernist Cuisine Vol 2 - Techniques and Equipment
-  author: Nathan Myhrvold
+  title: "Modernist Cuisine Vol 2 - Techniques and Equipment"
+  author: "Nathan Myhrvold"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P0
+  skills: ["A", "B", "C", "D"]
+  priority: P0
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: extreme
   l0_count: 893
-  recipe_status: done
   recipe_count: 483
-  note: "设备参数(L1)、烹饪技法精确参数"
+  note: 设备参数(L1)、烹饪技法精确参数
 
 - id: mc_vol3
-  skills: ["A", "B", "C", "D"]
-  title: Modernist Cuisine Vol 3 - Animals and Plants
-  author: Nathan Myhrvold
+  title: "Modernist Cuisine Vol 3 - Animals and Plants"
+  author: "Nathan Myhrvold"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P0
+  skills: ["A", "B", "C", "D"]
+  priority: P0
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: extreme
   l0_count: 1059
-  recipe_status: done
   recipe_count: 501
-  note: "蛋白质变性温度表、肉类sous-vide全参数"
+  note: 蛋白质变性温度表、肉类sous-vide全参数
 
 - id: mc_vol4
-  skills: ["A", "B", "C", "D"]
-  title: Modernist Cuisine Vol 4 - Ingredients and Preparations
-  author: Nathan Myhrvold
+  title: "Modernist Cuisine Vol 4 - Ingredients and Preparations"
+  author: "Nathan Myhrvold"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P0
+  skills: ["A", "B", "C", "D"]
+  priority: P0
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: extreme
   l0_count: 1034
-  recipe_status: done
   recipe_count: 703
-  note: "凝胶/乳化/发泡配比表"
+  note: 凝胶/乳化/发泡配比表
 
 - id: food_lab
-  skills: ["A", "B", "C", "D"]
-  title: The Food Lab
-  author: J. Kenji López-Alt
+  title: "The Food Lab"
+  author: "J. Kenji López-Alt"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P0
+  skills: ["A", "B", "C", "D"]
+  priority: P0
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: high
   l0_count: 2242
-  recipe_status: done
   recipe_count: 2136
-  note: "实验驱动，精确温度/时间/比例，Phenomenon种子源"
+  note: 实验驱动，精确温度/时间/比例，Phenomenon种子源
 
 - id: science_good_cooking
-  skills: ["A", "B", "C", "D"]
-  title: The Science of Good Cooking
-  author: America's Test Kitchen
+  title: "The Science of Good Cooking"
+  author: "America's Test Kitchen"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P0
+  skills: ["A", "B", "C", "D"]
+  priority: P0
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: high
   l0_count: 3806
-  recipe_status: done
   recipe_count: 2802
-  note: "ATK实验数据，每个概念配精确参数"
+  note: ATK实验数据，每个概念配精确参数
 
 - id: chocolates_confections
-  skills: ["A", "B", "C", "D"]
-  title: Chocolates and Confections
-  author: Peter Greweling
+  title: "Chocolates and Confections"
+  author: "Peter Greweling"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P0
+  skills: ["A", "B", "C", "D"]
+  priority: P0
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: high
   l0_count: 1934
-  recipe_status: done
   recipe_count: 908
-  note: "巧克力调温精确晶型温度、糖果配比"
+  note: 巧克力调温精确晶型温度、糖果配比
 
 - id: science_of_chocolate
-  skills: ["A", "B", "C", "D"]
-  title: The Science of Chocolate
-  author: Stephen Beckett
+  title: "The Science of Chocolate"
+  author: "Stephen Beckett"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P0
+  skills: ["A", "B", "C", "D"]
+  priority: P0
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: high
   l0_count: 1577
-  recipe_status: done
   recipe_count: 657
-  note: "可可脂多形态相变温度表、调温曲线参数"
+  note: 可可脂多形态相变温度表、调温曲线参数
+
 
 # ── Track A P1: 中等参数密度 (10本, Wave 2 下周) ──
 
 - id: professional_baking
-  skills: ["A", "B", "C", "D"]
-  title: Professional Baking 7th Edition
-  author: Wayne Gisslen
+  title: "Professional Baking 7th Edition"
+  author: "Wayne Gisslen"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P1
+  skills: ["A", "B", "C", "D"]
+  priority: P1
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: medium
   l0_count: 2136
-  recipe_status: done
   recipe_count: 3312
 
 - id: bread_hamelman
-  skills: ["A", "B", "C", "D"]
-  title: Bread - A Baker's Book of Techniques
-  author: Jeffrey Hamelman
+  title: "Bread - A Baker's Book of Techniques"
+  author: "Jeffrey Hamelman"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P1
+  skills: ["A", "B", "C", "D"]
+  priority: P1
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: medium
   l0_count: 1669
-  recipe_status: done
   recipe_count: 2302
 
 - id: molecular_gastronomy
-  skills: ["A", "B", "C", "D"]
-  title: Molecular Gastronomy
-  author: Hervé This
+  title: "Molecular Gastronomy"
+  author: "Hervé This"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P1
+  skills: ["A", "B", "C", "D"]
+  priority: P1
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: medium
   l0_count: 1951
-  recipe_status: done
   recipe_count: 809
 
 - id: mouthfeel
-  skills: ["A", "B", "C", "D"]
-  title: Mouthfeel - How Texture Makes Taste
-  author: Ole Mouritsen
+  title: "Mouthfeel - How Texture Makes Taste"
+  author: "Ole Mouritsen"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P1
+  skills: ["A", "B", "C", "D"]
+  priority: P1
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: medium
   l0_count: 2410
-  recipe_status: done
   recipe_count: 1144
 
 - id: cooking_for_geeks
-  skills: ["A", "B", "C", "D"]
-  title: Cooking for Geeks
-  author: Jeff Potter
+  title: "Cooking for Geeks"
+  author: "Jeff Potter"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P1
+  skills: ["A", "B", "C", "D"]
+  priority: P1
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: medium
   l0_count: 2266
-  recipe_status: done
   recipe_count: 1460
 
 - id: modernist_pizza
-  skills: ["A", "B", "C", "D"]
-  title: Modernist Pizza
-  author: Nathan Myhrvold
+  title: "Modernist Pizza"
+  author: "Nathan Myhrvold"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P1
+  skills: ["A", "B", "C", "D"]
+  priority: P1
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: medium
   l0_count: 1300
-  recipe_status: done
   recipe_count: 1119
 
 - id: koji_alchemy
-  skills: ["A", "B", "C", "D"]
-  title: Koji Alchemy
-  author: Rich Shih & Jeremy Umansky
+  title: "Koji Alchemy"
+  author: "Rich Shih & Jeremy Umansky"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P1
+  skills: ["A", "B", "C", "D"]
+  priority: P1
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: medium
   l0_count: 978
-  recipe_status: done
   recipe_count: 664
 
 - id: noma_fermentation
-  skills: ["A", "B", "C", "D"]
-  title: The Noma Guide to Fermentation
-  author: René Redzepi & David Zilber
+  title: "The Noma Guide to Fermentation"
+  author: "René Redzepi & David Zilber"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P1
+  skills: ["A", "B", "C", "D"]
+  priority: P1
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: medium
   l0_count: 850
-  recipe_status: done
   recipe_count: 614
 
 - id: ratio
-  skills: ["A", "B", "C", "D"]
   title: Ratio
-  author: Michael Ruhlman
+  author: "Michael Ruhlman"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P1
+  skills: ["A", "B", "C", "D"]
+  priority: P1
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: medium
   l0_count: 355
-  recipe_status: done
   recipe_count: 465
 
 - id: essentials_food_science
-  skills: ["A", "B", "C", "D"]
-  title: Essentials of Food Science
-  author: Vaclavik & Christian
+  title: "Essentials of Food Science"
+  author: "Vaclavik & Christian"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: running
-  track_a_status: pending
-  track_a_priority: P1
+  skills: ["A", "B", "C", "D"]
+  priority: P1
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: medium
-  recipe_status: done
   recipe_count: 1887
+
 
 # ── Track A P2 或 Skip (14本) ──
 
 - id: ofc
-  skills: ["A", "C", "D"]
-  title: On Food and Cooking
-  author: Harold McGee
+  title: "On Food and Cooking"
+  author: "Harold McGee"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P2
+  skills: ["A", "C", "D"]
+  priority: P2
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: skip
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
   l0_count: 3955
-  recipe_status: done
   recipe_count: 894
   note: "百科全书式定性描述，Track B已提取精华"
 
 - id: flavorama
-  skills: ["B", "C", "D"]
   title: Flavorama
-  author: Arielle Johnson
+  author: "Arielle Johnson"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
   l0_count: 1258
-  recipe_status: done
   recipe_count: 1139
 
 - id: science_of_spice
-  skills: ["B", "C", "D"]
-  title: The Science of Spice
-  author: Stuart Farrimond
+  title: "The Science of Spice"
+  author: "Stuart Farrimond"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
   l0_count: 960
-  recipe_status: done
   recipe_count: 1124
 
 - id: salt_fat_acid_heat
-  skills: ["B", "C", "D"]
-  title: Salt Fat Acid Heat
-  author: Samin Nosrat
+  title: "Salt Fat Acid Heat"
+  author: "Samin Nosrat"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
   l0_count: 910
-  recipe_status: done
   recipe_count: 1018
 
 - id: taste_whats_missing
-  skills: ["B", "C", "D"]
-  title: Taste - What You're Missing
-  author: Barb Stuckey
+  title: "Taste - What You're Missing"
+  author: "Barb Stuckey"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
   l0_count: 730
-  recipe_status: done
   recipe_count: 678
 
 - id: neurogastronomy
-  skills: ["B", "C", "D"]
   title: Neurogastronomy
-  author: Gordon Shepherd
+  author: "Gordon Shepherd"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
   l0_count: 464
-  recipe_status: done
   recipe_count: 613
 
 - id: ice_cream_flavor
-  skills: ["B", "C", "D"]
   title: 冰淇淋风味学
   language: zh
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P2
+  skills: ["B", "C", "D"]
+  priority: P2
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: medium
   l0_count: 414
-  recipe_status: done
   recipe_count: 215
 
 - id: bread_science_yoshino
-  skills: ["B", "C", "D"]
-  title: パンの科学 (Bread Science)
+  title: "パンの科学 (Bread Science)"
   language: ja
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
   l0_count: 522
-  recipe_status: done
   recipe_count: 208
 
 - id: dashi_umami
-  skills: ["B", "C", "D"]
-  title: Dashi and Umami
+  title: "Dashi and Umami"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
   l0_count: 170
-  recipe_status: done
   recipe_count: 265
 
 - id: flavor_bible
-  skills: ["B", "C", "D"]
-  title: The Flavor Bible
+  title: "The Flavor Bible"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
   l0_count: 124
-  recipe_status: done
   recipe_count: 1123
 
 - id: professional_pastry_chef
-  skills: ["B", "C", "D"]
-  title: The Professional Pastry Chef
+  title: "The Professional Pastry Chef"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
   l0_count: 1716
-  recipe_status: done
   recipe_count: 16
 
 - id: handbook_molecular_gastronomy
-  skills: ["A", "C", "D"]
-  title: Handbook of Molecular Gastronomy
+  title: "Handbook of Molecular Gastronomy"
   language: en
   purpose: science+recipe
-  track: dual_track
-  track_b_status: done
-  track_a_status: pending
-  track_a_priority: P2
+  skills: ["A", "C", "D"]
+  priority: P2
+  ocr_status: done
+  signal_status: done
+  skill_a_status: pending
+  skill_b_status: skip
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: medium
   l0_count: 10
-  recipe_status: done
   recipe_count: 521
-  note: "与MC系列重叠度高，作为交叉验证源"
+  note: 与MC系列重叠度高，作为交叉验证源
 
 - id: bocuse_cookbook
-  skills: ["C"]
-  title: Bocuse - The Complete Recipes
+  title: "Bocuse - The Complete Recipes"
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   parameter_density: low
   l0_count: 121
-  recipe_status: done
   recipe_count: 335
 
 - id: french_sauces
-  skills: ["C"]
-  title: French Sauces
+  title: "French Sauces"
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   parameter_density: low
   l0_count: 78
-  recipe_status: done
   recipe_count: 125
+
 
 # ── Track B running (3本) ──
 
 - id: japanese_cooking_tsuji
-  skills: ["B", "C", "D"]
-  title: Japanese Cooking - A Simple Art
-  author: Shizuo Tsuji
+  title: "Japanese Cooking - A Simple Art"
+  author: "Shizuo Tsuji"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: running
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
   recipe_count: 300
 
 - id: jacques_pepin
-  skills: ["B", "C", "D"]
-  title: Jacques Pépin New Complete Techniques
-  author: Jacques Pépin
+  title: "Jacques Pépin New Complete Techniques"
+  author: "Jacques Pépin"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: running
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
   recipe_count: 1111
+
 
 # ══════════════════════════════════════════════════════════════════
 # 二、Pending 英文书 (Track B 待跑, 11本)
 # ══════════════════════════════════════════════════════════════════
 
 - id: franklin_barbecue
-  skills: ["B", "C", "D"]
-  title: Franklin Barbecue
-  author: Aaron Franklin
+  title: "Franklin Barbecue"
+  author: "Aaron Franklin"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
   recipe_count: 487
 
 - id: sous_vide_keller
-  skills: ["B", "C", "D"]
-  title: Under Pressure - Cooking Sous Vide
-  author: Thomas Keller
+  title: "Under Pressure - Cooking Sous Vide"
+  author: "Thomas Keller"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
   recipe_count: 653
-  note: "sous-vide参数已被MC覆盖"
+  note: sous-vide参数已被MC覆盖
 
 - id: noma_vegetable
-  skills: ["C"]
-  title: Noma - Time and Place in Nordic Cuisine
-  author: René Redzepi
+  title: "Noma - Time and Place in Nordic Cuisine"
+  author: "René Redzepi"
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   parameter_density: low
-  recipe_status: done
   recipe_count: 147
 
 - id: flavor_thesaurus
-  skills: ["B", "C", "D"]
-  title: The Flavor Thesaurus
-  author: Niki Segnit
+  title: "The Flavor Thesaurus"
+  author: "Niki Segnit"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
   recipe_count: 1075
 
 - id: vegetarian_flavor_bible
-  skills: ["B", "C", "D"]
-  title: The Vegetarian Flavor Bible
+  title: "The Vegetarian Flavor Bible"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
   recipe_count: 1740
 
 - id: charcuterie
-  skills: ["B", "C", "D"]
   title: Charcuterie
-  author: Michael Ruhlman
+  author: "Michael Ruhlman"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
   recipe_count: 766
 
 - id: art_of_fermentation
-  skills: ["B", "C", "D"]
-  title: The Art of Fermentation
-  author: Sandor Katz
+  title: "The Art of Fermentation"
+  author: "Sandor Katz"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
   recipe_count: 1575
 
 - id: professional_chef
-  skills: ["B", "C", "D"]
-  title: The Professional Chef
+  title: "The Professional Chef"
   author: CIA
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
   recipe_count: 2261
 
 - id: flavor_equation
-  skills: ["B", "C", "D"]
-  title: The Flavor Equation
-  author: Nik Sharma
+  title: "The Flavor Equation"
+  author: "Nik Sharma"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
   recipe_count: 902
 
 - id: french_patisserie
-  skills: ["B", "C", "D"]
-  title: French Pâtisserie (Ferrandi)
-  author: FERRANDI Paris
+  title: "French Pâtisserie (Ferrandi)"
+  author: "FERRANDI Paris"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
   recipe_count: 2159
 
 - id: phoenix_claws
-  skills: ["B", "C", "D"]
-  title: Phoenix Claws and Jade Trees
-  author: Kian Lam Kho
+  title: "Phoenix Claws and Jade Trees"
+  author: "Kian Lam Kho"
   language: en
   purpose: science+recipe
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
   recipe_count: 750
-  note: "L6翻译层素材"
+  note: L6翻译层素材
+
 
 # ══════════════════════════════════════════════════════════════════
 # 三、纯食谱书 (19本, Track B done, Track A skip)
 # ══════════════════════════════════════════════════════════════════
 
 - id: alinea_-_grant_achatz
-  skills: ["C"]
   title: Alinea
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
-  recipe_status: done
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   recipe_count: 822
 
 - id: bouchon_-_thomas_keller
-  skills: ["C"]
   title: Bouchon
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
-  recipe_status: done
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   recipe_count: 839
 
 - id: core_-_clare_smyth
-  skills: ["C"]
   title: Core
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
-  recipe_status: done
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   recipe_count: 450
 
 - id: crave
-  skills: ["C"]
   title: Crave
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
-  recipe_status: done
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   recipe_count: 464
 
 - id: daniel_my_french_cuisine_-_daniel_boulud
-  skills: ["C"]
-  title: Daniel - My French Cuisine
+  title: "Daniel - My French Cuisine"
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
-  recipe_status: done
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   recipe_count: 972
 
 - id: dokumen.pub_the-whole-fish-cookbook-new-
-  skills: ["C"]
-  title: The Whole Fish Cookbook
+  title: "The Whole Fish Cookbook"
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
-  recipe_status: done
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   recipe_count: 329
 
 - id: eleven_madison_park_the_cookbook_-_danie
-  skills: ["C"]
-  title: Eleven Madison Park - The Cookbook
+  title: "Eleven Madison Park - The Cookbook"
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
-  recipe_status: done
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   recipe_count: 1188
 
 - id: eleven_madison_park_the_next_chapter_紫色封
-  skills: ["C"]
-  title: Eleven Madison Park - The Next Chapter
+  title: "Eleven Madison Park - The Next Chapter"
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
-  recipe_status: done
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   recipe_count: 1025
 
 - id: f1749_manresa
-  skills: ["C"]
   title: Manresa
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
-  recipe_status: done
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   recipe_count: 678
 
 - id: f2986_baltic
-  skills: ["C"]
   title: Baltic
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
-  recipe_status: done
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   recipe_count: 282
 
 - id: japanese_farm_food_-_nancy_singleton_hac
-  skills: ["C"]
-  title: Japanese Farm Food
+  title: "Japanese Farm Food"
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
-  recipe_status: done
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   recipe_count: 889
 
 - id: meat_illustrated_a_foolproof_guide_to_un
-  skills: ["C"]
-  title: Meat Illustrated
+  title: "Meat Illustrated"
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
-  recipe_status: done
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   recipe_count: 1669
 
 - id: momofuku
-  skills: ["C"]
   title: Momofuku
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
-  recipe_status: done
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   recipe_count: 623
 
 - id: organum_nature_texture_intensity_purity
-  skills: ["C"]
   title: Organum
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
-  recipe_status: done
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   recipe_count: 390
 
 - id: relae_a_book_of_ideas_-_christian_f_pugl
-  skills: ["C"]
   title: Relæ
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
-  recipe_status: done
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   recipe_count: 931
 
 - id: the-french-laundry-cookbook-978157965126
-  skills: ["C"]
-  title: The French Laundry Cookbook
+  title: "The French Laundry Cookbook"
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
-  recipe_status: done
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   recipe_count: 701
 
 - id: the_everlasting_meal_cookbook_leftovers_
-  skills: ["C"]
-  title: The Everlasting Meal Cookbook
+  title: "The Everlasting Meal Cookbook"
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
-  recipe_status: done
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   recipe_count: 1161
 
 - id: the_hand_and_flowers_cookbook
-  skills: ["C"]
-  title: The Hand and Flowers Cookbook
+  title: "The Hand and Flowers Cookbook"
   language: en
   purpose: recipe_only
-  track: track_b_only
-  track_b_status: done
-  track_a_status: skip
-  recipe_status: done
+  skills: ["C"]
+  ocr_status: done
+  signal_status: done
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: done
+  skill_d_status: skip
   recipe_count: 802
+
 
 # ══════════════════════════════════════════════════════════════════
 # 四、中文粤菜书籍 (17本, Track B + L6翻译层)
 # ══════════════════════════════════════════════════════════════════
 
 - id: shijing
-  skills: ["B", "C", "D"]
   title: 食经
-  title_en: Shijing (Classic of Food)
+  title_en: "Shijing (Classic of Food)"
   author: 陈梦因
   language: zh
   format: pdf
   purpose: aesthetic_culture
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
-  l0_status: pending
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/食经 (陈梦因) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
   note: "L2b提取完成(88 recipes)"
 
 - id: chuantong_yc
-  skills: ["B", "C", "D"]
   title: 传统粤菜精华录
-  title_en: Classic Cantonese Cuisine Essentials
-  author: 陈梦因, 江献珠
+  title_en: "Classic Cantonese Cuisine Essentials"
+  author: "陈梦因, 江献珠"
   language: zh
   format: pdf
   purpose: aesthetic_culture
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
-  l0_status: pending
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/传统粤菜精华录 (陈梦因，江献珠著) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: gufa_yc
-  skills: ["B", "C", "D"]
   title: 古法粤菜新谱
-  title_en: New Recipes of Classic Cantonese Cooking
-  author: 陈梦因, 江献珠
+  title_en: "New Recipes of Classic Cantonese Cooking"
+  author: "陈梦因, 江献珠"
   language: zh
   format: pdf
   purpose: aesthetic_culture
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
-  l0_status: pending
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/古法粤菜新谱 (陈梦因, 江献珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
   note: "L2b提取完成(237 recipes)"
 
 - id: zhujixiaoguan_6
-  skills: ["B", "C", "D"]
   title: 珠璣小館家常菜譜（第六集）
-  title_en: Pearl of the Orient Home Cooking Vol.6
+  title_en: "Pearl of the Orient Home Cooking Vol.6"
   author: 江献珠
   language: zh
   format: pdf
   purpose: aesthetic_culture
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
-  l0_status: pending
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家常菜譜 （第六集） (江献珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: zhujixiaoguan_3
-  skills: ["B", "C", "D"]
   title: 珠璣小館家饌3
-  title_en: Pearl of the Orient Home Cuisine Vol.3
+  title_en: "Pearl of the Orient Home Cuisine Vol.3"
   author: 江獻珠
   language: zh
   format: pdf
   purpose: aesthetic_culture
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
-  l0_status: pending
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家饌3 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: zhujixiaoguan_4
-  skills: ["B", "C", "D"]
   title: 珠璣小館家饌4
-  title_en: Pearl of the Orient Home Cuisine Vol.4
+  title_en: "Pearl of the Orient Home Cuisine Vol.4"
   author: 江獻珠
   language: zh
   format: pdf
   purpose: aesthetic_culture
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
-  l0_status: pending
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家饌4 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: zhujixiaoguan_2
-  skills: ["B", "C", "D"]
   title: 珠璣小館家馔2
-  title_en: Pearl of the Orient Home Cuisine Vol.2
+  title_en: "Pearl of the Orient Home Cuisine Vol.2"
   author: 江獻珠
   language: zh
   format: pdf
   purpose: aesthetic_culture
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
-  l0_status: pending
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家馔2 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: zhujixiaoguan_v6b
-  skills: ["B", "C", "D"]
   title: 珠璣小館家馔6
-  title_en: Pearl of the Orient Home Cuisine Vol.6b
+  title_en: "Pearl of the Orient Home Cuisine Vol.6b"
   author: 江獻珠
   language: zh
   format: pdf
   purpose: aesthetic_culture
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
-  l0_status: pending
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家馔6 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
   note: "L2b提取完成(110 recipes)"
 
 - id: zhujixiaoguan_dimsim2
-  skills: ["B", "C", "D"]
   title: 珠璣小館：中國點心2
-  title_en: Pearl of the Orient - Chinese Dim Sum Vol.2
+  title_en: "Pearl of the Orient - Chinese Dim Sum Vol.2"
   author: 江獻珠
   language: zh
   format: pdf
   purpose: aesthetic_culture
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
-  l0_status: pending
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館：中國點心2 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: fenbuxiangjiena_yc
-  skills: ["B", "C", "D"]
   title: 分步詳解南粵家鄉菜
-  title_en: Step-by-Step Cantonese Home Cooking
+  title_en: "Step-by-Step Cantonese Home Cooking"
   author: 江獻珠
   language: zh
   format: pdf
   purpose: aesthetic_culture
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
-  l0_status: pending
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/分步詳解-南粵家鄉菜 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: yuecan_zhenwei_meat
-  skills: ["B", "C", "D"]
   title: 粤菜真味：肉食篇
-  title_en: True Flavors of Cantonese Cuisine - Meats
+  title_en: "True Flavors of Cantonese Cuisine - Meats"
   author: 江献珠
   language: zh
   format: pdf
   purpose: aesthetic_culture
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
-  l0_status: pending
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/粤菜真味：肉食篇 (江献珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: guangdong_pengtiao_quanshu
-  skills: ["B", "C", "D"]
   title: 廣東菜烹調全書
-  title_en: Complete Book of Cantonese Cooking Techniques
+  title_en: "Complete Book of Cantonese Cooking Techniques"
   author: 陳淑儀
   language: zh
   format: pdf
   purpose: aesthetic_culture
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
-  l0_status: pending
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/廣東菜烹調全書 (陳淑儀) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: hk_yuecan_yanxi
-  skills: ["B", "C", "D"]
   title: 香港粵菜筵席譜
-  title_en: Hong Kong Cantonese Banquet Menu
+  title_en: "Hong Kong Cantonese Banquet Menu"
   author: 鲁夫
   language: zh
   format: pdf
   purpose: aesthetic_culture
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
-  l0_status: pending
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/香港粵菜筵席譜 (鲁夫) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
   note: "L2b提取完成(76 recipes)"
 
 - id: zhongguo_caipu_guangdong
-  skills: ["B", "C", "D"]
-  title: 中国菜谱 广东
-  title_en: Chinese Recipes - Guangdong Volume
+  title: "中国菜谱 广东"
+  title_en: "Chinese Recipes - Guangdong Volume"
   author: 《中国菜谱》编写组
   language: zh
   format: pdf
   purpose: aesthetic_culture
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
-  l0_status: pending
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/中国菜谱 广东 (《中国菜谱》编写组编) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
 
 - id: zhongguo_yinshi_meixueshi
-  skills: ["B", "C", "D"]
   title: 中国饮食美学史
-  title_en: History of Chinese Food Aesthetics
+  title_en: "History of Chinese Food Aesthetics"
   author: 赵建军
   language: zh
   format: pdf
   purpose: aesthetic_culture
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: pending
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: pending
-  l0_status: pending
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/中国饮食美学史 (赵建军著, 赵建军, 1958- author, Zhao Jianjun zhu etc.) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
-  note: "美学史，非食谱书"
+  note: 美学史，非食谱书
 
 - id: yuecan_wangliang
-  skills: ["B", "C", "D"]
   title: 粤菜（王亮）
-  title_en: Cantonese Cuisine (Wang Liang)
+  title_en: "Cantonese Cuisine (Wang Liang)"
   author: 王亮
   language: zh
   format: epub
   purpose: aesthetic_culture
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
-  l0_status: pending
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/粤菜 (王亮　著) (z-library.sk, 1lib.sk, z-lib.sk).epub"
 
 - id: xidage_xunwei_hk
-  skills: ["B", "C", "D"]
   title: 西打哥的尋味香港
-  title_en: Xidage's Flavor Hunt in Hong Kong
+  title_en: "Xidage's Flavor Hunt in Hong Kong"
   author: 西打哥
   language: zh
   format: epub
   purpose: aesthetic_culture
-  track: track_b_only
-  track_b_status: pending
-  track_a_status: skip
+  skills: ["B", "C", "D"]
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: skip
+  skill_b_status: done
+  skill_c_status: pending
+  skill_d_status: pending
   parameter_density: low
-  recipe_status: done
-  l0_status: pending
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/西打哥的尋味香港：從街頭小吃到餐館美饌，品嚐最道地的香港好味！ (西打哥) (z-library.sk, 1lib.sk, z-lib.sk).epub"
-  note: "游记类，2条食谱"
+  note: 游记类，2条食谱
 
-# ══════════════════════════════════════════════════════════════════
-# 五、食品工程教科书 (11本, Track A 为主)
-# ══════════════════════════════════════════════════════════════════
 
 # ── Wave 1: P0 (本周启动) ──
 
 - id: van_boekel_kinetic_modeling
-  skills: ["A"]
   title: "Kinetic Modeling of Reactions in Foods"
-  author: van Boekel
+  author: "van Boekel"
   language: en
   purpose: engineering_textbook
-  track: track_a_only
-  track_a_status: pending
-  track_a_priority: P0
+  skills: ["A"]
+  priority: P0
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: pending
+  skill_b_status: skip
+  skill_c_status: skip
+  skill_d_status: skip
   parameter_density: extreme
   target_chapters: "Ch5(Arrhenius), Ch8(Maillard), Ch9(MM), Ch10(Protein), Ch11(Physical), Ch13(Microbial)"
   target_formulas: "MF_007, MF_008, MF_010, MF_034, MF_009"
-  note: "动力学参数金矿，文件名标注Toledo实为此书"
+  note: 动力学参数金矿，文件名标注Toledo实为此书
 
 - id: rao_engineering_properties
-  skills: ["A"]
   title: "Engineering Properties of Foods, 4th Ed"
-  author: Rao, Rizvi, Datta
+  author: "Rao, Rizvi, Datta"
   language: en
   purpose: engineering_textbook
-  track: track_a_only
-  track_a_status: pending
-  track_a_priority: P0
+  skills: ["A"]
+  priority: P0
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: pending
+  skill_b_status: skip
+  skill_c_status: skip
+  skill_d_status: skip
   parameter_density: extreme
   target_chapters: "Ch2-3(Rheology), Ch4-5(Thermal), Ch7(Water Activity), Ch8(Mass Transfer), Ch13(Kinetics)"
   target_formulas: "MF_020, MF_002, MF_015, MF_014, MF_016"
 
 - id: singh_food_engineering
-  skills: ["A"]
   title: "Introduction to Food Engineering, 4th Ed"
-  author: Singh & Heldman
+  author: "Singh & Heldman"
   language: en
   purpose: engineering_textbook
-  track: track_a_only
-  track_a_status: pending
-  track_a_priority: P0
+  skills: ["A"]
+  priority: P0
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: pending
+  skill_b_status: skip
+  skill_c_status: skip
+  skill_d_status: skip
   parameter_density: high
   target_chapters: "Ch4(Heat Transfer), Ch5(Preservation), Ch7(Freezing), Ch10(Mass Transfer)"
   target_formulas: "MF_001, MF_002, MF_003, MF_006, MF_009, MF_014"
 
+
 # ── Wave 2: P1 (下周) ──
 
 - id: toledo_food_process_engineering
-  skills: ["A"]
   title: "Fundamentals of Food Process Engineering, 3rd Ed"
   author: Toledo
   language: en
   purpose: engineering_textbook
-  track: track_a_only
-  track_a_status: pending
-  track_a_priority: P1
+  skills: ["A"]
+  priority: P1
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: pending
+  skill_b_status: skip
+  skill_c_status: skip
+  skill_d_status: skip
   parameter_density: high
   target_chapters: "Ch7(Heat), Ch8(Kinetics), Ch9(Thermal Process), Ch12(Dehydration)"
   target_formulas: "MF_001, MF_007, MF_009, MF_015"
   note: "PaddleOCR pilot已通过(79页, 表格+LaTeX正确)"
 
 - id: fennema_food_chemistry
-  skills: ["A"]
   title: "Fennema's Food Chemistry, 5th Ed"
-  author: Damodaran, Parkin, Fennema
+  author: "Damodaran, Parkin, Fennema"
   language: en
   purpose: engineering_textbook
-  track: dual_track
-  track_a_status: pending
-  track_b_status: pending
-  track_a_priority: P1
+  skills: ["A"]
+  priority: P1
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: pending
+  skill_b_status: skip
+  skill_c_status: skip
+  skill_d_status: skip
   parameter_density: medium
   target_chapters: "Ch2(Water/aw), Ch5(Proteins), Ch10(Flavors), Ch13(Dispersed Systems)"
   target_formulas: "MF_015, MF_017, MF_025, MF_032"
 
 - id: belitz_food_chemistry
-  skills: ["A"]
   title: "Food Chemistry, 4th Ed"
-  author: Belitz, Grosch, Schieberle
+  author: "Belitz, Grosch, Schieberle"
   language: en
   purpose: engineering_textbook
-  track: dual_track
-  track_a_status: pending
-  track_b_status: pending
-  track_a_priority: P1
+  skills: ["A"]
+  priority: P1
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: pending
+  skill_b_status: skip
+  skill_c_status: skip
+  skill_d_status: skip
   parameter_density: high
   target_chapters: "Ch2(Enzymes/MM), Ch4§4.2.4(Maillard), Ch5(Aroma thresholds)"
   target_formulas: "MF_010, MF_008, MF_025"
 
 - id: heldman_handbook_food_engineering
-  skills: ["A"]
   title: "Handbook of Food Engineering, 3rd Ed"
-  author: Heldman, Lund, Sabliov
+  author: "Heldman, Lund, Sabliov"
   language: en
   purpose: engineering_textbook
-  track: track_a_only
-  track_a_status: pending
-  track_a_priority: P1
+  skills: ["A"]
+  priority: P1
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: pending
+  skill_b_status: skip
+  skill_c_status: skip
+  skill_d_status: skip
   parameter_density: extreme
   target_chapters: "Ch1(Rheology), Ch3(Kinetics), Ch4(Phase/State), Ch6(Heating), Ch7(Freezing), Ch11(Dehydration)"
   target_formulas: "MF_020, MF_007, MF_016, MF_001, MF_015"
 
 - id: sahin_physical_properties
-  skills: ["A"]
   title: "Physical Properties of Foods"
-  author: Sahin & Sumnu
+  author: "Sahin & Sumnu"
   language: en
   purpose: engineering_textbook
-  track: track_a_only
-  track_a_status: pending
-  track_a_priority: P1
+  skills: ["A"]
+  priority: P1
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: pending
+  skill_b_status: skip
+  skill_c_status: skip
+  skill_d_status: skip
   parameter_density: high
   target_chapters: "Ch2(Rheology), Ch3(Thermal), Ch5(Water Activity), Ch6(Surface Properties)"
   target_formulas: "MF_020, MF_002, MF_015, MF_032, MF_033"
 
+
 # ── Wave 3: P2 (第三周) ──
 
 - id: bourne_food_texture
-  skills: ["A"]
   title: "Food Texture and Viscosity, 2nd Ed"
   author: Bourne
   language: en
   purpose: engineering_textbook
-  track: dual_track
-  track_a_status: pending
-  track_b_status: pending
-  track_a_priority: P2
+  skills: ["A"]
+  priority: P2
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: pending
+  skill_b_status: skip
+  skill_c_status: skip
+  skill_d_status: skip
   parameter_density: high
   target_chapters: "Ch3(Physics+Texture), Ch7-8(Sensory-Physical correlation)"
   target_formulas: "MF_020, MF_045"
-  note: "Ch7-8对FT层有独特价值"
+  note: Ch7-8对FT层有独特价值
 
 - id: jay_food_microbiology
-  skills: ["A"]
   title: "Modern Food Microbiology, 7th Ed"
-  author: Jay, Loessner, Golden
+  author: "Jay, Loessner, Golden"
   language: en
   purpose: engineering_textbook
-  track: dual_track
-  track_a_status: pending
-  track_b_status: pending
-  track_a_priority: P2
+  skills: ["A"]
+  priority: P2
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: pending
+  skill_b_status: skip
+  skill_c_status: skip
+  skill_d_status: skip
   parameter_density: medium
   target_chapters: "Ch3(Intrinsic/Extrinsic), Ch17(D/z/F thermal death)"
   target_formulas: "MF_009, MF_011"
 
 - id: deman_food_chemistry
-  skills: ["A"]
   title: "Principles of Food Chemistry, 3rd Ed"
   author: deMan
   language: en
   purpose: engineering_textbook
-  track: track_a_only
-  track_a_status: pending
-  track_a_priority: P2
+  skills: ["A"]
+  priority: P2
+  ocr_status: pending
+  signal_status: pending
+  skill_a_status: pending
+  skill_b_status: skip
+  skill_c_status: skip
+  skill_d_status: skip
   parameter_density: medium
   target_chapters: "Ch1(Water/aw tables), Ch7(Flavor thresholds)"
   target_formulas: "MF_015, MF_025"
-  note: "与Fennema/Belitz重叠度高，交叉验证源"
+  note: 与Fennema/Belitz重叠度高，交叉验证源
