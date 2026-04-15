@@ -8,6 +8,10 @@
 # 每本书 6 个状态字段，一目了然
 # ocr → signal → skill_a/b/c/d
 # skills: 该书需要哪些 skill（不在列表里的自动 skip）
+# 书目注册表 v4 — 6-Claw OpenClaw 体系 (2026-04-16)
+# 每本书 6 个状态字段，一目了然
+# ocr → signal → skill_a/b/c/d
+# skills: 该书需要哪些 skill（不在列表里的自动 skip）
 # ── Track A P0: 参数金矿 (8本, Wave 1 本周启动) ──
 
 - id: mc_vol1
@@ -666,10 +670,10 @@
   ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
-  skill_b_status: pending
+  skill_b_status: done
   skill_c_status: skip
   skill_d_status: pending
-  pipeline: ["signal", "skill_b", "skill_d"]
+  pipeline: ["skill_d"]
   parameter_density: low
   recipe_count: 487
 
@@ -683,10 +687,10 @@
   ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
-  skill_b_status: pending
+  skill_b_status: done
   skill_c_status: skip
   skill_d_status: pending
-  pipeline: ["signal", "skill_b", "skill_d"]
+  pipeline: ["skill_d"]
   parameter_density: low
   recipe_count: 653
   note: sous-vide参数已被MC覆盖
@@ -718,10 +722,10 @@
   ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
-  skill_b_status: pending
+  skill_b_status: done
   skill_c_status: skip
   skill_d_status: pending
-  pipeline: ["signal", "skill_b", "skill_d"]
+  pipeline: ["skill_d"]
   parameter_density: low
   recipe_count: 1075
 
@@ -734,10 +738,10 @@
   ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
-  skill_b_status: pending
+  skill_b_status: done
   skill_c_status: skip
   skill_d_status: pending
-  pipeline: ["signal", "skill_b", "skill_d"]
+  pipeline: ["skill_d"]
   parameter_density: low
   recipe_count: 1740
 
@@ -751,10 +755,10 @@
   ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
-  skill_b_status: pending
+  skill_b_status: done
   skill_c_status: skip
   skill_d_status: pending
-  pipeline: ["signal", "skill_b", "skill_d"]
+  pipeline: ["skill_d"]
   parameter_density: low
   recipe_count: 766
 
@@ -768,10 +772,10 @@
   ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
-  skill_b_status: pending
+  skill_b_status: done
   skill_c_status: skip
   skill_d_status: pending
-  pipeline: ["signal", "skill_b", "skill_d"]
+  pipeline: ["skill_d"]
   parameter_density: low
   recipe_count: 1575
 
@@ -785,10 +789,10 @@
   ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
-  skill_b_status: pending
+  skill_b_status: done
   skill_c_status: skip
   skill_d_status: pending
-  pipeline: ["signal", "skill_b", "skill_d"]
+  pipeline: ["skill_d"]
   parameter_density: low
   recipe_count: 2261
 
@@ -802,10 +806,10 @@
   ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
-  skill_b_status: pending
+  skill_b_status: done
   skill_c_status: skip
   skill_d_status: pending
-  pipeline: ["signal", "skill_b", "skill_d"]
+  pipeline: ["skill_d"]
   parameter_density: low
   recipe_count: 902
 
@@ -819,10 +823,10 @@
   ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
-  skill_b_status: pending
+  skill_b_status: done
   skill_c_status: skip
   skill_d_status: pending
-  pipeline: ["signal", "skill_b", "skill_d"]
+  pipeline: ["skill_d"]
   parameter_density: low
   recipe_count: 2159
 
@@ -836,10 +840,10 @@
   ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
-  skill_b_status: pending
+  skill_b_status: done
   skill_c_status: skip
   skill_d_status: pending
-  pipeline: ["signal", "skill_b", "skill_d"]
+  pipeline: ["skill_d"]
   parameter_density: low
   recipe_count: 750
   note: L6翻译层素材
@@ -1404,12 +1408,12 @@
   ocr_tool: none
   signal_status: pending
   skill_a_status: skip
-  skill_b_status: pending
+  skill_b_status: done
   skill_c_status: pending
   skill_d_status: pending
   pipeline: ["ocr", "signal", "skill_c", "skill_d"]
   parameter_density: low
-  note: 美学史，非食谱书
+  note: 841 l2b entries may be text excerpts not recipes — needs QA
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/中国饮食美学史 (赵建军著, 赵建军, 1958- author, Zhao Jianjun zhu etc.) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
   title_en: History of Chinese Food Aesthetics
   format: pdf
