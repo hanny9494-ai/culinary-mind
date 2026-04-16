@@ -297,7 +297,7 @@ python scripts/batch_gates.py --gate signal_qc
 
 **成本敏感**：Skill A+D 用 Opus 是大头（~$50-100/本工程书），先跑 pilot gate 评估 yield，不合格就 skip 省钱。Skill B+C 用 Flash 极便宜（<$1/本）。
 
-**API 直连**：所有 HTTP 客户端必须 `trust_env=False`（绕过本机 SOCKS proxy 127.0.0.1:7890）。
+**API 直连**：所有 HTTP 客户端必须 `trust_env=False`（绕过本机 HTTP proxy 127.0.0.1:7890）。
 
 ---
 
