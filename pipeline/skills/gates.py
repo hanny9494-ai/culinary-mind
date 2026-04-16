@@ -247,9 +247,9 @@ def gate_signal_qc(book_id: str) -> dict:
     G2 Signal Quality Check — run after Signal routing, before Pilot/Skill.
 
     Checks signals.json for anomalies:
-    - A signal > 80%: router probably over-tagging
-    - A signal < 5% (if book has Skill A): router under-tagging
-    - skip_pct > 40%: possible OCR quality issue
+    - A signal > 80%: INFO only (expected for parameter-dense books, not a fail)
+    - A signal < 5%: FAIL — router likely missing science content
+    - skip_pct > 40%: FAIL — possible OCR quality issue
 
     Returns dict with passed/anomalies/stats/ts.
     """
@@ -277,10 +277,18 @@ def gate_signal_qc(book_id: str) -> dict:
     }
 
     anomalies: list[str] = []
+    # A% > 80% is NOT a fail condition — parameter-dense books naturally have high A%.
+    # Signal router is per-page: high A% just means many pages have science content.
+    # Record as info only.
+    info_notes: list[str] = []
     if stats["a_pct"] > 80:
-        anomalies.append(f"A信号过高({stats['a_pct']:.0f}%>80%) — router可能过度标注")
+        info_notes.append(f"A信号较高({stats['a_pct']:.0f}%>80%) — 正常（参数密集型书籍）")
+
+    # True fail conditions:
+    # 1. A% < 5% when book has Skill A — router likely missed science content
     if stats["a_pct"] < 5:
         anomalies.append(f"A信号过低({stats['a_pct']:.0f}%<5%) — 可能OCR质量差或router配置错误")
+    # 2. skip_pct > 40% — too many pages skipped, likely OCR quality issue
     if stats["skip_pct"] > 40:
         anomalies.append(f"跳过页过多({stats['skip_pct']:.0f}%>40%) — 可能OCR质量差")
 
@@ -288,8 +296,9 @@ def gate_signal_qc(book_id: str) -> dict:
     result = {
         "passed": passed,
         "anomalies": anomalies,
+        "info": info_notes,
         "stats": stats,
-        "thresholds": {"max_a_pct": 80, "min_a_pct": 5, "max_skip_pct": 40},
+        "thresholds": {"min_a_pct": 5, "max_skip_pct": 40},
     }
     return result
 

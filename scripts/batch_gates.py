@@ -284,7 +284,7 @@ def main() -> None:
 
     if not args.no_save:
         # Write batch summary
-        from pipeline.skills.gates import _ts  # noqa
+        from gates import _ts  # noqa
         summary_path = REPO_ROOT / "output" / f"_batch_gates_{args.gate}.json"
         summary = {
             "gate": args.gate,
