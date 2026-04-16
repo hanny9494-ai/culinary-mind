@@ -67,6 +67,13 @@ Jeff 扔一本新 PDF：
 2. lifecycle.py 识别为 `registered`，next_action=`run_ocr`
 3. pipeline-supervisor 通过 OpenClaw 从 registered 走完全流程
 
+### 推荐处理顺序
+
+便宜的先跑：**B+C (Flash)** → 再跑 **A+D (Opus)**。
+- 同一本书的 B+C 可以并行（分属不同 Flash session）
+- A 和 D 可以并行（分属不同 Opus session，共享 3 并发上限）
+- Pilot gate 通过后再上 A+D，省成本
+
 ---
 
 ## 3. OpenClaw 通信手册
@@ -160,6 +167,14 @@ output/{book_id}/
 └── skill_d/
     └── results.jsonl
 ```
+
+### 获取最新基线
+
+每次启动时先跑 lifecycle.py 获取全局状态：
+```bash
+python pipeline/skills/lifecycle.py --books-yaml config/books.yaml
+```
+同时读 `wiki/STATUS.md` 了解数据基线（L0 50K+, L2b 29K+ 食谱, 91 本书）。
 
 ---
 
@@ -261,6 +276,21 @@ python scripts/batch_gates.py --gate signal_qc
 - **非 A 的常见陷阱**：实验终点数据（→L0）、操作温度（→B）、定性描述（→L0）
 
 参考文档：`raw/architect/skill-boundary-final-20260416.md`
+
+---
+
+## 7.5 资源纪律
+
+| 资源 | 并发上限 | 成本 | 用于 |
+|---|---|---|---|
+| Opus (aigocode) | 3 并发 | ~$15/M input, $75/M output | skill-a, skill-d |
+| Flash (lingya) | 3-5 并发 | ~$0.10/M input, $0.40/M output | skill-b, skill-c |
+| DashScope qwen3.6-plus | 5 并发 | ~$0.01/本 TOC | signal-router, toc_router |
+| PaddleOCR VL (API) | 3 并发 | 免费额度 20K页/天 | ocr-claw |
+
+**成本敏感**：Skill A+D 用 Opus 是大头（~$50-100/本工程书），先跑 pilot gate 评估 yield，不合格就 skip 省钱。Skill B+C 用 Flash 极便宜（<$1/本）。
+
+**API 直连**：所有 HTTP 客户端必须 `trust_env=False`（绕过本机 SOCKS proxy 127.0.0.1:7890）。
 
 ---
 
