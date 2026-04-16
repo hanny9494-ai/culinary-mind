@@ -1,36 +1,46 @@
 #!/usr/bin/env python3
 """
 pipeline/skills/signal_router.py
-9b Router — per-page markdown → A/B/C/D skill signals
+9b/DashScope Router — per-page markdown → A/B/C/D skill signals
 
 Input:  output/{book_id}/pages.json
 Output: output/{book_id}/signals.json
 
-Model: qwen3.5:9b via Ollama (localhost:11434)
-Strategy: recall-first —宁可多标不可漏标
+Backends:
+  - ollama   (default): qwen3.5:9b via local Ollama (localhost:11434)
+  - dashscope:          qwen3.5-flash via DashScope API (async, concurrent)
 
 Usage:
     python signal_router.py --book-id mc_vol3
+    python signal_router.py --book-id mc_vol3 --backend dashscope --concurrency 8
     python signal_router.py --book-id mc_vol3 --pages 20 --start-page 25
     python signal_router.py --input-file /path/to/pages.json --out /path/to/signals.json
 """
 
-import os, sys, json, time, logging, argparse
+import asyncio
+import os
+import sys
+import json
+import time
+import logging
+import argparse
 from pathlib import Path
 from typing import Any
 
 # ── Proxy bypass ──────────────────────────────────────────────────────────────
-for k in ["http_proxy","https_proxy","HTTP_PROXY","HTTPS_PROXY","all_proxy","ALL_PROXY"]:
+for k in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"]:
     os.environ.pop(k, None)
-os.environ.setdefault("no_proxy", "localhost,127.0.0.1")
+os.environ.setdefault("no_proxy", "localhost,127.0.0.1,dashscope.aliyuncs.com")
 
 import httpx
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 DEFAULT_MODEL = "qwen3.5:9b"
+DASHSCOPE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+DEFAULT_DASHSCOPE_MODEL = "qwen3.5-flash"
 
-# ── Prompt template (from 9b-signal-router-design-20260415.md) ────────────────
+# ── Prompt template ────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """\
 你是一个页面内容路由器。给你一页书的文本，判断它包含哪些类型的可提取信息。
@@ -99,59 +109,11 @@ EXPECTED_JSON = """\
   "skip_reason": null or "toc/index/blank/copyright"
 }"""
 
-# ── Ollama call ───────────────────────────────────────────────────────────────
-
-def call_ollama(
-    page_num: int,
-    page_text: str,
-    model: str = DEFAULT_MODEL,
-    retries: int = 3,
-    logger: logging.Logger | None = None,
-) -> dict[str, Any]:
-    log = logger or logging.getLogger(__name__)
-
-    # Truncate very long pages
-    text_snippet = page_text[:3000] if len(page_text) > 3000 else page_text
-
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user",   "content": USER_TEMPLATE.format(
-            page_number=page_num,
-            page_text=text_snippet,
-        )},
-    ]
-
-    payload = {
-        "model": model,
-        "messages": messages,
-        "stream": False,
-        "think": False,
-        "options": {
-            "temperature": 0,
-            "num_predict": 512,
-            "num_ctx": 4096,
-        },
-    }
-
-    for attempt in range(1, retries + 1):
-        try:
-            with httpx.Client(trust_env=False, timeout=60, follow_redirects=False) as client:
-                resp = client.post(f"{OLLAMA_URL}/api/chat", json=payload)
-            resp.raise_for_status()
-            content = resp.json()["message"]["content"].strip()
-            return parse_signal_json(content, page_num, log)
-        except Exception as e:
-            log.warning(f"[router] page {page_num} attempt {attempt} failed: {e}")
-            if attempt == retries:
-                log.error(f"[router] page {page_num} all retries failed — returning safe default")
-                return default_signal(page_num, skip_reason=f"router_error: {e}")
-            time.sleep(1)
-
-    return default_signal(page_num)
+# ── JSON helpers ──────────────────────────────────────────────────────────────
 
 def normalize_signal(raw: dict, page_num: int) -> dict:
     """Normalize model output to canonical signal schema.
-    
+
     Handles two formats:
       1. {signals: {A: bool,...}, hints: {...}, ...}  (canonical)
       2. {A: bool, B: bool, C: bool, D: bool, ...}   (flat, model often emits this)
@@ -160,17 +122,14 @@ def normalize_signal(raw: dict, page_num: int) -> dict:
         return raw  # already canonical
 
     # Flat format — lift A/B/C/D into signals dict
-    sigs = {k: bool(raw.get(k, False)) for k in ("A","B","C","D")}
+    sigs = {k: bool(raw.get(k, False)) for k in ("A", "B", "C", "D")}
     hints: dict = {}
     if "hints" in raw:
         hints = raw["hints"]
     else:
-        # Try to find nested hint keys used by model
-        for key in ("A","C","D"):
-            # Some models output hints inline
+        for key in ("A", "C", "D"):
             if key + "_hints" in raw:
                 hints[key] = raw[key + "_hints"]
-        # Collect ingredient/term lists if model put them at top level
         if "ingredients" in raw:
             hints.setdefault("C", {})["ingredients_detected"] = raw["ingredients"]
         if "terms" in raw or "aesthetic_terms" in raw:
@@ -213,6 +172,7 @@ def parse_signal_json(text: str, page_num: int, log: logging.Logger) -> dict[str
     # Default: mark all true (recall-first)
     return default_signal(page_num, all_true=True)
 
+
 def default_signal(page_num: int, skip_reason: str | None = None, all_true: bool = False) -> dict:
     return {
         "signals": {"A": all_true, "B": all_true, "C": all_true, "D": all_true},
@@ -225,20 +185,68 @@ def default_signal(page_num: int, skip_reason: str | None = None, all_true: bool
         "skip_reason": skip_reason,
     }
 
-# ── DashScope API call — qwen3.5-flash escalation path ────────────────────────
+# ── Ollama call (synchronous) ─────────────────────────────────────────────────
+
+def call_ollama(
+    page_num: int,
+    page_text: str,
+    model: str = DEFAULT_MODEL,
+    retries: int = 3,
+    logger: logging.Logger | None = None,
+) -> dict[str, Any]:
+    log = logger or logging.getLogger(__name__)
+
+    text_snippet = page_text[:3000] if len(page_text) > 3000 else page_text
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": USER_TEMPLATE.format(
+            page_number=page_num,
+            page_text=text_snippet,
+        )},
+    ]
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "think": False,
+        "options": {
+            "temperature": 0,
+            "num_predict": 512,
+            "num_ctx": 4096,
+        },
+    }
+
+    for attempt in range(1, retries + 1):
+        try:
+            with httpx.Client(trust_env=False, timeout=60, follow_redirects=False) as client:
+                resp = client.post(f"{OLLAMA_URL}/api/chat", json=payload)
+            resp.raise_for_status()
+            content = resp.json()["message"]["content"].strip()
+            return parse_signal_json(content, page_num, log)
+        except Exception as e:
+            log.warning(f"[router] page {page_num} attempt {attempt} failed: {e}")
+            if attempt == retries:
+                log.error(f"[router] page {page_num} all retries failed — returning safe default")
+                return default_signal(page_num, skip_reason=f"router_error: {e}")
+            time.sleep(1)
+
+    return default_signal(page_num)
+
+# ── DashScope call (synchronous, single) ──────────────────────────────────────
 
 def call_dashscope(
     page_num: int,
     page_text: str,
-    model: str = "qwen3.5-flash",
+    model: str = DEFAULT_DASHSCOPE_MODEL,
     api_key: str = "",
     retries: int = 3,
     logger: logging.Logger | None = None,
 ) -> dict[str, Any]:
     """
-    Call qwen3.5-flash via DashScope compatible-mode API (OpenAI format).
+    Call DashScope-compatible API (OpenAI format), synchronous single-page version.
     Used as escalation when local 9b/27b models don't meet recall targets.
-    阿里系模型走 DashScope，灵雅只给 Gemini/Claude 用。
     """
     log = logger or logging.getLogger(__name__)
     if not api_key:
@@ -247,7 +255,6 @@ def call_dashscope(
         log.error("[router] DASHSCOPE_API_KEY not set — cannot use dashscope provider")
         return default_signal(page_num, skip_reason="dashscope_unconfigured")
 
-    endpoint = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
     text_snippet = page_text[:3000] if len(page_text) > 3000 else page_text
     user_content = USER_TEMPLATE.format(page_number=page_num, page_text=text_snippet)
 
@@ -259,18 +266,18 @@ def call_dashscope(
         "model": model,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user",   "content": user_content},
+            {"role": "user", "content": user_content},
         ],
         "temperature": 0,
         "max_tokens": 512,
         "stream": False,
-        "enable_thinking": False,  # 禁用 qwen3 思考模式
+        "enable_thinking": False,
     }
 
     for attempt in range(1, retries + 1):
         try:
             with httpx.Client(trust_env=False, timeout=60, follow_redirects=False) as client:
-                resp = client.post(endpoint, headers=headers, json=body)
+                resp = client.post(DASHSCOPE_URL, headers=headers, json=body)
             resp.raise_for_status()
             data = resp.json()
             text = data["choices"][0]["message"]["content"].strip()
@@ -284,7 +291,140 @@ def call_dashscope(
 
     return default_signal(page_num)
 
+# ── DashScope async concurrent calls ──────────────────────────────────────────
 
+async def async_call_dashscope(
+    client: httpx.AsyncClient,
+    semaphore: asyncio.Semaphore,
+    page_num: int,
+    page_text: str,
+    model: str,
+    api_key: str,
+    retries: int = 3,
+    logger: logging.Logger | None = None,
+) -> dict[str, Any]:
+    """Async single-page DashScope call with semaphore concurrency control."""
+    log = logger or logging.getLogger(__name__)
+
+    text_snippet = page_text[:3000] if len(page_text) > 3000 else page_text
+    user_content = USER_TEMPLATE.format(page_number=page_num, page_text=text_snippet)
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        "temperature": 0,
+        "max_tokens": 512,
+        "stream": False,
+        "enable_thinking": False,
+    }
+
+    async with semaphore:
+        for attempt in range(1, retries + 1):
+            try:
+                resp = await client.post(DASHSCOPE_URL, headers=headers, json=body)
+                resp.raise_for_status()
+                data = resp.json()
+                text = data["choices"][0]["message"]["content"].strip()
+                result = parse_signal_json(text, page_num, log)
+                result["page"] = page_num
+                return result
+            except Exception as e:
+                log.warning(f"[router] async dashscope page {page_num} attempt {attempt} failed: {e}")
+                if attempt == retries:
+                    log.error(f"[router] async dashscope page {page_num} all retries failed")
+                    result = default_signal(page_num, skip_reason=f"dashscope_error: {e}")
+                    result["page"] = page_num
+                    return result
+                await asyncio.sleep(2 ** attempt)
+
+    result = default_signal(page_num)
+    result["page"] = page_num
+    return result
+
+
+async def async_process_dashscope(
+    todo_pages: list[dict],
+    out_path: Path,
+    existing: dict[int, dict],
+    model: str,
+    api_key: str,
+    concurrency: int,
+    checkpoint_every: int = 50,
+    log: logging.Logger | None = None,
+) -> dict[int, dict]:
+    """
+    Process a list of pages concurrently via DashScope API.
+    Returns signals_by_page dict (merged with existing).
+    Saves checkpoint every `checkpoint_every` completions.
+    """
+    if log is None:
+        log = logging.getLogger(__name__)
+
+    signals_by_page: dict[int, dict] = dict(existing)
+    semaphore = asyncio.Semaphore(concurrency)
+    t0 = time.time()
+    completed = 0
+
+    # Filter blank pages before async
+    async_tasks = []
+    for page in todo_pages:
+        pnum = page["page"]
+        ptext = page.get("text", "")
+        if not ptext.strip():
+            sig = default_signal(pnum, skip_reason="blank_page")
+            sig["page"] = pnum
+            signals_by_page[pnum] = sig
+        else:
+            async_tasks.append(page)
+
+    log.info(f"[router] Async DashScope: {len(async_tasks)} pages, concurrency={concurrency}, model={model}")
+
+    async with httpx.AsyncClient(trust_env=False, timeout=90, follow_redirects=False) as client:
+        tasks = [
+            async_call_dashscope(
+                client, semaphore,
+                p["page"], p.get("text", ""),
+                model, api_key,
+                logger=log,
+            )
+            for p in async_tasks
+        ]
+
+        # Use as_completed pattern via asyncio.gather with return_exceptions
+        # but we want checkpointing, so use gather with chunking
+        chunk_size = checkpoint_every
+        for chunk_start in range(0, len(tasks), chunk_size):
+            chunk = tasks[chunk_start: chunk_start + chunk_size]
+            results = await asyncio.gather(*chunk, return_exceptions=True)
+
+            for r in results:
+                if isinstance(r, Exception):
+                    log.error(f"[router] unexpected exception in gather: {r}")
+                    continue
+                pnum = r.get("page", 0)
+                signals_by_page[pnum] = r
+                completed += 1
+
+            # Checkpoint save
+            sorted_sigs = sorted(signals_by_page.values(), key=lambda x: x["page"])
+            save_signals(out_path, sorted_sigs)
+            elapsed = time.time() - t0
+            rate = completed / elapsed if elapsed > 0 else 0
+            log.info(
+                f"[router] Checkpoint: {completed}/{len(async_tasks)} done, "
+                f"{rate:.1f} pages/s, {elapsed:.0f}s elapsed"
+            )
+
+    return signals_by_page
+
+# ── File I/O ──────────────────────────────────────────────────────────────────
 
 def load_existing_signals(path: Path) -> dict[int, dict]:
     """Load existing signals.json, keyed by page number."""
@@ -296,13 +436,14 @@ def load_existing_signals(path: Path) -> dict[int, dict]:
     except Exception:
         return {}
 
+
 def save_signals(path: Path, signals_list: list[dict]) -> None:
     path.write_text(json.dumps(signals_list, ensure_ascii=False, indent=2))
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── CLI ───────────────────────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="9b Signal Router — per-page markdown to A/B/C/D signals")
+    p = argparse.ArgumentParser(description="Signal Router — per-page markdown to A/B/C/D signals")
     grp = p.add_mutually_exclusive_group()
     grp.add_argument("--book-id", help="Book ID → reads output/{book_id}/pages.json")
     grp.add_argument("--input-file", help="Explicit path to pages.json")
@@ -314,14 +455,35 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-resume", dest="resume", action="store_false")
     p.add_argument("--force", action="store_true", help="Re-run all pages")
     p.add_argument("--pilot", action="store_true", help="Print detailed output for each page (debug)")
-    p.add_argument("--provider", choices=["ollama", "dashscope"], default="ollama",
-                   help="Router backend: ollama (local 9b/27b) or dashscope (qwen3.5-flash via DashScope)")
-    p.add_argument("--dashscope-model", default="qwen3.5-flash",
-                   help="Model for dashscope provider (default: qwen3.5-flash)")
+
+    # Backend selection — both --backend and --provider accepted (synonyms)
+    backend_grp = p.add_mutually_exclusive_group()
+    backend_grp.add_argument(
+        "--backend", choices=["ollama", "dashscope"], default=None,
+        help="Router backend: ollama (local 9b/27b) or dashscope (DashScope API, async concurrent)",
+    )
+    backend_grp.add_argument(
+        "--provider", choices=["ollama", "dashscope"], default=None,
+        help="Alias for --backend (kept for backwards compatibility)",
+    )
+
+    p.add_argument(
+        "--dashscope-model", "--ds-model",
+        default=DEFAULT_DASHSCOPE_MODEL,
+        help=f"DashScope model name (default: {DEFAULT_DASHSCOPE_MODEL})",
+    )
+    p.add_argument(
+        "--concurrency", type=int, default=5,
+        help="Concurrent requests for dashscope backend (default: 5)",
+    )
     return p.parse_args()
+
 
 def main() -> None:
     args = parse_args()
+
+    # Resolve backend (--backend takes precedence over --provider)
+    backend = args.backend or args.provider or "ollama"
 
     # Resolve input
     if args.input_file:
@@ -349,7 +511,7 @@ def main() -> None:
         handlers=[logging.FileHandler(log_path), logging.StreamHandler()],
     )
     log = logging.getLogger("signal_router")
-    log.info(f"book_id={book_id}, model={args.model}, resume={args.resume}")
+    log.info(f"book_id={book_id}, backend={backend}, model={args.model}, resume={args.resume}")
 
     # Load pages
     pages: list[dict] = json.loads(pages_path.read_text())
@@ -358,7 +520,7 @@ def main() -> None:
     # Apply start_page / max_pages filter
     pages = [p for p in pages if p["page"] >= args.start_page]
     if args.pages:
-        pages = pages[:args.pages]
+        pages = pages[: args.pages]
 
     # Load existing signals for resume
     existing: dict[int, dict] = {}
@@ -367,38 +529,71 @@ def main() -> None:
         if existing:
             log.info(f"Resume: {len(existing)} pages already done")
 
-    # Process
-    signals_by_page: dict[int, dict] = dict(existing)
+    # Filter todo pages
     todo = [p for p in pages if p["page"] not in existing or args.force]
     log.info(f"Processing {len(todo)}/{len(pages)} pages (skipping {len(pages)-len(todo)} already done)")
 
     t0 = time.time()
-    for i, page in enumerate(todo):
-        page_num = page["page"]
-        page_text = page.get("text", "")
 
-        if not page_text.strip():
-            sig = default_signal(page_num, skip_reason="blank_page")
-        elif args.provider == "dashscope":
-            sig = call_dashscope(page_num, page_text, model=args.dashscope_model, logger=log)
-        else:
-            sig = call_ollama(page_num, page_text, model=args.model, logger=log)
+    if backend == "dashscope":
+        # Async concurrent path
+        api_key = os.environ.get("DASHSCOPE_API_KEY", "")
+        if not api_key:
+            print("ERROR: DASHSCOPE_API_KEY not set", file=sys.stderr)
+            sys.exit(1)
 
-        sig["page"] = page_num
-        signals_by_page[page_num] = sig
+        signals_by_page = asyncio.run(
+            async_process_dashscope(
+                todo_pages=todo,
+                out_path=out_path,
+                existing=existing,
+                model=args.dashscope_model,
+                api_key=api_key,
+                concurrency=args.concurrency,
+                log=log,
+            )
+        )
 
         if args.pilot:
-            sigs = sig.get("signals", {})
-            print(f"  page {page_num:4d}: A={sigs.get('A',False)!s:5} B={sigs.get('B',False)!s:5} "
-                  f"C={sigs.get('C',False)!s:5} D={sigs.get('D',False)!s:5} "
-                  f"conf={sig.get('confidence', 0):.2f}  skip={sig.get('skip_reason')}")
-
-        # Save every 50 pages
-        if (i + 1) % 50 == 0:
             sorted_sigs = sorted(signals_by_page.values(), key=lambda x: x["page"])
-            save_signals(out_path, sorted_sigs)
-            elapsed = time.time() - t0
-            log.info(f"Checkpoint: {i+1}/{len(todo)} pages, {elapsed:.0f}s")
+            for sig in sorted_sigs:
+                sigs = sig.get("signals", {})
+                print(
+                    f"  page {sig['page']:4d}: A={sigs.get('A', False)!s:5} B={sigs.get('B', False)!s:5} "
+                    f"C={sigs.get('C', False)!s:5} D={sigs.get('D', False)!s:5} "
+                    f"conf={sig.get('confidence', 0):.2f}  skip={sig.get('skip_reason')}"
+                )
+
+    else:
+        # Synchronous Ollama path
+        signals_by_page: dict[int, dict] = dict(existing)
+
+        for i, page in enumerate(todo):
+            page_num = page["page"]
+            page_text = page.get("text", "")
+
+            if not page_text.strip():
+                sig = default_signal(page_num, skip_reason="blank_page")
+            else:
+                sig = call_ollama(page_num, page_text, model=args.model, logger=log)
+
+            sig["page"] = page_num
+            signals_by_page[page_num] = sig
+
+            if args.pilot:
+                sigs = sig.get("signals", {})
+                print(
+                    f"  page {page_num:4d}: A={sigs.get('A', False)!s:5} B={sigs.get('B', False)!s:5} "
+                    f"C={sigs.get('C', False)!s:5} D={sigs.get('D', False)!s:5} "
+                    f"conf={sig.get('confidence', 0):.2f}  skip={sig.get('skip_reason')}"
+                )
+
+            # Save every 50 pages
+            if (i + 1) % 50 == 0:
+                sorted_sigs = sorted(signals_by_page.values(), key=lambda x: x["page"])
+                save_signals(out_path, sorted_sigs)
+                elapsed = time.time() - t0
+                log.info(f"Checkpoint: {i+1}/{len(todo)} pages, {elapsed:.0f}s")
 
     # Final save
     sorted_sigs = sorted(signals_by_page.values(), key=lambda x: x["page"])
@@ -408,23 +603,29 @@ def main() -> None:
     log.info(f"Done: {len(sorted_sigs)} signals in {elapsed:.1f}s → {out_path}")
 
     # Statistics
-    total  = len(sorted_sigs)
-    sig_a  = sum(1 for s in sorted_sigs if s.get("signals",{}).get("A"))
-    sig_b  = sum(1 for s in sorted_sigs if s.get("signals",{}).get("B"))
-    sig_c  = sum(1 for s in sorted_sigs if s.get("signals",{}).get("C"))
-    sig_d  = sum(1 for s in sorted_sigs if s.get("signals",{}).get("D"))
+    total = len(sorted_sigs)
+    if total == 0:
+        print("No signals processed.")
+        return
+
+    sig_a = sum(1 for s in sorted_sigs if s.get("signals", {}).get("A"))
+    sig_b = sum(1 for s in sorted_sigs if s.get("signals", {}).get("B"))
+    sig_c = sum(1 for s in sorted_sigs if s.get("signals", {}).get("C"))
+    sig_d = sum(1 for s in sorted_sigs if s.get("signals", {}).get("D"))
     skipped = sum(1 for s in sorted_sigs if s.get("skip_reason"))
 
     print(f"\n── Signal Router Summary ──")
-    print(f"  book_id:  {book_id}")
-    print(f"  total:    {total}")
-    print(f"  A (quant):{sig_a:4d} ({sig_a/total*100:.0f}%)")
-    print(f"  B (recipe):{sig_b:3d} ({sig_b/total*100:.0f}%)")
-    print(f"  C (ingred):{sig_c:3d} ({sig_c/total*100:.0f}%)")
-    print(f"  D (aesthetic):{sig_d:1d} ({sig_d/total*100:.0f}%)")
-    print(f"  skipped:  {skipped}")
-    print(f"  time:     {elapsed:.1f}s")
-    print(f"  output:   {out_path}")
+    print(f"  book_id:      {book_id}")
+    print(f"  backend:      {backend}")
+    print(f"  total:        {total}")
+    print(f"  A (quant):    {sig_a:4d} ({sig_a/total*100:.0f}%)")
+    print(f"  B (recipe):   {sig_b:4d} ({sig_b/total*100:.0f}%)")
+    print(f"  C (ingred):   {sig_c:4d} ({sig_c/total*100:.0f}%)")
+    print(f"  D (aesthetic):{sig_d:4d} ({sig_d/total*100:.0f}%)")
+    print(f"  skipped:      {skipped}")
+    print(f"  time:         {elapsed:.1f}s")
+    print(f"  output:       {out_path}")
+
 
 if __name__ == "__main__":
     main()
