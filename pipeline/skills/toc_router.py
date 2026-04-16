@@ -56,7 +56,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 DASHSCOPE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 TOC_MODEL = "qwen3.6-plus"
 PAGE_SCAN_MODEL = "qwen3.6-plus"
-TOC_MAX_TOKENS = 2048
+TOC_MAX_TOKENS = 4096
 SCAN_MAX_TOKENS = 512
 SCAN_TIMEOUT_SEC = 60.0
 TOC_TIMEOUT_SEC = 120.0
