@@ -84,22 +84,15 @@ def _extract_page_text(page_result: dict) -> str:
     return "\n".join(text_parts)
 
 
-def ocr_pdf_api(
-    pdf_path: Path,
-    max_pages: int | None = None,
-    retries: int = 3,
-    logger: logging.Logger | None = None,
+def _call_api_with_retry(
+    pdf_b64: str,
+    retries: int,
+    log: logging.Logger,
 ) -> list[dict]:
     """
-    Call PaddleOCR VL 1.5 API on a PDF file.
-    Returns list of {page: int, text: str, source: "paddleocr_api"}.
+    POST a base64-encoded PDF chunk to PaddleOCR API with retry.
+    Returns layoutParsingResults list.
     """
-    log = logger or logging.getLogger(__name__)
-    log.info(f"OCR API: loading {pdf_path} ({pdf_path.stat().st_size // 1024} KB)")
-
-    with open(pdf_path, "rb") as f:
-        pdf_b64 = base64.b64encode(f.read()).decode()
-
     payload = {
         "file": pdf_b64,
         "fileType": 0,
@@ -107,7 +100,6 @@ def ocr_pdf_api(
         "useDocUnwarping": False,
         "useChartRecognition": False,
     }
-
     headers = {
         "Authorization": f"token {PADDLE_TOKEN}",
         "Content-Type": "application/json",
@@ -121,37 +113,91 @@ def ocr_pdf_api(
             if resp.status_code != 200:
                 raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:300]}")
             data = resp.json()
-            break
+            # Unwrap nested "result" key if present
+            top = data.get("result", data)
+            results = top.get("layoutParsingResults", [])
+            if not results:
+                raise ValueError(
+                    f"PaddleOCR API returned empty layoutParsingResults. "
+                    f"errorCode={data.get('errorCode')} errorMsg={data.get('errorMsg')} "
+                    f"top_keys={list(top.keys())}"
+                )
+            return results
         except Exception as e:
             log.warning(f"[OCR] Attempt {attempt} failed: {e}")
             if attempt == retries:
                 raise
             time.sleep(2 ** attempt)
 
-    # Unwrap nested "result" key if present (API returns {errorCode, result: {layoutParsingResults}})
-    top = data.get("result", data)
-    results = top.get("layoutParsingResults", [])
-    if not results:
-        raise ValueError(
-            f"PaddleOCR API returned empty layoutParsingResults. "
-            f"errorCode={data.get('errorCode')} errorMsg={data.get('errorMsg')} "
-            f"top_keys={list(top.keys())}"
+    return []  # unreachable, but satisfies type checker
+
+
+def ocr_pdf_api(
+    pdf_path: Path,
+    max_pages: int | None = None,
+    retries: int = 3,
+    logger: logging.Logger | None = None,
+    chunk_size: int = 100,
+) -> list[dict]:
+    """
+    Call PaddleOCR VL 1.5 API on a PDF file.
+    Splits PDFs larger than chunk_size pages into multiple API calls.
+    Returns list of {page: int, text: str, source: "paddleocr_api"}.
+    """
+    import fitz  # PyMuPDF
+
+    log = logger or logging.getLogger(__name__)
+    log.info(f"OCR API: loading {pdf_path} ({pdf_path.stat().st_size // 1024} KB)")
+
+    doc = fitz.open(str(pdf_path))
+    total = min(len(doc), max_pages or len(doc))
+    log.info(f"[OCR] Total pages to process: {total} (chunk_size={chunk_size})")
+
+    all_pages: list[dict] = []
+    num_chunks = (total + chunk_size - 1) // chunk_size
+
+    for chunk_idx, start in enumerate(range(0, total, chunk_size)):
+        end = min(start + chunk_size, total)
+        log.info(f"[OCR] Processing chunk {chunk_idx + 1}/{num_chunks}: pages {start + 1}–{end}")
+
+        # Build a temporary in-memory PDF for this page range
+        tmp_doc = fitz.open()
+        tmp_doc.insert_pdf(doc, from_page=start, to_page=end - 1)
+        tmp_bytes = tmp_doc.tobytes()
+        tmp_doc.close()
+
+        pdf_b64 = base64.b64encode(tmp_bytes).decode()
+
+        # Call API with per-chunk retry
+        chunk_results = _call_api_with_retry(pdf_b64, retries=retries, log=log)
+
+        # Extract pages and adjust page numbers relative to full document
+        chunk_pages: list[dict] = []
+        for i, page_result in enumerate(chunk_results):
+            abs_page_num = start + i + 1  # 1-based absolute page number
+            if abs_page_num > total:
+                break
+            text = _extract_page_text(page_result)
+            chunk_pages.append({
+                "page": abs_page_num,
+                "text": text.strip(),
+                "source": "paddleocr_api",
+            })
+
+        all_pages.extend(chunk_pages)
+        log.info(
+            f"[OCR] Chunk {chunk_idx + 1}/{num_chunks} done: "
+            f"pages {start + 1}–{end}, got {len(chunk_pages)} pages "
+            f"(total so far: {len(all_pages)}/{total})"
         )
 
-    pages: list[dict] = []
-    for i, page_result in enumerate(results):
-        page_num = i + 1
-        if max_pages and page_num > max_pages:
-            break
-        text = _extract_page_text(page_result)
-        pages.append({
-            "page": page_num,
-            "text": text.strip(),
-            "source": "paddleocr_api",
-        })
+        # Rate-limit pause between chunks (skip after last chunk)
+        if end < total:
+            time.sleep(1)
 
-    log.info(f"[OCR] Got {len(pages)} pages from API")
-    return pages
+    doc.close()
+    log.info(f"[OCR] Got {len(all_pages)} pages from API")
+    return all_pages
 
 
 def ocr_pdf_local(pdf_path: Path, max_pages: int | None = None, logger: logging.Logger | None = None) -> list[dict]:
@@ -231,6 +277,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out-dir",  help="Output directory (default: output/{book_id}/)")
     p.add_argument("--force",    action="store_true", help="Re-run even if pages.json exists")
     p.add_argument("--list-books", action="store_true", help="List available books and exit")
+    p.add_argument("--chunk-size", type=int, default=100,
+                   help="Max pages per API call for chunked processing (default: 100)")
     return p.parse_args()
 
 def main() -> None:
@@ -280,12 +328,12 @@ def main() -> None:
         handlers=[logging.FileHandler(log_path), logging.StreamHandler()],
     )
     log = logging.getLogger("ocr_claw")
-    log.info(f"book_id={book_id}, pdf={pdf_path}, mode={args.mode}, max_pages={args.pages}")
+    log.info(f"book_id={book_id}, pdf={pdf_path}, mode={args.mode}, max_pages={args.pages}, chunk_size={args.chunk_size}")
 
     # Run OCR
     t0 = time.time()
     if args.mode == "api":
-        pages = ocr_pdf_api(pdf_path, max_pages=args.pages, logger=log)
+        pages = ocr_pdf_api(pdf_path, max_pages=args.pages, logger=log, chunk_size=args.chunk_size)
     else:
         pages = ocr_pdf_local(pdf_path, max_pages=args.pages, logger=log)
 
