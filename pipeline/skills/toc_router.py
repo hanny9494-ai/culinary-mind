@@ -63,28 +63,56 @@ TOC_TIMEOUT_SEC = 120.0
 
 # ── TOC Analysis System Prompt ────────────────────────────────────────────────
 
-TOC_SYSTEM_PROMPT = """\
-你是烹饪/食品科学书籍结构分析专家。给你一本书的目录和采样页面，判断每个章节的内容类型。
+TOC_SYSTEM_PROMPT = """你是烹饪/食品科学书籍结构分析专家。给你一本书的采样页面（包括前20页的密集采样和中间部分的间隔采样），判断每个章节的内容类型和页面范围。
 
-4 种 Skill：
-- A (定量参数): 温度、时间、公式、数据表、物理化学常数、动力学方程
-- B (食谱): 配料表、烹饪步骤、份量。注意：有食谱就一定有食材(C)
+【关键指令】
+如果采样页中包含目录/Contents/Table of Contents/CONTENTS 页面，必须优先使用目录信息来确定章节边界：
+- 从目录中提取每个章节的名称和起始页码
+- 相邻章节的 page_end = 下一章节的 page_start - 1
+- 最后一个内容章节的 page_end = 总页数减去索引/附录页数（通常最后10-30页）
+- 如果目录明确列出了页码，严格使用这些页码作为 page_start
+
+4 种 Skill（互斥性很重要）：
+
+- A (科学原理与定量参数): 
+  ✅ 属于 A：物理化学公式、动力学方程（Arrhenius 等）、相变温度表、HLB 值、
+     活化能、水活度阈值、剪切力-粘度关系、原料理化性质数据表、
+     配方计算模型（如冰淇淋的 PAC/POD 平衡公式）
+  ❌ 不属于 A：食谱中的烹饪参数（"180°C 烤 12 分钟"）——这些是 B
+
+- B (食谱): 
+  完整的配料表 + 烹饪步骤 + 份量。食谱中出现的温度/时间/重量都属于 B，不是 A。
+  注意：有食谱就一定有食材，B 蕴含 C。
+
 - C (食材): 品种、产地、季节、部位、营养成分
+
 - D (审美/术语): 感官描述、风味词、口感词、粤菜术语
 
+关键区分：
+- "蛋白质在 62°C 开始变性" → A（科学原理）
+- "将鸡胸肉在 62°C 水浴 1 小时" → B（食谱步骤）
+- 一整章都是配方表（配料+步骤+成品图）→ certain B+C，不标 A
+
 每个章节标记 confidence 级别：
-- certain: 非常确定这章只含这类内容（如纯食谱集、纯索引）→ 直接标记，不需逐页扫描
-- suspect: 可能混合多种内容（如科学章节可能夹食谱）→ 需要逐页细看
+- certain: 非常确定内容类型。例如：
+  · 纯食谱集（一个接一个的配方）→ certain B+C
+  · 纯数据表/公式推导章节 → certain A
+  · 前言/索引 → certain skip
+- suspect: 可能混合多种内容（科学章节中穿插应用食谱）→ 需要逐页细看
 - skip: 前言、目录、索引、版权、致谢、纯图片 → 跳过
 
 规则：
+- 如果找到目录页，优先用目录页码推断章节边界（page_start, page_end）
 - 宁可标 suspect 不可漏标。不确定时标 suspect
-- B 蕴含 C：标了 B 就自动带 C
+- B 蕴含 C：标了 B 就自动带 C，不需要单独标 C
 - skip 要果断：纯文学前言、广告、索引直接跳
+- 食谱章节不标 A！除非该章节确实在讲科学原理
 
 输出纯 JSON（不要任何解释）：
 {
   "book_summary": "一句话",
+  "toc_found": true,
+  "toc_page": N,
   "chapters": [
     {
       "name": "章节名",
@@ -98,6 +126,7 @@ TOC_SYSTEM_PROMPT = """\
   ]
 }
 """
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -171,23 +200,35 @@ def _ts() -> str:
 
 def _build_sample_pages(pages: list[dict]) -> list[dict]:
     """
-    Sampling strategy:
-    - First 5 pages (cover/TOC/preface)
-    - Every N pages, N = max(10, total // 12), aiming for 10-15 sample points
-    - Last 3 pages (index/appendix)
-    - Up to 500 chars per page
+    Two-phase sampling strategy:
+
+    Phase 1 — Dense front sampling (find TOC/Contents page):
+      All pages 0-19 (first 20 pages contain TOC in almost all books).
+
+    Phase 2 — Stride sampling (validate chapter structure + detect skills):
+      Every N pages from page 20 onward, N = max(10, (total-20) // 12),
+      aiming for 10-15 sample points through the body.
+      Plus last 3 pages (index/appendix boundary).
+
+    This ensures the TOC page is always included in full, so the model can
+    infer chapter boundaries from explicit page numbers in the table of contents.
     """
     total = len(pages)
-    N = max(10, total // 12)
-
     selected_indices: set[int] = set()
-    # First 5
-    for i in range(min(5, total)):
+
+    # Phase 1: all front pages (first 20 or total, whichever smaller)
+    front_end = min(20, total)
+    for i in range(front_end):
         selected_indices.add(i)
-    # Stride sample
-    for i in range(0, total, N):
-        selected_indices.add(i)
-    # Last 3
+
+    # Phase 2: stride through body
+    body_len = total - front_end
+    if body_len > 0:
+        N = max(10, body_len // 12)
+        for i in range(front_end, total, N):
+            selected_indices.add(i)
+
+    # Last 3 pages
     for i in range(max(0, total - 3), total):
         selected_indices.add(i)
 
