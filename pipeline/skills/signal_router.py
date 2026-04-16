@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
 pipeline/skills/signal_router.py
-9b/DashScope Router — per-page markdown → A/B/C/D skill signals
+Signal Router — per-page markdown → A/B/C/D skill signals
 
 Input:  output/{book_id}/pages.json
 Output: output/{book_id}/signals.json
 
 Backends:
-  - ollama   (default): qwen3.5:9b via local Ollama (localhost:11434)
-  - dashscope:          qwen3.5-flash via DashScope API (async, concurrent)
+  - dashscope (default): qwen3.5-flash via DashScope API (async, concurrent)
+  - ollama:              qwen3.5:9b via local Ollama (localhost:11434)
 
 Usage:
     python signal_router.py --book-id mc_vol3
     python signal_router.py --book-id mc_vol3 --backend dashscope --concurrency 8
+    python signal_router.py --book-id mc_vol3 --backend ollama
     python signal_router.py --book-id mc_vol3 --pages 20 --start-page 25
     python signal_router.py --input-file /path/to/pages.json --out /path/to/signals.json
 """
@@ -36,9 +37,11 @@ import httpx
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-DEFAULT_MODEL = "qwen3.5:9b"
+DEFAULT_OLLAMA_MODEL = "qwen3.5:9b"
 DASHSCOPE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 DEFAULT_DASHSCOPE_MODEL = "qwen3.5-flash"
+DEFAULT_BACKEND = "dashscope"
+CHECKPOINT_EVERY = 20
 
 # ── Prompt template ────────────────────────────────────────────────────────────
 
@@ -96,18 +99,6 @@ USER_TEMPLATE = """\
 === Page {page_number} ===
 {page_text}
 """
-
-EXPECTED_JSON = """\
-{
-  "signals": {"A": true/false, "B": true/false, "C": true/false, "D": true/false},
-  "hints": {
-    "A": {"mf_candidates": [], "has_table": bool, "has_equation": bool},
-    "C": {"ingredients_detected": []},
-    "D": {"aesthetic_terms": []}
-  },
-  "confidence": 0.0-1.0,
-  "skip_reason": null or "toc/index/blank/copyright"
-}"""
 
 # ── JSON helpers ──────────────────────────────────────────────────────────────
 
@@ -190,7 +181,7 @@ def default_signal(page_num: int, skip_reason: str | None = None, all_true: bool
 def call_ollama(
     page_num: int,
     page_text: str,
-    model: str = DEFAULT_MODEL,
+    model: str = DEFAULT_OLLAMA_MODEL,
     retries: int = 3,
     logger: logging.Logger | None = None,
 ) -> dict[str, Any]:
@@ -226,68 +217,11 @@ def call_ollama(
             content = resp.json()["message"]["content"].strip()
             return parse_signal_json(content, page_num, log)
         except Exception as e:
-            log.warning(f"[router] page {page_num} attempt {attempt} failed: {e}")
+            log.warning(f"[router] ollama page {page_num} attempt {attempt} failed: {e}")
             if attempt == retries:
-                log.error(f"[router] page {page_num} all retries failed — returning safe default")
+                log.error(f"[router] ollama page {page_num} all retries failed — returning safe default")
                 return default_signal(page_num, skip_reason=f"router_error: {e}")
             time.sleep(1)
-
-    return default_signal(page_num)
-
-# ── DashScope call (synchronous, single) ──────────────────────────────────────
-
-def call_dashscope(
-    page_num: int,
-    page_text: str,
-    model: str = DEFAULT_DASHSCOPE_MODEL,
-    api_key: str = "",
-    retries: int = 3,
-    logger: logging.Logger | None = None,
-) -> dict[str, Any]:
-    """
-    Call DashScope-compatible API (OpenAI format), synchronous single-page version.
-    Used as escalation when local 9b/27b models don't meet recall targets.
-    """
-    log = logger or logging.getLogger(__name__)
-    if not api_key:
-        api_key = os.environ.get("DASHSCOPE_API_KEY", "")
-    if not api_key:
-        log.error("[router] DASHSCOPE_API_KEY not set — cannot use dashscope provider")
-        return default_signal(page_num, skip_reason="dashscope_unconfigured")
-
-    text_snippet = page_text[:3000] if len(page_text) > 3000 else page_text
-    user_content = USER_TEMPLATE.format(page_number=page_num, page_text=text_snippet)
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    body = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
-        "temperature": 0,
-        "max_tokens": 512,
-        "stream": False,
-        "enable_thinking": False,
-    }
-
-    for attempt in range(1, retries + 1):
-        try:
-            with httpx.Client(trust_env=False, timeout=60, follow_redirects=False) as client:
-                resp = client.post(DASHSCOPE_URL, headers=headers, json=body)
-            resp.raise_for_status()
-            data = resp.json()
-            text = data["choices"][0]["message"]["content"].strip()
-            return parse_signal_json(text, page_num, log)
-        except Exception as e:
-            log.warning(f"[router] dashscope page {page_num} attempt {attempt} failed: {e}")
-            if attempt == retries:
-                log.error(f"[router] dashscope page {page_num} all retries failed")
-                return default_signal(page_num, skip_reason=f"dashscope_error: {e}")
-            time.sleep(2 ** attempt)
 
     return default_signal(page_num)
 
@@ -323,6 +257,7 @@ async def async_call_dashscope(
         "max_tokens": 512,
         "stream": False,
         "enable_thinking": False,
+        "response_format": {"type": "json_object"},
     }
 
     async with semaphore:
@@ -336,9 +271,9 @@ async def async_call_dashscope(
                 result["page"] = page_num
                 return result
             except Exception as e:
-                log.warning(f"[router] async dashscope page {page_num} attempt {attempt} failed: {e}")
+                log.warning(f"[router] dashscope page {page_num} attempt {attempt} failed: {e}")
                 if attempt == retries:
-                    log.error(f"[router] async dashscope page {page_num} all retries failed")
+                    log.error(f"[router] dashscope page {page_num} all retries failed")
                     result = default_signal(page_num, skip_reason=f"dashscope_error: {e}")
                     result["page"] = page_num
                     return result
@@ -356,11 +291,11 @@ async def async_process_dashscope(
     model: str,
     api_key: str,
     concurrency: int,
-    checkpoint_every: int = 50,
+    checkpoint_every: int = CHECKPOINT_EVERY,
     log: logging.Logger | None = None,
 ) -> dict[int, dict]:
     """
-    Process a list of pages concurrently via DashScope API.
+    Process pages concurrently via DashScope API.
     Returns signals_by_page dict (merged with existing).
     Saves checkpoint every `checkpoint_every` completions.
     """
@@ -372,7 +307,7 @@ async def async_process_dashscope(
     t0 = time.time()
     completed = 0
 
-    # Filter blank pages before async
+    # Handle blank pages before async
     async_tasks = []
     for page in todo_pages:
         pnum = page["page"]
@@ -397,11 +332,9 @@ async def async_process_dashscope(
             for p in async_tasks
         ]
 
-        # Use as_completed pattern via asyncio.gather with return_exceptions
-        # but we want checkpointing, so use gather with chunking
-        chunk_size = checkpoint_every
-        for chunk_start in range(0, len(tasks), chunk_size):
-            chunk = tasks[chunk_start: chunk_start + chunk_size]
+        # Process in chunks for checkpointing
+        for chunk_start in range(0, len(tasks), checkpoint_every):
+            chunk = tasks[chunk_start: chunk_start + checkpoint_every]
             results = await asyncio.gather(*chunk, return_exceptions=True)
 
             for r in results:
@@ -450,28 +383,37 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out", help="Output path (default: output/{book_id}/signals.json)")
     p.add_argument("--pages", type=int, default=None, help="Max pages to process (default: all)")
     p.add_argument("--start-page", type=int, default=1, help="Start at this page number (default: 1)")
-    p.add_argument("--model", default=DEFAULT_MODEL, help=f"Ollama model (default: {DEFAULT_MODEL})")
     p.add_argument("--resume", action="store_true", default=True, help="Skip already-done pages (default: True)")
     p.add_argument("--no-resume", dest="resume", action="store_false")
     p.add_argument("--force", action="store_true", help="Re-run all pages")
     p.add_argument("--pilot", action="store_true", help="Print detailed output for each page (debug)")
 
-    # Backend selection — both --backend and --provider accepted (synonyms)
-    backend_grp = p.add_mutually_exclusive_group()
-    backend_grp.add_argument(
-        "--backend", choices=["ollama", "dashscope"], default=None,
-        help="Router backend: ollama (local 9b/27b) or dashscope (DashScope API, async concurrent)",
-    )
-    backend_grp.add_argument(
-        "--provider", choices=["ollama", "dashscope"], default=None,
-        help="Alias for --backend (kept for backwards compatibility)",
+    # Backend selection — --backend is primary, --provider is legacy alias
+    p.add_argument(
+        "--backend", "--provider",
+        choices=["ollama", "dashscope"],
+        default=DEFAULT_BACKEND,
+        dest="backend",
+        help=f"Router backend: dashscope (default, async API) or ollama (local sync)",
     )
 
+    # Model selection
     p.add_argument(
-        "--dashscope-model", "--ds-model",
-        default=DEFAULT_DASHSCOPE_MODEL,
-        help=f"DashScope model name (default: {DEFAULT_DASHSCOPE_MODEL})",
+        "--model",
+        default=None,
+        help=(
+            f"Model name. For dashscope: default={DEFAULT_DASHSCOPE_MODEL}. "
+            f"For ollama: default={DEFAULT_OLLAMA_MODEL}."
+        ),
     )
+    # Legacy alias kept for backwards compatibility
+    p.add_argument(
+        "--dashscope-model",
+        default=None,
+        dest="dashscope_model_legacy",
+        help=argparse.SUPPRESS,  # hidden, use --model instead
+    )
+
     p.add_argument(
         "--concurrency", type=int, default=5,
         help="Concurrent requests for dashscope backend (default: 5)",
@@ -482,8 +424,15 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    # Resolve backend (--backend takes precedence over --provider)
-    backend = args.backend or args.provider or "ollama"
+    # Resolve effective model
+    if args.model:
+        effective_model = args.model
+    elif args.dashscope_model_legacy:
+        effective_model = args.dashscope_model_legacy
+    elif args.backend == "dashscope":
+        effective_model = DEFAULT_DASHSCOPE_MODEL
+    else:
+        effective_model = DEFAULT_OLLAMA_MODEL
 
     # Resolve input
     if args.input_file:
@@ -511,7 +460,10 @@ def main() -> None:
         handlers=[logging.FileHandler(log_path), logging.StreamHandler()],
     )
     log = logging.getLogger("signal_router")
-    log.info(f"book_id={book_id}, backend={backend}, model={args.model}, resume={args.resume}")
+    log.info(
+        f"book_id={book_id}, backend={args.backend}, model={effective_model}, "
+        f"concurrency={args.concurrency}, resume={args.resume}"
+    )
 
     # Load pages
     pages: list[dict] = json.loads(pages_path.read_text())
@@ -535,7 +487,7 @@ def main() -> None:
 
     t0 = time.time()
 
-    if backend == "dashscope":
+    if args.backend == "dashscope":
         # Async concurrent path
         api_key = os.environ.get("DASHSCOPE_API_KEY", "")
         if not api_key:
@@ -547,7 +499,7 @@ def main() -> None:
                 todo_pages=todo,
                 out_path=out_path,
                 existing=existing,
-                model=args.dashscope_model,
+                model=effective_model,
                 api_key=api_key,
                 concurrency=args.concurrency,
                 log=log,
@@ -575,7 +527,7 @@ def main() -> None:
             if not page_text.strip():
                 sig = default_signal(page_num, skip_reason="blank_page")
             else:
-                sig = call_ollama(page_num, page_text, model=args.model, logger=log)
+                sig = call_ollama(page_num, page_text, model=effective_model, logger=log)
 
             sig["page"] = page_num
             signals_by_page[page_num] = sig
@@ -588,8 +540,8 @@ def main() -> None:
                     f"conf={sig.get('confidence', 0):.2f}  skip={sig.get('skip_reason')}"
                 )
 
-            # Save every 50 pages
-            if (i + 1) % 50 == 0:
+            # Save every CHECKPOINT_EVERY pages
+            if (i + 1) % CHECKPOINT_EVERY == 0:
                 sorted_sigs = sorted(signals_by_page.values(), key=lambda x: x["page"])
                 save_signals(out_path, sorted_sigs)
                 elapsed = time.time() - t0
@@ -616,7 +568,8 @@ def main() -> None:
 
     print(f"\n── Signal Router Summary ──")
     print(f"  book_id:      {book_id}")
-    print(f"  backend:      {backend}")
+    print(f"  backend:      {args.backend}")
+    print(f"  model:        {effective_model}")
     print(f"  total:        {total}")
     print(f"  A (quant):    {sig_a:4d} ({sig_a/total*100:.0f}%)")
     print(f"  B (recipe):   {sig_b:4d} ({sig_b/total*100:.0f}%)")

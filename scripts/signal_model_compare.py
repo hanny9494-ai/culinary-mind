@@ -3,18 +3,20 @@
 scripts/signal_model_compare.py
 三模型对比评测 — signal_router 在不同 DashScope 模型下的准确率 / 速度 / 成本
 
-从 3 本书各抽 10 页，用 3 个模型分别跑信号路由，对比：
-  - 准确率（以 skill_a results.jsonl 为 ground truth）
+从 3 本书各抽 10 页（stratified: 5页有skill结果 + 5页无skill结果），
+用 3 个模型分别跑信号路由，对比：
+  - A/D 信号准确率（以 skill_a / skill_d results.jsonl 为 ground truth）
   - 漏标率（false negative）
   - 误标率（false positive）
-  - hints 质量（MF_id 有效率）
+  - hints 质量（MF_id 是否存在且合理）
   - 速度（秒/页）
-  - 成本（token 用量）
+  - 输入/输出 token 数
 
 Usage:
     python scripts/signal_model_compare.py
     python scripts/signal_model_compare.py --pages-per-book 15 --concurrency 8
     python scripts/signal_model_compare.py --output /tmp/compare.json
+    python scripts/signal_model_compare.py --models qwen3.5-flash qwen3.6-plus
 """
 
 import asyncio
@@ -44,27 +46,30 @@ SAMPLE_BOOKS = [
         "book_id": "rao_engineering_properties",
         "desc": "工程教科书（公式密集）",
         "has_skill_a": True,
+        "has_skill_d": False,
     },
     {
         "book_id": "koji_alchemy",
         "desc": "科学+食谱混合",
         "has_skill_a": True,
+        "has_skill_d": True,
     },
     {
         "book_id": "guangdong_pengtiao_quanshu",
         "desc": "中文粤菜（审美+食谱）",
-        "has_skill_a": False,  # no skill_a results yet
+        "has_skill_a": False,
+        "has_skill_d": True,
     },
 ]
 
 # ── Models to compare (all via DashScope) ─────────────────────────────────────
-MODELS = [
+DEFAULT_MODELS = [
     "qwen3.5-flash",
-    "qwen-plus",
-    "glm-4-flash",  # 智谱 GLM on DashScope; try glm4-flash-250414 if available
+    "qwen3.6-plus",
+    "glm-5",
 ]
 
-# ── Prompt (same as signal_router.py) ─────────────────────────────────────────
+# ── Prompt (same as signal_router.py — must not be modified) ──────────────────
 SYSTEM_PROMPT = """\
 你是一个页面内容路由器。给你一页书的文本，判断它包含哪些类型的可提取信息。
 
@@ -129,12 +134,12 @@ def load_pages(book_id: str) -> list[dict]:
     return json.loads(path.read_text())
 
 
-def load_skill_a_ground_truth(book_id: str) -> set[int]:
-    """Return set of page numbers that have at least one skill_a result."""
-    path = OUTPUT_ROOT / book_id / "skill_a" / "results.jsonl"
+def load_skill_ground_truth(book_id: str, skill: str) -> set[int]:
+    """Return set of page numbers that have at least one skill result."""
+    path = OUTPUT_ROOT / book_id / f"skill_{skill}" / "results.jsonl"
     if not path.exists():
         return set()
-    pages = set()
+    pages: set[int] = set()
     with open(path) as f:
         for line in f:
             line = line.strip()
@@ -150,13 +155,35 @@ def load_skill_a_ground_truth(book_id: str) -> set[int]:
     return pages
 
 
-def sample_pages(pages: list[dict], n: int, seed: int = 42) -> list[dict]:
-    """Sample n pages with content (non-blank), reproducible."""
-    content_pages = [p for p in pages if p.get("text", "").strip()]
+def sample_pages_stratified(
+    all_pages: list[dict],
+    skill_a_gt: set[int],
+    n_positive: int = 5,
+    n_negative: int = 5,
+    seed: int = 42,
+) -> list[dict]:
+    """
+    Stratified sample: n_positive pages from pages WITH skill_a results,
+    n_negative pages from pages WITHOUT skill_a results.
+    Falls back to simple random if strata are too small.
+    """
+    content_pages = [p for p in all_pages if p.get("text", "").strip()]
+    positive = [p for p in content_pages if p["page"] in skill_a_gt]
+    negative = [p for p in content_pages if p["page"] not in skill_a_gt]
+
     rng = random.Random(seed)
-    if len(content_pages) <= n:
-        return content_pages
-    return rng.sample(content_pages, n)
+    sampled_pos = rng.sample(positive, min(n_positive, len(positive)))
+    sampled_neg = rng.sample(negative, min(n_negative, len(negative)))
+
+    # If not enough in either stratum, top up from the other
+    total_needed = n_positive + n_negative
+    result = sampled_pos + sampled_neg
+    if len(result) < total_needed:
+        remaining_pool = [p for p in content_pages if p not in result]
+        extra = rng.sample(remaining_pool, min(total_needed - len(result), len(remaining_pool)))
+        result += extra
+
+    return sorted(result, key=lambda p: p["page"])
 
 # ── DashScope async call ───────────────────────────────────────────────────────
 
@@ -222,6 +249,7 @@ async def call_model_async(
         "max_tokens": 512,
         "stream": False,
         "enable_thinking": False,
+        "response_format": {"type": "json_object"},
     }
 
     t_start = time.time()
@@ -263,7 +291,7 @@ async def call_model_async(
     }
 
 
-async def run_model_on_book(
+async def run_model_on_pages(
     pages: list[dict],
     model: str,
     api_key: str,
@@ -277,130 +305,196 @@ async def run_model_on_book(
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
 
-def evaluate_skill_a(
+VALID_MF_PREFIXES = {"MF-T", "MF-K", "MF-M", "MF-R", "MF-C"}
+
+
+def evaluate_signal(
     results: list[dict],
     ground_truth_pages: set[int],
+    signal_key: str = "A",
 ) -> dict:
     """
-    Evaluate signal A accuracy against ground truth.
-    ground_truth_pages: set of page numbers where skill_a found results.
+    Evaluate one signal key against ground truth page set.
+    ground_truth_pages: pages where skill extracted at least one result.
     """
     if not ground_truth_pages:
         return {"note": "no_ground_truth"}
 
     tp = fp = fn = tn = 0
-    valid_mf_prefixes = {"MF-T", "MF-K", "MF-M", "MF-R", "MF-C"}
     hints_useful = 0
     hints_total = 0
 
     for r in results:
         page = r["page"]
         sig = r["signal"]
-        predicted_a = sig.get("signals", {}).get("A", False)
-        actual_a = page in ground_truth_pages
+        predicted = sig.get("signals", {}).get(signal_key, False)
+        actual = page in ground_truth_pages
 
-        if predicted_a and actual_a:
+        if predicted and actual:
             tp += 1
-        elif predicted_a and not actual_a:
+        elif predicted and not actual:
             fp += 1
-        elif not predicted_a and actual_a:
+        elif not predicted and actual:
             fn += 1
         else:
             tn += 1
 
-        # hints quality: check if mf_candidates look valid
-        if predicted_a:
-            mf_cands = (
-                sig.get("hints", {}).get("A", {}).get("mf_candidates", [])
-                if isinstance(sig.get("hints", {}).get("A"), dict)
-                else []
-            )
+        # hints quality for A signal: check mf_candidates
+        if signal_key == "A" and predicted:
+            hints_a = sig.get("hints", {}).get("A", {})
+            mf_cands = hints_a.get("mf_candidates", []) if isinstance(hints_a, dict) else []
             hints_total += 1
-            if any(any(c.startswith(p) for p in valid_mf_prefixes) for c in mf_cands):
+            if any(any(c.startswith(pfx) for pfx in VALID_MF_PREFIXES) for c in mf_cands):
                 hints_useful += 1
 
     total = tp + fp + fn + tn
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
     recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
     f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
-    fn_rate = fn / (tp + fn) if (tp + fn) > 0 else 0.0  # false negative rate (miss rate)
-    fp_rate = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # false positive rate
+    fn_rate = fn / (tp + fn) if (tp + fn) > 0 else 0.0
+    fp_rate = fp / (fp + tn) if (fp + tn) > 0 else 0.0
 
-    return {
+    result = {
         "tp": tp, "fp": fp, "fn": fn, "tn": tn,
         "precision": round(precision, 3),
         "recall": round(recall, 3),
         "f1": round(f1, 3),
-        "fn_rate": round(fn_rate, 3),  # 漏标率
-        "fp_rate": round(fp_rate, 3),  # 误标率
-        "hints_useful_pct": round(hints_useful / hints_total * 100, 1) if hints_total > 0 else 0.0,
+        "fn_rate": round(fn_rate, 3),
+        "fp_rate": round(fp_rate, 3),
     }
+    if signal_key == "A":
+        result["hints_useful_pct"] = round(
+            hints_useful / hints_total * 100, 1
+        ) if hints_total > 0 else 0.0
+
+    return result
 
 # ── Formatting ────────────────────────────────────────────────────────────────
 
-def print_comparison_table(model_stats: dict[str, dict]) -> None:
-    """Print a human-readable comparison table."""
-    print("\n" + "=" * 80)
-    print("  SIGNAL ROUTER — 三模型对比评测结果")
-    print("=" * 80)
+def fmt_pct(val: Any, factor: float = 100.0, decimals: int = 0) -> str:
+    if val == "N/A" or not isinstance(val, (int, float)):
+        return "N/A"
+    return f"{val * factor:.{decimals}f}%"
 
-    # Per-book breakdown
-    all_books = sorted({book for m in model_stats.values() for book in m["per_book"]})
-    for book_id in all_books:
-        book_cfg = next((b for b in SAMPLE_BOOKS if b["book_id"] == book_id), {})
-        print(f"\n📚 {book_id} — {book_cfg.get('desc', '')}")
-        print(f"{'Model':<25} {'Pages':>6} {'Time/pg':>8} {'Tokens':>8} {'Recall':>7} {'Prec':>7} {'F1':>6} {'FN%':>6} {'FP%':>6}")
-        print("-" * 80)
-        for model, stats in model_stats.items():
-            bk = stats["per_book"].get(book_id, {})
-            if not bk:
-                continue
-            acc = bk.get("accuracy", {})
-            avg_time = bk.get("avg_time_s", 0)
-            avg_tokens = bk.get("avg_tokens", 0)
-            if "note" in acc:
-                recall = prec = f1 = fn = fp = "N/A"
-            else:
-                recall = f"{acc.get('recall', 0)*100:.0f}%"
-                prec = f"{acc.get('precision', 0)*100:.0f}%"
-                f1 = f"{acc.get('f1', 0):.2f}"
-                fn = f"{acc.get('fn_rate', 0)*100:.0f}%"
-                fp = f"{acc.get('fp_rate', 0)*100:.0f}%"
-            print(f"  {model:<23} {bk.get('n_pages', 0):>6} {avg_time:>7.2f}s {avg_tokens:>8.0f} {recall:>7} {prec:>7} {f1:>6} {fn:>6} {fp:>6}")
+
+def fmt_f(val: Any, decimals: int = 2) -> str:
+    if not isinstance(val, (int, float)):
+        return "N/A"
+    return f"{val:.{decimals}f}"
+
+
+def print_comparison_table(
+    model_stats: dict[str, dict],
+    books: list[dict],
+) -> None:
+    """Print formatted comparison table to stdout."""
+    print("\n" + "=" * 90)
+    print("  SIGNAL ROUTER — 三模型对比评测")
+    print("=" * 90)
+
+    all_book_ids = [b["book_id"] for b in books]
+
+    for book_cfg in books:
+        bid = book_cfg["book_id"]
+        desc = book_cfg.get("desc", "")
+        has_a = book_cfg.get("has_skill_a", False)
+        has_d = book_cfg.get("has_skill_d", False)
+        gt_info = []
+        if has_a:
+            gt_info.append("GT:skill_a")
+        if has_d:
+            gt_info.append("GT:skill_d")
+        print(f"\n📚 {bid} — {desc}  ({', '.join(gt_info) or '无ground truth'})")
+
+        # Signal A table
+        if has_a:
+            print(f"\n  [Signal A — 定量参数]")
+            hdr = f"  {'Model':<22} {'Pages':>5} {'Time/p':>7} {'Tokens':>7} {'Recall':>7} {'Prec':>7} {'F1':>5} {'FN%':>6} {'FP%':>6} {'Hints%':>7}"
+            print(hdr)
+            print("  " + "-" * 80)
+            for model, stats in model_stats.items():
+                bk = stats["per_book"].get(bid, {})
+                if not bk:
+                    continue
+                acc = bk.get("accuracy_a", {})
+                avg_t = bk.get("avg_time_s", 0)
+                avg_tok = bk.get("avg_tokens", 0)
+                if "note" in acc:
+                    row = f"  {model:<22} {bk.get('n_pages',0):>5} {avg_t:>6.2f}s {avg_tok:>7.0f} {'N/A':>7} {'N/A':>7} {'N/A':>5} {'N/A':>6} {'N/A':>6} {'N/A':>7}"
+                else:
+                    row = (
+                        f"  {model:<22} {bk.get('n_pages',0):>5} {avg_t:>6.2f}s {avg_tok:>7.0f} "
+                        f"{fmt_pct(acc.get('recall')):>7} "
+                        f"{fmt_pct(acc.get('precision')):>7} "
+                        f"{fmt_f(acc.get('f1')):>5} "
+                        f"{fmt_pct(acc.get('fn_rate')):>6} "
+                        f"{fmt_pct(acc.get('fp_rate')):>6} "
+                        f"{fmt_f(acc.get('hints_useful_pct', 0), 1):>6}%"
+                    )
+                print(row)
+
+        # Signal D table
+        if has_d:
+            print(f"\n  [Signal D — 审美/术语]")
+            hdr = f"  {'Model':<22} {'Recall':>7} {'Prec':>7} {'F1':>5} {'FN%':>6} {'FP%':>6}"
+            print(hdr)
+            print("  " + "-" * 50)
+            for model, stats in model_stats.items():
+                bk = stats["per_book"].get(bid, {})
+                if not bk:
+                    continue
+                acc = bk.get("accuracy_d", {})
+                if "note" in acc or not acc:
+                    row = f"  {model:<22} {'N/A':>7} {'N/A':>7} {'N/A':>5} {'N/A':>6} {'N/A':>6}"
+                else:
+                    row = (
+                        f"  {model:<22} "
+                        f"{fmt_pct(acc.get('recall')):>7} "
+                        f"{fmt_pct(acc.get('precision')):>7} "
+                        f"{fmt_f(acc.get('f1')):>5} "
+                        f"{fmt_pct(acc.get('fn_rate')):>6} "
+                        f"{fmt_pct(acc.get('fp_rate')):>6}"
+                    )
+                print(row)
 
     # Overall summary
-    print(f"\n{'─'*80}")
-    print(f"  OVERALL SUMMARY")
-    print(f"{'─'*80}")
-    print(f"{'Model':<25} {'Pages':>6} {'Time/pg':>9} {'Tokens':>9} {'Recall':>8} {'Prec':>8} {'F1':>7} {'FN%':>7} {'FP%':>7}")
-    print("-" * 80)
+    print(f"\n{'='*90}")
+    print("  OVERALL (Signal A, books with ground truth)")
+    print(f"{'='*90}")
+    hdr = f"  {'Model':<22} {'Pages':>5} {'Time/p':>7} {'In tok':>7} {'Out tok':>8} {'Recall':>7} {'Prec':>7} {'F1':>5} {'FN%':>6} {'FP%':>6}"
+    print(hdr)
+    print("  " + "-" * 85)
     for model, stats in model_stats.items():
-        overall = stats.get("overall", {})
-        acc = overall.get("accuracy", {})
-        avg_time = overall.get("avg_time_s", 0)
-        avg_tokens = overall.get("avg_tokens", 0)
-        n_pages = overall.get("n_pages", 0)
-        if "note" in acc:
-            recall = prec = f1 = fn = fp = "N/A"
+        ov = stats.get("overall", {})
+        acc = ov.get("accuracy_a", {})
+        avg_t = ov.get("avg_time_s", 0)
+        avg_in = ov.get("avg_prompt_tokens", 0)
+        avg_out = ov.get("avg_completion_tokens", 0)
+        n = ov.get("n_pages", 0)
+        if "note" in acc or not acc:
+            row = f"  {model:<22} {n:>5} {avg_t:>6.2f}s {avg_in:>7.0f} {avg_out:>8.0f} {'N/A':>7} {'N/A':>7} {'N/A':>5} {'N/A':>6} {'N/A':>6}"
         else:
-            recall = f"{acc.get('recall', 0)*100:.0f}%"
-            prec = f"{acc.get('precision', 0)*100:.0f}%"
-            f1 = f"{acc.get('f1', 0):.2f}"
-            fn = f"{acc.get('fn_rate', 0)*100:.0f}%"
-            fp = f"{acc.get('fp_rate', 0)*100:.0f}%"
-        print(f"  {model:<23} {n_pages:>6} {avg_time:>8.2f}s {avg_tokens:>9.0f} {recall:>8} {prec:>8} {f1:>7} {fn:>7} {fp:>7}")
+            row = (
+                f"  {model:<22} {n:>5} {avg_t:>6.2f}s {avg_in:>7.0f} {avg_out:>8.0f} "
+                f"{fmt_pct(acc.get('recall')):>7} "
+                f"{fmt_pct(acc.get('precision')):>7} "
+                f"{fmt_f(acc.get('f1')):>5} "
+                f"{fmt_pct(acc.get('fn_rate')):>6} "
+                f"{fmt_pct(acc.get('fp_rate')):>6}"
+            )
+        print(row)
     print()
 
 
 def pick_winner(model_stats: dict[str, dict]) -> str:
-    """Simple scoring: recall * 0.5 + (1-fn_rate) * 0.3 + speed_score * 0.2"""
+    """Composite score: recall * 0.5 + (1-fn_rate) * 0.3 + speed_score * 0.2"""
     scores = {}
     times = {m: s["overall"].get("avg_time_s", 999) for m, s in model_stats.items()}
     max_time = max(times.values()) or 1
 
     for model, stats in model_stats.items():
-        acc = stats["overall"].get("accuracy", {})
-        if "note" in acc:
+        acc = stats["overall"].get("accuracy_a", {})
+        if "note" in acc or not acc:
             scores[model] = 0.0
             continue
         recall = acc.get("recall", 0)
@@ -408,21 +502,27 @@ def pick_winner(model_stats: dict[str, dict]) -> str:
         speed_score = 1 - (times[model] / max_time)
         scores[model] = recall * 0.5 + (1 - fn_rate) * 0.3 + speed_score * 0.2
 
-    return max(scores, key=lambda m: scores[m]) if scores else ""
-
+    if not scores:
+        return ""
+    return max(scores, key=lambda m: scores[m])
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def parse_args():
     import argparse
-    p = argparse.ArgumentParser(description="三模型 signal_router 对比评测")
-    p.add_argument("--pages-per-book", type=int, default=10, help="每本书抽样页数（默认10）")
-    p.add_argument("--concurrency", type=int, default=5, help="DashScope 并发数（默认5）")
-    p.add_argument("--seed", type=int, default=42, help="随机种子（默认42）")
-    p.add_argument("--output", default="", help="结果 JSON 保存路径（默认 output/signal_model_comparison.json）")
+    p = argparse.ArgumentParser(description="三模型 signal_router 对比评测（全部走 DashScope API）")
+    p.add_argument("--pages-per-book", type=int, default=10,
+                   help="每本书抽样页数（默认10，stratified: 5正+5负）")
+    p.add_argument("--concurrency", type=int, default=5,
+                   help="DashScope 并发数（默认5）")
+    p.add_argument("--seed", type=int, default=42,
+                   help="随机种子（默认42，确保可复现）")
+    p.add_argument("--output", default="",
+                   help="结果 JSON 保存路径（默认 output/signal_model_comparison.json）")
     p.add_argument("--models", nargs="*", default=None,
-                   help="覆盖测试的模型列表（默认: qwen3.5-flash qwen-plus glm-4-flash）")
-    p.add_argument("--verbose", action="store_true", help="显示每页详细结果")
+                   help=f"覆盖测试的模型列表（默认: {' '.join(DEFAULT_MODELS)}）")
+    p.add_argument("--verbose", action="store_true",
+                   help="显示每页详细结果")
     return p.parse_args()
 
 
@@ -432,8 +532,10 @@ async def main_async(args) -> None:
         print("ERROR: DASHSCOPE_API_KEY not set", file=sys.stderr)
         sys.exit(1)
 
-    models = args.models or MODELS
-    pages_per_book = args.pages_per_book
+    models = args.models or DEFAULT_MODELS
+    n_per_book = args.pages_per_book
+    n_pos = n_per_book // 2
+    n_neg = n_per_book - n_pos
 
     logging.basicConfig(
         level=logging.INFO,
@@ -444,21 +546,40 @@ async def main_async(args) -> None:
 
     # ── Load samples ──────────────────────────────────────────────────────────
     book_samples: dict[str, list[dict]] = {}
-    book_ground_truth: dict[str, set[int]] = {}
+    book_gt_a: dict[str, set[int]] = {}
+    book_gt_d: dict[str, set[int]] = {}
 
+    active_books = []
     for book_cfg in SAMPLE_BOOKS:
         bid = book_cfg["book_id"]
         all_pages = load_pages(bid)
         if not all_pages:
             log.warning(f"Book {bid}: pages.json not found, skipping")
             continue
-        sampled = sample_pages(all_pages, pages_per_book, seed=args.seed)
+
+        gt_a = load_skill_ground_truth(bid, "a") if book_cfg["has_skill_a"] else set()
+        gt_d = load_skill_ground_truth(bid, "d") if book_cfg["has_skill_d"] else set()
+
+        # Stratify on skill_a (primary signal)
+        if gt_a:
+            sampled = sample_pages_stratified(all_pages, gt_a, n_pos, n_neg, seed=args.seed)
+        else:
+            # No skill_a GT: just random sample
+            content_pages = [p for p in all_pages if p.get("text", "").strip()]
+            rng = random.Random(args.seed)
+            sampled = rng.sample(content_pages, min(n_per_book, len(content_pages)))
+            sampled = sorted(sampled, key=lambda p: p["page"])
+
         book_samples[bid] = sampled
-        gt = load_skill_a_ground_truth(bid) if book_cfg["has_skill_a"] else set()
-        book_ground_truth[bid] = gt
+        book_gt_a[bid] = gt_a
+        book_gt_d[bid] = gt_d
+        active_books.append(book_cfg)
+
         log.info(
-            f"Book {bid}: {len(sampled)} pages sampled, "
-            f"{len(gt)} skill_a ground truth pages"
+            f"Book {bid}: {len(sampled)} pages sampled "
+            f"(pos={sum(1 for p in sampled if p['page'] in gt_a)} "
+            f"neg={sum(1 for p in sampled if p['page'] not in gt_a)}), "
+            f"skill_a GT={len(gt_a)} pages, skill_d GT={len(gt_d)} pages"
         )
 
     if not book_samples:
@@ -475,74 +596,91 @@ async def main_async(args) -> None:
         all_results[model] = {}
 
         for bid, pages in book_samples.items():
-            log.info(f"  → {bid} ({len(pages)} pages)")
-            t_book_start = time.time()
-            results = await run_model_on_book(pages, model, api_key, args.concurrency)
-            t_book_elapsed = time.time() - t_book_start
+            log.info(f"  → {bid} ({len(pages)} pages, concurrency={args.concurrency})")
+            t0 = time.time()
+            results = await run_model_on_pages(pages, model, api_key, args.concurrency)
+            elapsed = time.time() - t0
             all_results[model][bid] = results
-            log.info(f"     done: {t_book_elapsed:.1f}s total, "
-                     f"{t_book_elapsed/len(pages):.2f}s/page")
+            log.info(f"     done: {elapsed:.1f}s total, {elapsed/len(pages):.2f}s/page")
 
             if args.verbose:
                 for r in results:
                     sig = r["signal"].get("signals", {})
-                    print(f"    p{r['page']:04d} A={sig.get('A',False)} B={sig.get('B',False)} "
-                          f"C={sig.get('C',False)} D={sig.get('D',False)} "
-                          f"t={r['elapsed_s']:.2f}s tok={r['usage'].get('total_tokens',0)}")
+                    print(
+                        f"    p{r['page']:04d} A={sig.get('A',False)} B={sig.get('B',False)} "
+                        f"C={sig.get('C',False)} D={sig.get('D',False)} "
+                        f"t={r['elapsed_s']:.2f}s "
+                        f"in={r['usage'].get('prompt_tokens',0)} "
+                        f"out={r['usage'].get('completion_tokens',0)}"
+                    )
 
     # ── Compute stats ─────────────────────────────────────────────────────────
     model_stats: dict[str, dict] = {}
 
     for model in models:
-        per_book = {}
-        all_model_results = []
+        per_book: dict[str, dict] = {}
+        all_model_results: list[dict] = []
 
         for bid, results in all_results.get(model, {}).items():
-            gt = book_ground_truth.get(bid, set())
+            gt_a = book_gt_a.get(bid, set())
+            gt_d = book_gt_d.get(bid, set())
             times = [r["elapsed_s"] for r in results]
-            tokens = [r["usage"].get("total_tokens", 0) for r in results]
-            acc = evaluate_skill_a(results, gt)
+            prompt_toks = [r["usage"].get("prompt_tokens", 0) for r in results]
+            completion_toks = [r["usage"].get("completion_tokens", 0) for r in results]
+            total_toks = [r["usage"].get("total_tokens", 0) for r in results]
+
+            acc_a = evaluate_signal(results, gt_a, "A") if gt_a else {"note": "no_ground_truth"}
+            acc_d = evaluate_signal(results, gt_d, "D") if gt_d else {"note": "no_ground_truth"}
 
             per_book[bid] = {
                 "n_pages": len(results),
                 "avg_time_s": round(sum(times) / len(times), 3) if times else 0,
                 "total_time_s": round(sum(times), 2),
-                "avg_tokens": round(sum(tokens) / len(tokens)) if tokens else 0,
-                "total_tokens": sum(tokens),
-                "accuracy": acc,
+                "avg_tokens": round(sum(total_toks) / len(total_toks)) if total_toks else 0,
+                "total_tokens": sum(total_toks),
+                "avg_prompt_tokens": round(sum(prompt_toks) / len(prompt_toks)) if prompt_toks else 0,
+                "avg_completion_tokens": round(sum(completion_toks) / len(completion_toks)) if completion_toks else 0,
+                "accuracy_a": acc_a,
+                "accuracy_d": acc_d,
             }
             all_model_results.extend(results)
 
-        # Aggregate overall (across books with ground truth)
-        gt_results = [
+        # Overall across all books
+        ov_times = [r["elapsed_s"] for r in all_model_results]
+        ov_prompt = [r["usage"].get("prompt_tokens", 0) for r in all_model_results]
+        ov_completion = [r["usage"].get("completion_tokens", 0) for r in all_model_results]
+        ov_total = [r["usage"].get("total_tokens", 0) for r in all_model_results]
+
+        # Only evaluate A accuracy on books that have skill_a GT
+        gt_results_a = [
             r for bid, results in all_results.get(model, {}).items()
             for r in results
-            if book_ground_truth.get(bid)
+            if book_gt_a.get(bid)
         ]
-        all_gt_pages = set().union(*[book_ground_truth[bid] for bid in all_results.get(model, {}) if book_ground_truth.get(bid)])
-
-        overall_times = [r["elapsed_s"] for r in all_model_results]
-        overall_tokens = [r["usage"].get("total_tokens", 0) for r in all_model_results]
+        all_gt_a = set().union(*(gt for gt in book_gt_a.values() if gt))
+        acc_overall_a = evaluate_signal(gt_results_a, all_gt_a, "A") if gt_results_a else {"note": "no_ground_truth"}
 
         model_stats[model] = {
             "model": model,
             "per_book": per_book,
             "overall": {
                 "n_pages": len(all_model_results),
-                "avg_time_s": round(sum(overall_times) / len(overall_times), 3) if overall_times else 0,
-                "total_time_s": round(sum(overall_times), 2),
-                "avg_tokens": round(sum(overall_tokens) / len(overall_tokens)) if overall_tokens else 0,
-                "total_tokens": sum(overall_tokens),
-                "accuracy": evaluate_skill_a(gt_results, all_gt_pages) if gt_results else {"note": "no_ground_truth"},
+                "avg_time_s": round(sum(ov_times) / len(ov_times), 3) if ov_times else 0,
+                "total_time_s": round(sum(ov_times), 2),
+                "avg_prompt_tokens": round(sum(ov_prompt) / len(ov_prompt)) if ov_prompt else 0,
+                "avg_completion_tokens": round(sum(ov_completion) / len(ov_completion)) if ov_completion else 0,
+                "avg_tokens": round(sum(ov_total) / len(ov_total)) if ov_total else 0,
+                "total_tokens": sum(ov_total),
+                "accuracy_a": acc_overall_a,
             },
         }
 
     # ── Print table ───────────────────────────────────────────────────────────
-    print_comparison_table(model_stats)
+    print_comparison_table(model_stats, active_books)
 
     winner = pick_winner(model_stats)
     if winner:
-        print(f"  🏆 推荐模型（综合评分）: {winner}")
+        print(f"  🏆 推荐模型（综合评分: recall×0.5 + (1-FN)×0.3 + speed×0.2）: {winner}")
         print()
 
     # ── Save JSON ─────────────────────────────────────────────────────────────
@@ -552,18 +690,17 @@ async def main_async(args) -> None:
     comparison_output = {
         "metadata": {
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "pages_per_book": pages_per_book,
+            "pages_per_book": n_per_book,
+            "n_positive_per_book": n_pos,
+            "n_negative_per_book": n_neg,
             "seed": args.seed,
             "concurrency": args.concurrency,
             "models": models,
-            "books": [b["book_id"] for b in SAMPLE_BOOKS],
+            "books": [b["book_id"] for b in active_books],
         },
         "model_stats": model_stats,
         "raw_results": {
-            model: {
-                bid: results
-                for bid, results in book_results.items()
-            }
+            model: {bid: results for bid, results in book_results.items()}
             for model, book_results in all_results.items()
         },
         "winner": winner,
