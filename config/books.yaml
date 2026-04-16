@@ -19,7 +19,7 @@
   author: Nathan Myhrvold
   language: en
   purpose: science+recipe
-  skills: ["A", "B", "C", "D"]
+  skills: ["A", "B", "C"]
   priority: P0
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -27,8 +27,8 @@
   skill_a_status: pending
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: extreme
   l0_count: 3110
   recipe_count: 2145
@@ -39,7 +39,7 @@
   author: Nathan Myhrvold
   language: en
   purpose: science+recipe
-  skills: ["A", "B", "C", "D"]
+  skills: ["A", "B", "C"]
   priority: P0
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -47,8 +47,8 @@
   skill_a_status: pending
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: extreme
   l0_count: 893
   recipe_count: 483
@@ -59,7 +59,7 @@
   author: Nathan Myhrvold
   language: en
   purpose: science+recipe
-  skills: ["A", "B", "C", "D"]
+  skills: ["A", "B", "C"]
   priority: P0
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -67,8 +67,8 @@
   skill_a_status: pending
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: extreme
   l0_count: 1059
   recipe_count: 501
@@ -79,7 +79,7 @@
   author: Nathan Myhrvold
   language: en
   purpose: science+recipe
-  skills: ["A", "B", "C", "D"]
+  skills: ["A", "B", "C"]
   priority: P0
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -87,8 +87,8 @@
   skill_a_status: pending
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: extreme
   l0_count: 1034
   recipe_count: 703
@@ -99,7 +99,7 @@
   author: J. Kenji López-Alt
   language: en
   purpose: science+recipe
-  skills: ["A", "B", "C", "D"]
+  skills: ["A", "B", "C"]
   priority: P0
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -107,8 +107,8 @@
   skill_a_status: pending
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: high
   l0_count: 2242
   recipe_count: 2136
@@ -119,7 +119,7 @@
   author: America's Test Kitchen
   language: en
   purpose: science+recipe
-  skills: ["A", "B", "C", "D"]
+  skills: ["A", "B", "C"]
   priority: P0
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -127,8 +127,8 @@
   skill_a_status: pending
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: high
   l0_count: 3806
   recipe_count: 2802
@@ -139,7 +139,7 @@
   author: Peter Greweling
   language: en
   purpose: science+recipe
-  skills: ["A", "B", "C", "D"]
+  skills: ["A", "B", "C"]
   priority: P0
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -147,8 +147,8 @@
   skill_a_status: pending
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: high
   l0_count: 1934
   recipe_count: 908
@@ -159,7 +159,7 @@
   author: Stephen Beckett
   language: en
   purpose: science+recipe
-  skills: ["A", "B", "C", "D"]
+  skills: ["A", "B", "C"]
   priority: P0
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -167,8 +167,8 @@
   skill_a_status: pending
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: high
   l0_count: 1577
   recipe_count: 657
@@ -182,7 +182,7 @@
   author: Wayne Gisslen
   language: en
   purpose: science+recipe
-  skills: ["A", "B", "C", "D"]
+  skills: ["A", "B", "C"]
   priority: P1
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -190,8 +190,8 @@
   skill_a_status: pending
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: medium
   l0_count: 2136
   recipe_count: 3312
@@ -201,7 +201,7 @@
   author: Jeffrey Hamelman
   language: en
   purpose: science+recipe
-  skills: ["A", "B", "C", "D"]
+  skills: ["A", "B", "C"]
   priority: P1
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -209,8 +209,8 @@
   skill_a_status: pending
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: medium
   l0_count: 1669
   recipe_count: 2302
@@ -220,7 +220,7 @@
   author: Hervé This
   language: en
   purpose: science+recipe
-  skills: ["A", "B", "C", "D"]
+  skills: ["A", "B", "C"]
   priority: P1
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -228,8 +228,8 @@
   skill_a_status: pending
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: medium
   l0_count: 1951
   recipe_count: 809
@@ -258,7 +258,7 @@
   author: Jeff Potter
   language: en
   purpose: science+recipe
-  skills: ["A", "B", "C", "D"]
+  skills: ["A", "B", "C"]
   priority: P1
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -266,8 +266,8 @@
   skill_a_status: pending
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: medium
   l0_count: 2266
   recipe_count: 1460
@@ -277,7 +277,7 @@
   author: Nathan Myhrvold
   language: en
   purpose: science+recipe
-  skills: ["A", "B", "C", "D"]
+  skills: ["A", "B", "C"]
   priority: P1
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -285,8 +285,8 @@
   skill_a_status: pending
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: medium
   l0_count: 1300
   recipe_count: 1119
@@ -296,7 +296,7 @@
   author: "Rich Shih & Jeremy Umansky"
   language: en
   purpose: science+recipe
-  skills: ["A", "B", "C", "D"]
+  skills: ["A", "B", "C"]
   priority: P1
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -304,8 +304,8 @@
   skill_a_status: pending
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: medium
   l0_count: 978
   recipe_count: 664
@@ -315,7 +315,7 @@
   author: "René Redzepi & David Zilber"
   language: en
   purpose: science+recipe
-  skills: ["A", "B", "C", "D"]
+  skills: ["A", "B", "C"]
   priority: P1
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -323,8 +323,8 @@
   skill_a_status: pending
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: medium
   l0_count: 850
   recipe_count: 614
@@ -334,7 +334,7 @@
   author: Michael Ruhlman
   language: en
   purpose: science+recipe
-  skills: ["A", "B", "C", "D"]
+  skills: ["A", "B", "C"]
   priority: P1
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -342,8 +342,8 @@
   skill_a_status: pending
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: medium
   l0_count: 355
   recipe_count: 465
@@ -353,7 +353,7 @@
   author: "Vaclavik & Christian"
   language: en
   purpose: science+recipe
-  skills: ["A", "B", "C", "D"]
+  skills: ["A", "B", "C"]
   priority: P1
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -361,8 +361,8 @@
   skill_a_status: pending
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: medium
   recipe_count: 1887
 
@@ -374,7 +374,7 @@
   author: Harold McGee
   language: en
   purpose: science+recipe
-  skills: ["A", "C", "D"]
+  skills: ["A", "C"]
   priority: P2
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -382,8 +382,8 @@
   skill_a_status: pending
   skill_b_status: skip
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: low
   l0_count: 3955
   recipe_count: 894
@@ -483,17 +483,17 @@
   title: 冰淇淋风味学
   language: zh
   purpose: science+recipe
-  skills: ["B", "C", "D"]
-  priority: P2
+  skills: ["A", "B", "C", "D"]
+  priority: P1
   ocr_status: done
   ocr_tool: mineru
   signal_status: done
-  skill_a_status: skip
+  skill_a_status: pending
   skill_b_status: done
   skill_c_status: skip
   skill_d_status: pending
-  pipeline: ["skill_d"]
-  parameter_density: medium
+  pipeline: ["skill_a", "skill_d"]
+  parameter_density: high
   l0_count: 414
   recipe_count: 215
 
@@ -501,15 +501,15 @@
   title: パンの科学 (Bread Science)
   language: ja
   purpose: science+recipe
-  skills: ["B", "C", "D"]
+  skills: ["B", "C"]
   ocr_status: done
   ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["skill_d"]
+  skill_d_status: skip
+  pipeline: []
   parameter_density: low
   l0_count: 522
   recipe_count: 208
@@ -552,15 +552,15 @@
   title: The Professional Pastry Chef
   language: en
   purpose: science+recipe
-  skills: ["B", "C", "D"]
+  skills: ["B", "C"]
   ocr_status: done
   ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["skill_d"]
+  skill_d_status: skip
+  pipeline: []
   parameter_density: low
   l0_count: 1716
   recipe_count: 16
@@ -569,7 +569,7 @@
   title: Handbook of Molecular Gastronomy
   language: en
   purpose: science+recipe
-  skills: ["A", "C", "D"]
+  skills: ["A", "C"]
   priority: P2
   ocr_status: needs_reocr
   ocr_tool: mineru
@@ -577,8 +577,8 @@
   skill_a_status: pending
   skill_b_status: skip
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["reocr", "signal", "skill_a", "skill_d"]
+  skill_d_status: skip
+  pipeline: ["reocr", "signal", "skill_a"]
   parameter_density: medium
   l0_count: 10
   recipe_count: 521
@@ -626,15 +626,15 @@
   author: Shizuo Tsuji
   language: en
   purpose: science+recipe
-  skills: ["B", "C", "D"]
+  skills: ["B", "C"]
   ocr_status: done
   ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["skill_d"]
+  skill_d_status: skip
+  pipeline: []
   parameter_density: low
   recipe_count: 300
 
@@ -643,15 +643,15 @@
   author: Jacques Pépin
   language: en
   purpose: science+recipe
-  skills: ["B", "C", "D"]
+  skills: ["B", "C"]
   ocr_status: done
   ocr_tool: mineru
   signal_status: done
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["skill_d"]
+  skill_d_status: skip
+  pipeline: []
   parameter_density: low
   recipe_count: 1111
 
@@ -665,15 +665,15 @@
   author: Aaron Franklin
   language: en
   purpose: science+recipe
-  skills: ["B", "C", "D"]
+  skills: ["B", "C"]
   ocr_status: done
   ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["skill_d"]
+  skill_d_status: skip
+  pipeline: []
   parameter_density: low
   recipe_count: 487
 
@@ -682,15 +682,15 @@
   author: Thomas Keller
   language: en
   purpose: science+recipe
-  skills: ["B", "C", "D"]
+  skills: ["B", "C"]
   ocr_status: done
   ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["skill_d"]
+  skill_d_status: skip
+  pipeline: []
   parameter_density: low
   recipe_count: 653
   note: sous-vide参数已被MC覆盖
@@ -733,15 +733,15 @@
   title: The Vegetarian Flavor Bible
   language: en
   purpose: science+recipe
-  skills: ["B", "C", "D"]
+  skills: ["B", "C"]
   ocr_status: done
   ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["skill_d"]
+  skill_d_status: skip
+  pipeline: []
   parameter_density: low
   recipe_count: 1740
 
@@ -750,15 +750,15 @@
   author: Michael Ruhlman
   language: en
   purpose: science+recipe
-  skills: ["B", "C", "D"]
+  skills: ["B", "C"]
   ocr_status: done
   ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["skill_d"]
+  skill_d_status: skip
+  pipeline: []
   parameter_density: low
   recipe_count: 766
 
@@ -767,15 +767,15 @@
   author: Sandor Katz
   language: en
   purpose: science+recipe
-  skills: ["B", "C", "D"]
+  skills: ["B", "C"]
   ocr_status: done
   ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["skill_d"]
+  skill_d_status: skip
+  pipeline: []
   parameter_density: low
   recipe_count: 1575
 
@@ -784,15 +784,15 @@
   author: CIA
   language: en
   purpose: science+recipe
-  skills: ["B", "C", "D"]
+  skills: ["B", "C"]
   ocr_status: done
   ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["skill_d"]
+  skill_d_status: skip
+  pipeline: []
   parameter_density: low
   recipe_count: 2261
 
@@ -818,15 +818,15 @@
   author: FERRANDI Paris
   language: en
   purpose: science+recipe
-  skills: ["B", "C", "D"]
+  skills: ["B", "C"]
   ocr_status: done
   ocr_tool: mineru
   signal_status: pending
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
-  pipeline: ["skill_d"]
+  skill_d_status: skip
+  pipeline: []
   parameter_density: low
   recipe_count: 2159
 
