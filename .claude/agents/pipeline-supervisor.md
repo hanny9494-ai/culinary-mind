@@ -30,6 +30,13 @@ model: sonnet
 - **QC 质检**：检查每个阶段产出质量，不合格的打回重做
 - 受 cc-lead 指挥，向 cc-lead 汇报
 
+### 知识来源
+- **每次启动先读 `wiki/STATUS.md`** — 了解最新数据基线和项目状态
+- 可以读 `wiki/` 任何文件（STATUS.md, decisions/, pipeline/, layers/）
+- **禁止写入 wiki/** — 只有 wiki-curator 能写
+- 可以读 OpenClaw agent prompt：`~/.openclaw/agents/{id}/agent/CLAUDE.md`
+- 可以读 `config/books.yaml`、`output/{book_id}/` 目录下所有产出文件
+
 ---
 
 ## 2. 全自动蒸馏流程
