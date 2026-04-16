@@ -163,6 +163,62 @@ def explain_filter(page_text: str, signal: dict) -> dict[str, Any]:
         "rule4_has_equation": hints_a.get("has_equation") if isinstance(hints_a, dict) else False,
     }
 
+
+# ── Skill D secondary filter ──────────────────────────────────────────────────
+
+# Compiled once at module load
+_ZH_AESTHETIC_PATTERN = re.compile(
+    r'(嫩滑|爽脆|入口即化|镬气|断生|过冷河|飞水|走油|'
+    r'口感|质感|嫩|脆|滑|鲜|香|糯|弹|酥|'
+    r'火候|老|生|熟|透|焦|糊|干|湿)'
+)
+
+_EN_AESTHETIC_PATTERN = re.compile(
+    r'(texture|mouthfeel|crisp|tender|juicy|umami|aroma|'
+    r'silky|creamy|crunchy|chewy|flaky|succulent|'
+    r'sensation|palate|flavor profile)',
+    re.IGNORECASE,
+)
+
+
+def secondary_filter_d(page_text: str, language: str = "zh") -> bool:
+    """
+    Zero-cost regex pre-filter for Skill D pages.
+
+    Returns True (keep) if the page likely contains FlavorTarget or Glossary content.
+    Returns False (skip) if no aesthetic/sensory terms are found.
+
+    Args:
+        page_text: raw page text
+        language: book language ("zh" or "en")
+
+    Rules:
+      zh: any of: 嫩滑|爽脆|入口即化|镬气|断生|过冷河|飞水|走油|口感|质感|...
+      en: any of: texture|mouthfeel|crisp|tender|juicy|umami|aroma|silky|...
+    """
+    if language == "zh":
+        return bool(_ZH_AESTHETIC_PATTERN.search(page_text))
+    else:
+        return bool(_EN_AESTHETIC_PATTERN.search(page_text))
+
+
+def explain_filter_d(page_text: str, language: str = "zh") -> dict[str, Any]:
+    """Detailed breakdown of Skill D filter decision for debugging."""
+    keep = secondary_filter_d(page_text, language)
+    if language == "zh":
+        matches = _ZH_AESTHETIC_PATTERN.findall(page_text[:500])
+    else:
+        matches = _EN_AESTHETIC_PATTERN.findall(page_text[:500])
+    return {
+        "keep": keep,
+        "language": language,
+        "reason": "rule_zh_aesthetic" if (keep and language == "zh")
+                   else "rule_en_aesthetic" if (keep and language != "zh")
+                   else "filtered_no_aesthetic_term",
+        "matches": matches[:10],
+    }
+
+
 # ── Batch analysis ─────────────────────────────────────────────────────────────
 
 def analyze_book(book_id: str) -> dict[str, Any]:

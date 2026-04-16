@@ -293,6 +293,15 @@ def gate_signal_qc(book_id: str) -> dict:
     }
     return result
 
+# ── G3: Pilot Thresholds (per-skill) ────────────────────────────────────────
+# Skill D has lower thresholds because FlavorTarget density is naturally sparse
+PILOT_THRESHOLDS: dict[str, dict[str, float]] = {
+    "a": {"auto_skip": 20.0, "auto_pass": 50.0},
+    "b": {"auto_skip": 20.0, "auto_pass": 50.0},
+    "c": {"auto_skip": 20.0, "auto_pass": 50.0},
+    "d": {"auto_skip": 10.0, "auto_pass": 30.0},  # D density naturally lower
+}
+
 # ── G3: Pilot Gate ───────────────────────────────────────────────────────────
 
 def gate_pilot(
@@ -416,10 +425,15 @@ def gate_pilot(
         "pilot_pages": [p["page"] for p in pilot_pages],
     }
 
-    if yield_pct >= 50:
+    thr = PILOT_THRESHOLDS.get(skill, PILOT_THRESHOLDS["a"])
+    auto_pass = thr["auto_pass"]
+    auto_skip = thr["auto_skip"]
+    result["thresholds"] = {"auto_pass": auto_pass, "auto_skip": auto_skip}
+
+    if yield_pct >= auto_pass:
         result["passed"] = True
         result["recommendation"] = "auto_proceed"
-    elif yield_pct >= 20:
+    elif yield_pct >= auto_skip:
         result["passed"] = None  # human review threshold
         result["recommendation"] = "human_review"
         result["needs_review"] = True

@@ -125,21 +125,20 @@ SKILL_PROMPTS: dict[str, str] = {
 
 不要解释。只输出 JSON 数组。""",
 
-    "d": """\
-你是风味目标和粤菜术语提取器。从给定页面提取：
-1. 审美词-基质-目标状态三元组 (FlavorTarget)
-2. 粤菜/中式烹饪术语定义 (L6 Glossary)
+    "d": "__SKILL_D_DYNAMIC__",  # resolved at runtime based on book language
+}
 
-如果页面不含相关内容，输出 {"flavor_targets": [], "glossary": []}。
-
+# ── Skill D language-specific prompts ────────────────────────────────────────
+# Shared schema preamble — embedded in both zh and en variants
+_SKILL_D_SCHEMA = """
 FlavorTarget schema:
 {
   "ft_id": "slug",
-  "aesthetic_word": "中文词",
+  "aesthetic_word": "审美词/sensory word",
   "aesthetic_word_en": "English",
-  "matrix_type": "基质类型",
-  "substrate": "食材",
-  "target_states": {"水活度等": {"target": null, "range": []}},
+  "matrix_type": "基质类型/matrix type",
+  "substrate": "食材/ingredient",
+  "target_states": {"parameter": {"target": null, "range": []}},
   "l0_domains": [],
   "source": {"book": "...", "page": ...}
 }
@@ -151,12 +150,42 @@ Glossary schema:
   "definition_zh": "中文定义",
   "definition_en": "English definition",
   "l0_domains": [],
-  "context": "使用场景",
+  "context": "使用场景/usage context",
   "source": {"book": "...", "page": ...}
 }
+"""
+
+SKILL_D_PROMPTS: dict[str, str] = {
+    "zh": """\
+你是粤菜审美词和中式烹饪术语提取器。从给定页面提取：
+1. 审美词-基质-目标状态三元组 (FlavorTarget)
+   - 重点关注：镬气、嫩滑、爽脆、入口即化、断生、过冷河、飞水、走油等粤菜特有审美表达
+   - 每个审美词必须绑定具体食材/基质
+   - target_states 映射到可量化物理参数
+2. 粤菜/中式烹饪术语定义 (L6 Glossary)
+   - 术语的上下文实体（在什么食材/场景下使用）
+   - 映射到 L0 物理现象
+
+如果页面不含相关内容，输出 {"flavor_targets": [], "glossary": []}
 
 不要解释。只输出包含 flavor_targets 和 glossary 两个数组的 JSON 对象。""",
+
+    "en": """\
+You are a sensory descriptor and flavor terminology extractor. From the given page, extract:
+1. FlavorTarget triplets: aesthetic_word x substrate x target_states
+   - Focus on: texture descriptors (crispy, tender, silky, creamy, crunchy, chewy, flaky),
+     mouthfeel terms (succulent, velvety, unctuous), flavor profile terms (umami, bright, round)
+   - Each aesthetic word must be bound to a specific ingredient/matrix
+   - target_states map to quantifiable physical parameters
+2. Culinary glossary entries
+   - Context entity (which ingredient/scenario)
+   - Mapped phenomenon (physical process)
+
+If page has no relevant content, output {"flavor_targets": [], "glossary": []}
+
+Output only the JSON object with flavor_targets and glossary arrays. No explanations.""",
 }
+
 
 SKILL_MODELS = {
     "a": "aigocode",
@@ -291,8 +320,21 @@ def call_gemini_flash(
     )
 
 
-def call_llm(skill: str, user_text: str, cfg: dict, log: logging.Logger) -> str:
-    system = SKILL_PROMPTS[skill]
+def call_llm(
+    skill: str,
+    user_text: str,
+    cfg: dict,
+    log: logging.Logger,
+    language: str = "zh",
+) -> str:
+    """Call the appropriate LLM for a skill.
+
+    For Skill D, 'language' selects zh/en prompt variant.
+    """
+    if skill == "d":
+        system = SKILL_D_PROMPTS.get(language, SKILL_D_PROMPTS["en"])
+    else:
+        system = SKILL_PROMPTS[skill]
     provider = SKILL_MODELS[skill]
     if provider == "aigocode":
         return call_aigocode(system, user_text, cfg["aigocode"], log=log)
@@ -363,6 +405,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--force",    action="store_true")
     p.add_argument("--concurrency", type=int, default=1, help="Parallel pages (default: 1; use carefully)")
     p.add_argument("--pilot",    action="store_true", help="Print each result to stdout")
+    p.add_argument("--no-secondary-filter", dest="secondary_filter",
+                   action="store_false", default=True,
+                   help="Disable secondary regex pre-filter (Skill A and D)")
+    p.add_argument("--books-yaml", default=None,
+                   help="Path to books.yaml (for Skill D language lookup)")
     return p.parse_args()
 
 def main() -> None:
@@ -399,6 +446,21 @@ def main() -> None:
     )
     log = logging.getLogger(f"skill_{skill}")
     log.info(f"book_id={book_id}, skill={skill}, provider={SKILL_MODELS[skill]}")
+
+    # Load book language for Skill D prompt selection
+    book_language = "zh"  # default fallback
+    if skill == "d":
+        try:
+            yaml_path = Path(args.books_yaml) if args.books_yaml else (REPO_ROOT / "config" / "books.yaml")
+            with open(yaml_path) as _f:
+                _books = yaml.safe_load(_f)
+            if isinstance(_books, list):
+                _entry = next((b for b in _books if b.get("id") == book_id), None)
+                if _entry:
+                    book_language = _entry.get("language", "zh")
+        except Exception as _e:
+            log.warning(f"Could not load book language: {_e}")
+        log.info(f"Skill D language: {book_language}")
 
     # Load data
     if not signals_path.exists():
@@ -450,10 +512,21 @@ def main() -> None:
             from secondary_filter import filter_skill_a as _filter_a
             _keep, _reason = _filter_a(page_text, sig)
             if not _keep:
-                log.info(f"  page {page_num}: secondary_filter skipped ({_reason})")
+                log.info(f"  page {page_num}: secondary_filter_a skipped ({_reason})")
                 results_file.write(json.dumps({
                     "_page": page_num, "_skill": skill, "_book": book_id,
                     "_filtered": True, "_filter_reason": _reason
+                }, ensure_ascii=False) + '\n')
+                done_pages.add(page_num)
+                continue
+
+        if skill == "d" and args.secondary_filter:
+            from secondary_filter import secondary_filter_d as _filter_d
+            if not _filter_d(page_text, book_language):
+                log.info(f"  page {page_num}: secondary_filter_d skipped (no aesthetic terms)")
+                results_file.write(json.dumps({
+                    "_page": page_num, "_skill": skill, "_book": book_id,
+                    "_filtered": True, "_filter_reason": "filter_d_no_aesthetic"
                 }, ensure_ascii=False) + '\n')
                 done_pages.add(page_num)
                 continue
@@ -470,7 +543,7 @@ def main() -> None:
         user_msg = f"Book: {book_id}\nPage: {page_num}{hint_str}\n\n{page_text[:4000]}"
 
         try:
-            raw_response = call_llm(skill, user_msg, cfg, log)
+            raw_response = call_llm(skill, user_msg, cfg, log, language=book_language)
             parsed = extract_json(raw_response)
 
             if parsed is None:
