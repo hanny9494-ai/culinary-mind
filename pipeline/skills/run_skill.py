@@ -445,6 +445,19 @@ def main() -> None:
             done_pages.add(page_num)
             continue
 
+        # Skill A: secondary regex filter (zero-cost, pre-Opus FP reduction)
+        if skill == "a" and args.secondary_filter:
+            from secondary_filter import filter_skill_a as _filter_a
+            _keep, _reason = _filter_a(page_text, sig)
+            if not _keep:
+                log.info(f"  page {page_num}: secondary_filter skipped ({_reason})")
+                results_file.write(json.dumps({
+                    "_page": page_num, "_skill": skill, "_book": book_id,
+                    "_filtered": True, "_filter_reason": _reason
+                }, ensure_ascii=False) + '\n')
+                done_pages.add(page_num)
+                continue
+
         # Build user message with hints
         hints = sig.get("hints", {})
         skill_hints = hints.get(signal_key, {})
