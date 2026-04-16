@@ -48,30 +48,48 @@ def resolve_env(val: Any) -> Any:
 # ── System prompts (from config/skill-routes.md) ──────────────────────────────
 
 SKILL_PROMPTS: dict[str, str] = {
-    "a": """\
-你是食品工程参数提取器。从给定页面中提取所有可量化的科学参数。
-每个参数必须绑定到 28 个 MotherFormula 之一（MF-T01~T05, MF-K01~K05, MF-M01~M06, MF-R01~R07, MF-C01~C05）。
+    "a": """你是食品工程参数提取器（Skill A 专用）。从给定页面提取可绑定到物理/化学方程的定量参数。
 
-输出纯 JSON 数组（每个参数一个对象）。如果没有可提取的参数，输出 []。
+【提取标准 — Scale-up Test】
+只提取满足以下条件的数值：放大食材体积/改变温度/改变时间后，这个数字还能用于预测新结果。
+  能预测 → 提取（物质固有属性/动力学常数/经验方程系数）
+  不能（实验终点/食谱操作参数）→ 跳过，输出 []
 
 提取目标：
-- 表格中的数值（温度、时间、速率常数、活化能等）
-- LaTeX 公式中的系数和指数
-- 图表标注中的临界值
-- 参数的适用条件（基质、pH、温度范围）
+- 动力学常数/相变阈值：活化能(Ea)、变性温度、凝胶化温度、Tg、D-value、z-value
+- 热物性/传递参数：热导率(k)、比热容(Cp)、密度(ρ)、扩散系数(D_eff)
+- 经验方程系数：流变模型参数(τ₀, n, β)、HLB 值、水活度阈值
+- 系统性数据表中的参数（整列数值代表物质属性，非单次实验结果）
 
-输出 schema（每个元素）:
+不提取（→ 返回 []）：
+- 食谱操作参数："160°C 炸 3 分钟"（这是 Skill B）
+- 实验终点 End-state："水浴 1h 汁液流失 15%"
+- 设备依赖数据："微波 800W 2min 土豆中心 85°C"
+
+每个参数绑定到 28 个 MotherFormula 之一：
+MF-T01~T05（热动力学）, MF-K01~K05（动力学）, MF-M01~M06（质量传递）,
+MF-R01~R07（流变/结构）, MF-C01~C05（化学反应）
+
+输出纯 JSON 数组。如果没有可提取的参数，输出 []。
+
+输出 schema（每个元素）：
 {
   "mother_formula": "Arrhenius",
   "formula_id": "MF-T03",
-  "parameter_name": "Ea",
-  "value": 127000,
-  "unit": "J/mol",
-  "conditions": {"substrate": "...", "pH": 7.0, "temperature_range": "60-90°C"},
+  "parameter_name": "卵清蛋白变性温度",
+  "value": 80,
+  "unit": "°C",
+  "conditions": {"substrate": "蛋清", "pH": 7.0, "temperature_range": "75-85°C"},
   "source": {"book": "...", "chapter": "...", "page": ..., "table": "..."},
   "confidence": "high",
+  "causal_context": "80°C以上卵清蛋白发生二硫键交联，凝胶网络收缩挤出水分",
   "notes": "..."
 }
+
+causal_context 规则：
+- 1-2 句描述该参数驱动的物理/化学机制
+- 从同一页上下文提取，不要编造；没有因果描述则留空 ""
+- 用于链接到 L0 因果链（Neo4j PARAMETER -[:DRIVES]-> MECHANISM）
 
 如果没有参数，输出 []。不要解释。""",
 

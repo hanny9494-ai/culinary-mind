@@ -39,58 +39,81 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 DEFAULT_OLLAMA_MODEL = "qwen3.5:9b"
 DASHSCOPE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-DEFAULT_DASHSCOPE_MODEL = "qwen3.5-flash"
+DEFAULT_DASHSCOPE_MODEL = "qwen3.6-plus"
 DEFAULT_BACKEND = "dashscope"
 CHECKPOINT_EVERY = 20
 
 # ── Prompt template ────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """\
-你是一个页面内容路由器。给你一页书的文本，判断它包含哪些类型的可提取信息。
+SYSTEM_PROMPT = """你是一个页面内容路由器。给你一页书的文本，判断它包含哪些类型的可提取信息。
 
 输出纯 JSON，不要解释。
 
-判断规则：
-- A (定量参数): 页面含有任何可量化的科学数据，包括但不限于：
-  * 明确数值：温度（60°C, 160°F）、时间（30 min）、百分比（20%）、能量（37 J/g）、pH、重量
-  * 数学公式或方程（任何含变量的表达式）
-  * 数据表格或图表中的数值
-  * 物理/化学常数（活化能 Ea、速率常数 k、扩散系数 D）
-  * 定量比较陈述：如"fat explains 20% of variation"、"3 times more myoglobin"
-  * 科学阈值：如"above 60°C collagen shrinks"、"water activity below 0.85"
-  ⚠️ 宁可多标！只要页面里有任何具体数字或可测量的量，就标 A=true。
-  关键词：%, °C, °F, J/g, kJ/mol, mg, mM, ppm, ratio, coefficient, correlation
-- B (食谱): 页面包含配料表、烹饪步骤、温度/时间指令、份量。\
-关键词：ingredients, preheat, bake at, 材料, 做法, 步骤
-- C (食材): 页面描述食材属性——品种、产地、季节、部位、营养成分、替代品。\
+【Skill A：定量科学参数 → L0 ParameterSet】
+提取可绑定到物理/化学方程的定量参数——物质固有属性、动力学常数、经验方程系数。
+
+Scale-up Test（核心判断）：放大食材体积/改变温度/改变时间，这个数字还能用于预测新结果吗？
+  能 → A（物质属性/动力学常数/经验系数）
+  不能（必须重新实验测量）→ L0 实验现象，不标 A
+
+A 的 3 类数字：
+  ① 动力学常数/相变阈值：活化能(Ea)、变性温度、凝胶化温度、Tg、D-value、z-value
+  ② 热物性/传递参数：热导率(k)、比热容(Cp)、密度(ρ)、扩散系数(D)
+  ③ 经验方程系数：Nusselt/Sherwood 关联式常数、流变模型参数
+
+A 正例（A=true）：
+  ✅ "蛋白质 62°C 开始变性，70°C 完全凝固" — 相变阈值，可绑 MF-T03
+  ✅ "明胶 Ea=125 kJ/mol" — 动力学常数
+  ✅ "表3.2: 各部位胶原蛋白含量(%)" — 系统性科学数据表
+  ✅ "肌肉收缩系数 β=0.05 K⁻¹" — 经验方程参数
+  ✅ "蛋黄酱临界剪切应力 τ₀=15 Pa" — 流变模型参数
+  ✅ "Protein denaturation begins at 62°C" — 英文相变阈值
+  ✅ "Table 3.2: Collagen content (%) — beef chuck 1.8%" — 英文数据表
+
+A 反例（A=false）：
+  ❌ "160°C 炸 3 分钟" — 食谱操作参数（→ B）
+  ❌ "炖煮保持 85°C 可避免蛋白收缩" — 科学服务操作（→ B，科学解释操作理由）
+  ❌ "牛肉 60°C 水浴 1h 汁液流失 15%" — 实验终点状态（End-state，→ L0）
+  ❌ "微波 800W 2min 土豆中心 85°C" — 设备依赖无普适性（→ L0）
+  ❌ "胶原蛋白受热转化为明胶" — 因果链无数字（→ L0）
+  ❌ "beef boiled in 212°F water gets hotter faster than in 212°F oven" — 操作对比（→ L0）
+  ❌ "Eggs boil at different rates depending on starting temperature" — 无具体数字（→ L0）
+  ❌ 科学章节中解释为什么"低温慢煮比高温更好"的段落 — 这是 B 的注脚，不是 A
+
+【关键区分】科学解释 vs 参数提取：
+  如果一页的"数字"是为了说明一个烹饪操作的原理（"为什么要低温炖"），它是 B（科学服务操作）
+  如果一页有数据表或公式参数（"明胶 Ea=125 kJ/mol"），提取这些参数不依赖烹饪上下文，它是 A
+
+5 个灰色案例（Gemini 专家审核确认）：
+  1. "牛肉 60°C 水浴 1h 汁液流失 15%" → A=false（End-state，换块肉就变了）
+  2. "肌肉纤维收缩孔隙率变化系数 β=0.05 K⁻¹" → A=true（方程核心参数，可预测任意大小）
+  3. "蛋黄酱临界剪切应力 τ₀=15 Pa" → A=true（Bingham 流体参数，填方程可用）
+  4. "面团水分 12% 时 aw=0.6" → A=true（等温线参数，可拟合热力学方程）
+  5. "微波 800W 2min 土豆中心 85°C" → A=false（设备依赖，无普适性）
+
+⚠️ 核心原则：宁可多标 suspect，不漏标真正有价值的 A。如不确定，标 A=true。
+⚠️ 同一页可以同时是 A+B（含科学参数表的食谱页）
+
+【Skill B：食谱/操作指令 → L2b】
+包含烹饪操作指令——配料表、步骤序列、温度/时间操作参数。
+即使含科学解释，只要目的是"教你怎么做菜"或"解释为什么要这样做菜" → B=true。
+"科学服务操作"：用科学原理解释烹饪技法（为什么低温慢煮更嫩，为什么加盐改变质地）→ B
+操作判断：这页是在告诉读者如何或为何要这样操作食物吗？是 → B。
+关键词（中）：材料、做法、步骤、份量、烹饪方法、为什么要...、如何避免...
+关键词（英）：ingredients, preheat, bake at, recipe, serves, how to, why you should, key to
+
+【Skill C：食材 → L2a】
+页面描述食材属性——品种、产地、季节、部位、营养成分、替代品。
 关键词：variety, cultivar, season, substitute, 品种, 产地, 部位
-- D (审美/术语): 页面描述感官品质、风味目标、烹饪术语定义。\
+
+【Skill D：审美/术语 → FT + L6】
+页面描述感官品质、风味目标、烹饪术语定义。
 关键词：texture, crispy, tender, umami, 口感, 嫩滑, 镬气, 断生
 
 跳过规则：如果页面是目录、索引、版权页、空白页、纯图片说明，所有 signal 设为 false 并填写 skip_reason。
 
-⚠️ 核心原则：宁可多标不可漏标。如果不确定，标为 true。
-
-Few-shot 示例（A 信号判断）：
-
-示例1 — 输入："fat content explains only about 20% of the variation in tenderness"
-→ A=true（包含具体百分比 20%，定量陈述）
-
-示例2 — 输入："Animal fat stores energy quite densely—about 37 joules per gram, comparable to gasoline"
-→ A=true（包含具体能量密度 37 J/g）
-
-示例3 — 输入："temperatures above 60°C cause collagen to contract and squeeze out moisture"
-→ A=true（包含温度阈值 60°C）
-
-示例4 — 输入："Duck breasts are made up mainly of intermediate fibers containing myoglobin"
-→ A=false（纯描述性，无具体数值）
-
-示例5 — 输入："Table 3.2: Collagen content (%) — beef chuck 1.8%, beef tenderloin 0.3%"
-→ A=true（含数据表格和百分比）
-
 hints 字段：
-- 如果 A=true，尝试识别可能匹配的 MF 编号\
-（从以下列表：MF-T01~T05, MF-K01~K05, MF-M01~M06, MF-R01~R07, MF-C01~C05）
+- 如果 A=true，尝试识别可能匹配的 MF 编号（MF-T01~T05, MF-K01~K05, MF-M01~M06, MF-R01~R07, MF-C01~C05）
 - 如果 C=true，列出检测到的食材名
 - 如果 D=true，列出检测到的审美/术语词
 """
