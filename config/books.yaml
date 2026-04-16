@@ -144,7 +144,7 @@
   ocr_status: needs_reocr
   ocr_tool: mineru
   signal_status: done
-  skill_a_status: pending
+  skill_a_status: done
   skill_b_status: done
   skill_c_status: skip
   skill_d_status: skip
@@ -164,7 +164,7 @@
   ocr_status: needs_reocr
   ocr_tool: mineru
   signal_status: done
-  skill_a_status: pending
+  skill_a_status: done
   skill_b_status: done
   skill_c_status: skip
   skill_d_status: skip
@@ -401,7 +401,7 @@
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
+  skill_d_status: done
   pipeline: ["skill_d"]
   parameter_density: low
   l0_count: 1258
@@ -525,7 +525,7 @@
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
+  skill_d_status: done
   pipeline: ["skill_d"]
   parameter_density: low
   l0_count: 170
@@ -1160,7 +1160,7 @@
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
+  skill_d_status: done
   pipeline: ["ocr", "signal", "skill_d"]
   parameter_density: low
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/传统粤菜精华录 (陈梦因，江献珠著) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
@@ -1199,7 +1199,7 @@
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
+  skill_d_status: done
   pipeline: ["ocr", "signal", "skill_d"]
   parameter_density: low
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家常菜譜 （第六集） (江献珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
@@ -1218,7 +1218,7 @@
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
+  skill_d_status: done
   pipeline: ["ocr", "signal", "skill_d"]
   parameter_density: low
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家饌3 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
@@ -1237,7 +1237,7 @@
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
+  skill_d_status: done
   pipeline: ["ocr", "signal", "skill_d"]
   parameter_density: low
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家饌4 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
@@ -1256,7 +1256,7 @@
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
+  skill_d_status: done
   pipeline: ["ocr", "signal", "skill_d"]
   parameter_density: low
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館家馔2 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
@@ -1275,7 +1275,7 @@
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
+  skill_d_status: done
   pipeline: ["ocr", "signal", "skill_d"]
   parameter_density: low
   note: L2b提取完成(110 recipes)
@@ -1295,7 +1295,7 @@
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
+  skill_d_status: done
   pipeline: ["ocr", "signal", "skill_d"]
   parameter_density: low
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/珠璣小館：中國點心2 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
@@ -1314,7 +1314,7 @@
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
+  skill_d_status: done
   pipeline: ["ocr", "signal", "skill_d"]
   parameter_density: low
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/分步詳解-南粵家鄉菜 (江獻珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
@@ -1333,7 +1333,7 @@
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
+  skill_d_status: done
   pipeline: ["ocr", "signal", "skill_d"]
   parameter_density: low
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/粤菜真味：肉食篇 (江献珠) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
@@ -1352,7 +1352,7 @@
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
+  skill_d_status: done
   pipeline: ["ocr", "signal", "skill_d"]
   parameter_density: low
   source_path: "/Users/jeff/Documents/粤菜中菜审美书籍/廣東菜烹調全書 (陳淑儀) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
@@ -1371,7 +1371,7 @@
   skill_a_status: skip
   skill_b_status: done
   skill_c_status: skip
-  skill_d_status: pending
+  skill_d_status: done
   pipeline: ["ocr", "signal", "skill_d"]
   parameter_density: low
   note: L2b提取完成(76 recipes)
@@ -1470,7 +1470,7 @@
   ocr_status: pending
   ocr_tool: none
   signal_status: pending
-  skill_a_status: pending
+  skill_a_status: done
   skill_b_status: skip
   skill_c_status: skip
   skill_d_status: skip
@@ -1490,7 +1490,7 @@
   ocr_status: pending
   ocr_tool: none
   signal_status: pending
-  skill_a_status: pending
+  skill_a_status: done
   skill_b_status: skip
   skill_c_status: skip
   skill_d_status: skip
@@ -1608,7 +1608,7 @@
   ocr_status: pending
   ocr_tool: none
   signal_status: pending
-  skill_a_status: pending
+  skill_a_status: done
   skill_b_status: skip
   skill_c_status: skip
   skill_d_status: skip
