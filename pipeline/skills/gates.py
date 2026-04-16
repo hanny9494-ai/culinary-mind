@@ -302,6 +302,170 @@ def gate_signal_qc(book_id: str) -> dict:
     }
     return result
 
+# ── G3: TOC Analysis helpers (Stage 1 of two-phase pilot) ────────────────────
+
+_TOC_PROMPT = """You are analyzing a book's table of contents to identify chapters with high value for three skill types.
+
+Read the TOC/index pages below and return a JSON object identifying the best chapters for:
+- skill_a: chapters likely containing quantitative science parameters (temperatures, times, formulas, data tables, rate constants)
+- skill_b: chapters likely containing complete recipes (ingredient lists + steps)
+- skill_d: chapters likely containing sensory/flavor/aesthetic descriptions (texture, mouthfeel, flavor profiles, taste terminology)
+
+Return ONLY this JSON (no explanations):
+{
+  "skill_a": [{"chapter": "chapter name", "page_start": N, "page_end": N}],
+  "skill_b": [{"chapter": "chapter name", "page_start": N, "page_end": N}],
+  "skill_d": [{"chapter": "chapter name", "page_start": N, "page_end": N}]
+}
+
+If you cannot identify chapters for a skill, use []. If the text is not a TOC, return all empty lists.
+"""
+
+
+def _call_dashscope_sync(
+    prompt: str,
+    system: str,
+    model: str = "qwen3.6-plus",
+    timeout_sec: float = 30.0,
+) -> str | None:
+    """
+    Synchronous single-shot DashScope call for lightweight tasks (TOC analysis).
+    Returns raw response text or None on failure.
+    """
+    api_key = os.environ.get("DASHSCOPE_API_KEY", "")
+    if not api_key:
+        return None
+    url = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0,
+        "max_tokens": 1024,
+        "enable_thinking": False,
+        "response_format": {"type": "json_object"},
+    }
+    try:
+        import httpx as _httpx
+        resp = _httpx.post(url, headers=headers, json=body, timeout=timeout_sec,
+                           follow_redirects=False)
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+    except Exception as e:
+        logging.getLogger("gate_toc").warning(f"DashScope TOC call failed: {e}")
+        return None
+
+
+def _analyze_toc(book_id: str, skill: str) -> dict | None:
+    """
+    Stage 1 of two-phase pilot: call DashScope Flash to analyze TOC pages.
+
+    Reads first 10 pages from pages.json (usually contains TOC/index),
+    asks DashScope to identify chapters relevant to the target skill.
+
+    Returns dict with skill-keyed chapter lists, or None on failure/no TOC.
+    """
+    log = logging.getLogger(f"gate_toc.{book_id}")
+    pages = _load_pages(book_id)
+    if not pages:
+        log.warning(f"No pages found for {book_id}")
+        return None
+
+    # Use first 10 pages (usually TOC area)
+    toc_pages = pages[:10]
+    toc_text = "\n\n".join(
+        f"[Page {p.get('page', i+1)}]\n{p.get('text', '')[:600]}"
+        for i, p in enumerate(toc_pages)
+        if p.get("text", "").strip()
+    )
+    if not toc_text.strip():
+        log.info(f"First 10 pages are blank — TOC not available for {book_id}")
+        return None
+
+    raw = _call_dashscope_sync(
+        prompt=f"Book: {book_id}\n\n=== TOC / First Pages ===\n{toc_text[:3000]}",
+        system=_TOC_PROMPT,
+    )
+    if not raw:
+        return None
+
+    try:
+        parsed = json.loads(raw)
+        skill_key = f"skill_{skill}"
+        chapters = parsed.get(skill_key, [])
+        if not isinstance(chapters, list):
+            return None
+        valid = [
+            c for c in chapters
+            if isinstance(c, dict)
+            and isinstance(c.get("page_start"), (int, float))
+            and isinstance(c.get("page_end"), (int, float))
+            and c["page_end"] > c["page_start"]
+        ]
+        if not valid:
+            log.info(f"TOC: no valid chapters for {skill_key} in {book_id}")
+            return None
+        log.info(f"TOC: found {len(valid)} chapters for {skill_key} in {book_id}")
+        return {skill_key: valid, "_all": parsed}
+    except Exception as e:
+        log.warning(f"TOC parse error: {e}")
+        return None
+
+
+def _select_pilot_pages(
+    candidates: list[dict],
+    pages_map: dict[int, str],
+    toc_result: dict | None,
+    skill: str,
+    sample_size: int,
+    seed: int = 42,
+) -> tuple[list[dict], str]:
+    """
+    Select pilot pages using two-phase strategy.
+
+    Phase 1 (TOC-guided): if toc_result has chapters, random.sample from
+    candidate pages within those chapter page ranges.
+    Phase 2 (fallback): top-confidence candidates.
+
+    Returns (selected_pages, sampling_method_str).
+    """
+    if toc_result:
+        chapters = toc_result.get(f"skill_{skill}", [])
+        toc_candidates: list[dict] = []
+        for sig in candidates:
+            page_num = sig["page"]
+            for ch in chapters:
+                ps = int(ch.get("page_start", 0))
+                pe = int(ch.get("page_end", 0))
+                if ps <= page_num <= pe and pages_map.get(page_num, "").strip():
+                    toc_candidates.append(sig)
+                    break
+
+        if len(toc_candidates) >= sample_size:
+            rng = random.Random(seed)
+            selected = rng.sample(toc_candidates, sample_size)
+            return selected, "toc_guided_random"
+        elif toc_candidates:
+            toc_nums = {s["page"] for s in toc_candidates}
+            rest = sorted(
+                [s for s in candidates if s["page"] not in toc_nums],
+                key=lambda x: x.get("confidence", 0), reverse=True
+            )
+            combined = toc_candidates + rest[:sample_size - len(toc_candidates)]
+            return combined[:sample_size], "toc_guided_hybrid"
+
+    # Fallback: confidence top-N
+    sorted_cands = sorted(candidates, key=lambda x: x.get("confidence", 0), reverse=True)
+    return sorted_cands[:sample_size], "confidence_topN_fallback"
+
+
 # ── G3: Pilot Thresholds (per-skill) ────────────────────────────────────────
 # Skill D has lower thresholds because FlavorTarget density is naturally sparse
 PILOT_THRESHOLDS: dict[str, dict[str, float]] = {
@@ -317,18 +481,27 @@ def gate_pilot(
     book_id: str,
     skill: str,
     sample_size: int = 5,
+    explicit_pages: list[int] | None = None,
+    toc_only: bool = False,
 ) -> dict:
     """
     G3 Pilot Gate — trial-run a few pages before full extraction.
 
-    Selects the top-confidence N pages from signals.json (for the given skill),
-    runs Skill extraction on them, and measures yield (non-empty results).
+    Two-phase page selection:
+      Stage 1: TOC analysis via DashScope Flash (cheap, ~$0.002/book)
+               Identifies chapters with high density of the target skill.
+      Stage 2: Random sample from high-value chapters (reproducible seed=42).
+               Fallback: confidence top-N if TOC analysis fails.
 
-    yield < 20%   → passed=False, recommendation='skip_skill_{skill}'
-    yield 20-50%  → passed=None,  recommendation='human_review'
-    yield > 50%   → passed=True,  recommendation='auto_proceed'
+    Args:
+        explicit_pages: if provided, use these exact page numbers (skip TOC analysis)
+        toc_only: if True, only run Stage 1 (TOC analysis) and return
 
-    Returns dict with passed/yield_pct/recommendation/cost_estimate/ts.
+    Thresholds are per-skill (see PILOT_THRESHOLDS):
+      D skill: skip<10%, pass>=30%  (sparse density)
+      A/B/C:   skip<20%, pass>=50%
+
+    Returns dict with passed/yield_pct/recommendation/cost_estimate/toc_analysis/sampling_method/ts.
     """
     skill = skill.lower()
     skill_key = {"a": "A", "b": "B", "c": "C", "d": "D"}.get(skill, skill.upper())
@@ -342,21 +515,60 @@ def gate_pilot(
 
     pages_map = {p["page"]: p.get("text", "") for p in _load_pages(book_id)}
 
-    # Select top-confidence pages with the target signal
+    # Collect all signal-matching candidate pages
     candidates = [
         s for s in signals
         if (s.get("signals") or {}).get(skill_key)
         and not s.get("skip_reason")
         and pages_map.get(s["page"], "").strip()
     ]
-    candidates.sort(key=lambda x: x.get("confidence", 0), reverse=True)
-    pilot_pages = candidates[:sample_size]
 
-    if not pilot_pages:
+    if not candidates:
         return {
             "passed": False,
             "error": f"No {skill_key}-signal pages found in signals.json for {book_id}",
             "total_candidates": 0,
+        }
+
+    # Two-phase pilot page selection:
+    # Stage 1: TOC analysis (cheap Flash call) to identify high-value chapters
+    # Stage 2: Random sample from those chapters (or fallback to confidence top-N)
+    toc_result = None
+    sampling_method = "confidence_topN_fallback"  # default
+    if not toc_only and not explicit_pages:
+        toc_result = _analyze_toc(book_id, skill)
+
+    if explicit_pages:
+        explicit_set = set(explicit_pages)
+        pilot_pages = [s for s in candidates if s["page"] in explicit_set]
+        # Add synthetic entries for pages not in signals
+        found_pages = {s["page"] for s in pilot_pages}
+        for pn in explicit_set - found_pages:
+            if pages_map.get(pn, "").strip():
+                pilot_pages.append({"page": pn, "confidence": 0.5, "signals": {skill_key: True}})
+        sampling_method = "explicit_pages"
+    else:
+        pilot_pages, sampling_method = _select_pilot_pages(
+            candidates, pages_map, toc_result, skill, sample_size,
+        )
+
+    if not pilot_pages:
+        return {
+            "passed": False,
+            "error": f"No pilot pages could be selected for {book_id} skill_{skill}",
+            "total_candidates": len(candidates),
+            "sampling_method": sampling_method,
+        }
+
+    # Short-circuit: if toc_only, return TOC analysis without running LLM
+    if toc_only:
+        return {
+            "passed": None,
+            "toc_only": True,
+            "toc_analysis": toc_result,
+            "sampling_method": sampling_method,
+            "total_candidate_pages": len(candidates),
+            "skill": skill,
         }
 
     # Run Skill on pilot pages
@@ -432,6 +644,8 @@ def gate_pilot(
         "avg_time_per_page_s": round(sum(times) / len(times), 2) if times else 0,
         "sample_results_preview": preview,
         "pilot_pages": [p["page"] for p in pilot_pages],
+        "sampling_method": sampling_method,
+        "toc_analysis": toc_result,
     }
 
     thr = PILOT_THRESHOLDS.get(skill, PILOT_THRESHOLDS["a"])
@@ -580,8 +794,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--book-id", required=True, help="Book ID")
     p.add_argument("--skill", choices=["a", "b", "c", "d"],
                    help="Skill (required for pilot and final_qc)")
-    p.add_argument("--pages", type=int, default=5,
-                   help="Sample size for pilot gate (default: 5)")
+    p.add_argument("--pages", default="5",
+                   help="Pilot: sample size (int, default: 5) OR comma-separated page numbers e.g. 45,67,89")
+    p.add_argument("--toc-only", action="store_true",
+                   help="Pilot gate: only run TOC analysis (Stage 1), don\'t run LLM extraction")
     p.add_argument("--sample", type=int, default=10,
                    help="Sample size for final_qc (default: 10)")
     p.add_argument("--books-yaml", default=str(REPO_ROOT / "config" / "books.yaml"),
@@ -608,7 +824,30 @@ def main() -> None:
         if not args.skill:
             print("ERROR: --skill required for pilot gate", file=sys.stderr)
             sys.exit(1)
-        result = gate_pilot(book_id, args.skill, sample_size=args.pages)
+        # Parse --pages: either an int (sample size) or comma-separated page numbers
+        explicit_pages: list[int] | None = None
+        sample_size = 5
+        pages_arg = str(args.pages).strip()
+        if "," in pages_arg:
+            try:
+                explicit_pages = [int(x.strip()) for x in pages_arg.split(",") if x.strip()]
+            except ValueError:
+                print(f"ERROR: --pages must be an int or comma-separated ints, got: {pages_arg}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            try:
+                sample_size = int(pages_arg)
+            except ValueError:
+                print(f"ERROR: --pages must be an int or comma-separated ints, got: {pages_arg}", file=sys.stderr)
+                sys.exit(1)
+
+        toc_only = getattr(args, "toc_only", False)
+        result = gate_pilot(
+            book_id, args.skill,
+            sample_size=sample_size,
+            explicit_pages=explicit_pages,
+            toc_only=toc_only,
+        )
         gate_name = f"pilot_{args.skill}"
     elif args.gate == "final_qc":
         if not args.skill:
