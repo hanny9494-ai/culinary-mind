@@ -50,6 +50,8 @@ def resolve_env(val: Any) -> Any:
 SKILL_PROMPTS: dict[str, str] = {
     "a": """你是食品工程参数提取器（Skill A 专用）。从给定页面提取可绑定到物理/化学方程的定量参数。
 
+【快速短路规则】先用 3 秒扫描页面：如果整页是叙述性文本、图说、参考文献、概念定义、方程推导（无具体数值参数），立即输出 [] 停止。不要分析、不要解释、不要输出任何其他文字。只有确认页面包含可提取的定量参数时，才继续提取。
+
 【提取标准 — Scale-up Test】
 只提取满足以下条件的数值：放大食材体积/改变温度/改变时间后，这个数字还能用于预测新结果。
   能预测 → 提取（物质固有属性/动力学常数/经验方程系数）
@@ -206,10 +208,10 @@ Output only the JSON object with flavor_targets and glossary arrays. No explanat
 
 
 SKILL_MODELS = {
-    "a": "lingya_opus",    # switched from aigocode (余额耗尽 2026-04-17)
+    "a": "gpt54",          # switched to GPT-5.4 2026-04-17 (matches Opus, better Chinese)
     "b": "gemini_flash",
     "c": "gemini_flash",
-    "d": "lingya_opus",    # switched from aigocode
+    "d": "gpt54",          # switched to GPT-5.4 (Opus Chinese D data was empty)
 }
 
 SKILL_SIGNAL_KEY = {"a": "A", "b": "B", "c": "C", "d": "D"}
@@ -368,6 +370,62 @@ def call_lingya_opus(
     )
 
 
+def call_gpt54(
+    system: str,
+    user: str,
+    cfg: dict,
+    retries: int = 3,
+    log: logging.Logger | None = None,
+) -> str:
+    """
+    Call GPT-5.4 via 灵雅 using OpenAI Chat Completions format.
+    POST /v1/chat/completions with Authorization: Bearer key.
+    """
+    l = log or logging.getLogger(__name__)
+    endpoint = resolve_env(cfg["endpoint"])
+    api_key  = resolve_env(cfg["api_key"])
+    model    = cfg["models"]["default"]
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type":  "application/json",
+    }
+    body = {
+        "model":       model,
+        "max_tokens":  4000,
+        "temperature": 0,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user},
+        ],
+    }
+
+    for attempt in range(1, retries + 1):
+        try:
+            l.info(f"[skill] gpt54 attempt {attempt}/{retries} → {endpoint}")
+            with httpx.Client(trust_env=False, timeout=cfg.get("timeout_sec", 120),
+                              follow_redirects=False) as client:
+                resp = client.post(endpoint, headers=headers, json=body)
+            if resp.status_code in _FATAL_STATUS:
+                raise httpx.HTTPStatusError(
+                    f"auth error {resp.status_code}", request=resp.request, response=resp
+                )
+            resp.raise_for_status()
+            data = resp.json()
+            return data["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            l.warning(f"[skill] gpt54 attempt {attempt}/{retries} failed: {e}")
+            if attempt == retries or _is_fatal_status(e):
+                raise
+            delay = _RETRY_DELAYS[min(attempt - 1, len(_RETRY_DELAYS) - 1)]
+            if _should_retry(e):
+                l.info(f"[skill] gpt54 backoff {delay}s (429/5xx)")
+            else:
+                l.info(f"[skill] gpt54 non-retryable error, backing off {delay}s")
+            time.sleep(delay)
+    return ""
+
+
 def call_llm(
     skill: str,
     user_text: str,
@@ -384,7 +442,9 @@ def call_llm(
     else:
         system = SKILL_PROMPTS[skill]
     provider = SKILL_MODELS[skill]
-    if provider == "lingya_opus":
+    if provider == "gpt54":
+        return call_gpt54(system, user_text, cfg["gpt54"], log=log)
+    elif provider == "lingya_opus":
         return call_lingya_opus(system, user_text, cfg["lingya_opus"], log=log)
     elif provider == "aigocode":
         return call_aigocode(system, user_text, cfg["aigocode"], log=log)

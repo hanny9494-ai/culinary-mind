@@ -14,12 +14,22 @@ aigocode:
   timeout_sec: 120
   max_retries: 3
 
-# Skill A/D: Claude Opus via 灵雅 (L0_API_ENDPOINT) — 主力（aigocode 已耗尽）
+# Skill A/D: Claude Opus via 灵雅 (L0_API_ENDPOINT) — 备用（已切换到 gpt54）
 lingya_opus:
   endpoint: "${L0_API_ENDPOINT}/v1/messages"
   api_key: "${L0_API_KEY}"
   models:
     opus: "claude-opus-4-6"
+  timeout_sec: 120
+  max_retries: 3
+
+# Skill A/D: GPT-5.4 via 灵雅 (OpenAI Chat Completions) — 主力（2026-04-17）
+# Skill A 与 Opus 持平；Skill D 中文优于 Opus
+gpt54:
+  endpoint: "https://api.lingyaai.cn/v1/chat/completions"
+  api_key: "sk-IPQBLX1VUnIe4IOWTuSxXzFtRqQ1A5gIijjFXqfR89HTaTzn"
+  models:
+    default: "gpt-5.4"
   timeout_sec: 120
   max_retries: 3
 
