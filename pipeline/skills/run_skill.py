@@ -88,9 +88,11 @@ MF-R01~R07（流变/结构）, MF-C01~C05（化学反应）
   "notes": "..."
 }
 
-causal_context 规则：
-- 1-2 句描述该参数驱动的物理/化学机制
-- 从同一页上下文提取，不要编造；没有因果描述则留空 ""
+causal_context（必填，不可为空字符串）：
+- 用 1-2 句话解释该参数在哪条因果链中起作用
+- 示例："glucose oxidation releases -2820 kJ/mol, driving non-enzymatic browning via Maillard reaction"
+- 优先从页面上下文提取因果描述；如果页面没有，根据该参数的科学本质补充典型因果链
+- 绝对禁止留空 ""；每条记录必须有 causal_context
 - 用于链接到 L0 因果链（Neo4j PARAMETER -[:DRIVES]-> MECHANISM）
 
 如果没有参数，输出 []。不要解释。""",
@@ -392,7 +394,7 @@ def call_gpt54(
     }
     body = {
         "model":       model,
-        "max_tokens":  4000,
+        "max_tokens":  8192,
         "temperature": 0,
         "messages": [
             {"role": "system", "content": system},
