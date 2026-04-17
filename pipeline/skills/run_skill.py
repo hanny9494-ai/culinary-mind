@@ -219,6 +219,7 @@ SKILL_SIGNAL_KEY = {"a": "A", "b": "B", "c": "C", "d": "D"}
 # Backoff delays for retry: 2s / 4s / 8s on 429/503
 _RETRY_DELAYS = [2, 4, 8]
 _RETRY_STATUS = {429, 500, 502, 503, 504}
+_FATAL_STATUS  = {401, 403}          # auth errors — never retry
 
 
 def _should_retry(exc: Exception) -> bool:
@@ -226,6 +227,14 @@ def _should_retry(exc: Exception) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in _RETRY_STATUS
     return isinstance(exc, (httpx.RequestError, httpx.TimeoutException))
+
+
+def _is_fatal_status(exc: Exception) -> bool:
+    """Return True for auth errors that must never be retried (401/403)."""
+    return (
+        isinstance(exc, httpx.HTTPStatusError)
+        and exc.response.status_code in _FATAL_STATUS
+    )
 
 
 def call_anthropic_stream(
@@ -282,14 +291,14 @@ def call_anthropic_stream(
             return "".join(chunks).strip()
         except Exception as e:
             l.warning(f"[skill] {label} attempt {attempt}/{retries} failed: {e}")
-            if attempt == retries:
+            if attempt == retries or _is_fatal_status(e):
                 raise
             delay = _RETRY_DELAYS[min(attempt - 1, len(_RETRY_DELAYS) - 1)]
             if _should_retry(e):
                 l.info(f"[skill] {label} backoff {delay}s (429/5xx)")
-                time.sleep(delay)
             else:
-                time.sleep(delay)
+                l.info(f"[skill] {label} non-retryable error, backing off {delay}s")
+            time.sleep(delay)
     return ""
 
 
@@ -597,9 +606,28 @@ def main() -> None:
                         print(f"  {json.dumps(item, ensure_ascii=False)[:200]}")
 
         except Exception as e:
-            log.error(f"  page {page_num}: API error: {e}")
-            failed += 1
-            results_file.write(json.dumps({"_page": page_num, "_skill": skill, "_error": str(e), "_book": book_id}, ensure_ascii=False) + "\n")
+            if _is_fatal_status(e):
+                # 401/403: auth error — abort entire run, do NOT mark page done
+                log.error(
+                    f"  page {page_num}: FATAL AUTH {e.response.status_code} — "
+                    f"aborting run. Check API key / quota."
+                )
+                failed += 1
+                results_file.write(json.dumps({
+                    "_page": page_num, "_skill": skill,
+                    "_error": f"auth_{e.response.status_code}", "_book": book_id,
+                }, ensure_ascii=False) + "\n")
+                results_file.flush()
+                save_progress(out_dir, done_pages, total, failed)
+                results_file.close()
+                log.error("Run aborted. Fix API key then re-run with --resume to continue.")
+                sys.exit(1)
+            else:
+                log.error(f"  page {page_num}: API error: {e}")
+                failed += 1
+                results_file.write(json.dumps({
+                    "_page": page_num, "_skill": skill, "_error": str(e), "_book": book_id,
+                }, ensure_ascii=False) + "\n")
 
         done_pages.add(page_num)
 
