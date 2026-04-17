@@ -5,10 +5,19 @@
 # 蒸馏 API（4 Track 对应 4 Skill）
 # ══════════════════════════════════════════════════════════════════
 
-# Skill A/D: Claude Opus 4.6 via aigocode
+# Skill A/D: 已切换到灵雅 API (lingya_opus)。aigocode 保留备用，余额耗尽暂停使用。
 aigocode:
   endpoint: "https://api.aigocode.com/v1/messages"
-  api_key: "${AIGOCODE_API_KEY}"
+  api_key: "sk-b818671338b5ffd17e17ee1c962f84058c81504131e64cecdd68779d8156aca1"
+  models:
+    opus: "claude-opus-4-6"
+  timeout_sec: 120
+  max_retries: 3
+
+# Skill A/D: Claude Opus via 灵雅 (L0_API_ENDPOINT) — 主力（aigocode 已耗尽）
+lingya_opus:
+  endpoint: "${L0_API_ENDPOINT}/v1/messages"
+  api_key: "${L0_API_KEY}"
   models:
     opus: "claude-opus-4-6"
   timeout_sec: 120

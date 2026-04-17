@@ -206,10 +206,10 @@ Output only the JSON object with flavor_targets and glossary arrays. No explanat
 
 
 SKILL_MODELS = {
-    "a": "aigocode",
+    "a": "lingya_opus",    # switched from aigocode (余额耗尽 2026-04-17)
     "b": "gemini_flash",
     "c": "gemini_flash",
-    "d": "aigocode",
+    "d": "lingya_opus",    # switched from aigocode
 }
 
 SKILL_SIGNAL_KEY = {"a": "A", "b": "B", "c": "C", "d": "D"}
@@ -347,6 +347,27 @@ def call_gemini_flash(
     )
 
 
+def call_lingya_opus(
+    system: str,
+    user: str,
+    cfg: dict,
+    retries: int = 3,
+    log: logging.Logger | None = None,
+) -> str:
+    """Call Claude Opus via 灵雅 (L0_API_ENDPOINT) with SSE streaming."""
+    return call_anthropic_stream(
+        system=system,
+        user=user,
+        endpoint=resolve_env(cfg["endpoint"]),
+        api_key=resolve_env(cfg["api_key"]),
+        model=cfg["models"]["opus"],
+        timeout_sec=cfg.get("timeout_sec", 120),
+        retries=retries,
+        log=log,
+        label="lingya_opus",
+    )
+
+
 def call_llm(
     skill: str,
     user_text: str,
@@ -363,7 +384,9 @@ def call_llm(
     else:
         system = SKILL_PROMPTS[skill]
     provider = SKILL_MODELS[skill]
-    if provider == "aigocode":
+    if provider == "lingya_opus":
+        return call_lingya_opus(system, user_text, cfg["lingya_opus"], log=log)
+    elif provider == "aigocode":
         return call_aigocode(system, user_text, cfg["aigocode"], log=log)
     else:
         return call_gemini_flash(system, user_text, cfg["gemini_flash"], log=log)
@@ -437,12 +460,61 @@ def parse_args() -> argparse.Namespace:
                    help="Disable secondary regex pre-filter (Skill A and D)")
     p.add_argument("--books-yaml", default=None,
                    help="Path to books.yaml (for Skill D language lookup)")
+    p.add_argument("--clean-progress", action="store_true",
+                   help="Remove error pages from _progress.json so --resume reprocesses them")
+    p.add_argument("--circuit-breaker", type=int, default=5,
+                   help="Abort after N consecutive failures (default: 5)")
     return p.parse_args()
 
 def main() -> None:
     args = parse_args()
     skill = args.skill
     cfg = load_api_config()
+
+    # ── --clean-progress mode: strip error pages from _progress.json ──
+    if args.clean_progress:
+        if not args.book_id:
+            print("ERROR: --clean-progress requires --book-id", file=sys.stderr)
+            sys.exit(1)
+        _clean_dir = REPO_ROOT / "output" / args.book_id / f"skill_{skill}"
+        _results_path  = _clean_dir / "results.jsonl"
+        _progress_path = _clean_dir / "_progress.json"
+        if not _results_path.exists():
+            print(f"No results.jsonl found at {_results_path}")
+            sys.exit(0)
+        error_pages: set[int] = set()
+        for line in _results_path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+                if "_error" in rec and "_page" in rec:
+                    error_pages.add(int(rec["_page"]))
+            except Exception:
+                pass
+        if not error_pages:
+            print(f"[clean-progress] No error pages found in results.jsonl — nothing to clean.")
+            sys.exit(0)
+        prog: dict = {}
+        if _progress_path.exists():
+            try:
+                prog = json.loads(_progress_path.read_text())
+            except Exception:
+                prog = {}
+        done_before = set(prog.get("done_pages", []))
+        done_after  = done_before - error_pages
+        removed     = done_before & error_pages
+        prog["done_pages"]  = sorted(done_after)
+        prog["done"]        = len(done_after)
+        prog["cleaned_errors"] = sorted(removed)
+        prog["updated_at"]  = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _progress_path.write_text(json.dumps(prog, indent=2))
+        print(f"[clean-progress] {args.book_id}/skill_{skill}: "
+              f"removed {len(removed)} error pages from done_pages. "
+              f"Was {len(done_before)}, now {len(done_after)}.")
+        print(f"  Cleaned pages: {sorted(removed)[:20]}{'...' if len(removed)>20 else ''}")
+        sys.exit(0)
 
     # Resolve paths
     if args.book_id:
@@ -523,6 +595,8 @@ def main() -> None:
     results_file = open(results_path, "a" if (args.resume and not args.force) else "w")
     failed = 0
     total = len(target_pages)
+    consecutive_failures = 0
+    _circuit_threshold = args.circuit_breaker
 
     t0 = time.time()
     for i, sig in enumerate(todo):
@@ -625,9 +699,23 @@ def main() -> None:
             else:
                 log.error(f"  page {page_num}: API error: {e}")
                 failed += 1
+                consecutive_failures += 1
                 results_file.write(json.dumps({
                     "_page": page_num, "_skill": skill, "_error": str(e), "_book": book_id,
                 }, ensure_ascii=False) + "\n")
+                # Circuit breaker: abort after N consecutive failures
+                if consecutive_failures >= _circuit_threshold:
+                    results_file.flush()
+                    save_progress(out_dir, done_pages, total, failed)
+                    results_file.close()
+                    log.critical(
+                        f"CIRCUIT BREAKER TRIPPED: {consecutive_failures} consecutive failures "
+                        f"(threshold={_circuit_threshold}). Last error: {e}. "
+                        f"Aborting to prevent further API waste."
+                    )
+                    sys.exit(1)
+        else:
+            consecutive_failures = 0   # reset on any success
 
         done_pages.add(page_num)
 
