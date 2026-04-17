@@ -1,0 +1,286 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://culinary-mind.internal/schemas/recipe-normalized-v1.json",
+  "title": "RecipeNormalized",
+  "description": "Culinary Mind — normalized recipe schema v1. Designed for cross-source alignment (下厨房/AllRecipes/marmiton/潮菜) and X-axis clustering / template induction.",
+  "type": "object",
+  "required": ["schema_version", "title", "ingredients", "steps", "source"],
+  "additionalProperties": false,
+
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "v1",
+      "description": "Schema version for migration tracking"
+    },
+
+    "title": {
+      "type": "string",
+      "description": "Recipe name in original language",
+      "examples": ["白灼虾", "Poulet rôti aux herbes", "潮州卤水鹅"]
+    },
+
+    "title_translations": {
+      "type": "object",
+      "description": "Optional translations for L6 layer",
+      "properties": {
+        "zh": { "type": "string" },
+        "en": { "type": "string" },
+        "fr": { "type": "string" }
+      },
+      "additionalProperties": { "type": "string" }
+    },
+
+    "cuisine_hint": {
+      "type": "string",
+      "description": "Cuisine family — used as X-axis clustering label (not ground truth)",
+      "enum": [
+        "cantonese", "teochew", "chinese_other",
+        "french", "italian", "japanese", "korean",
+        "western_other", "unknown"
+      ]
+    },
+
+    "dish_category": {
+      "type": "string",
+      "description": "Primary category for coarse filtering",
+      "enum": [
+        "protein_main", "vegetable_side", "soup_broth", "sauce_condiment",
+        "pastry_bread", "dessert", "noodle_rice", "seafood_main",
+        "braised", "fermented", "other"
+      ]
+    },
+
+    "ingredients": {
+      "type": "array",
+      "description": "Structured ingredient list",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "role"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Ingredient canonical name (original language OK)",
+            "examples": ["虾", "黄油", "大蒜", "百里香"]
+          },
+          "name_en": {
+            "type": ["string", "null"],
+            "description": "English name for L2a canonical_id lookup"
+          },
+          "quantity": {
+            "type": ["number", "null"],
+            "description": "Numeric amount (null if unspecified)"
+          },
+          "unit": {
+            "type": ["string", "null"],
+            "description": "Measurement unit",
+            "examples": ["g", "ml", "tbsp", "piece", "bunch", "to taste"]
+          },
+          "role": {
+            "type": "string",
+            "description": "Functional role in dish — key for template slot alignment",
+            "enum": [
+              "protein",
+              "fat",
+              "stock",
+              "seasoning",
+              "aromatic",
+              "acid",
+              "stabilizer",
+              "garnish",
+              "starch",
+              "vegetable",
+              "liquid",
+              "other"
+            ]
+          },
+          "preparation": {
+            "type": ["string", "null"],
+            "description": "Pre-prep note",
+            "examples": ["切片", "去皮", "室温回温", "julienned"]
+          },
+          "optional": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      }
+    },
+
+    "steps": {
+      "type": "array",
+      "description": "Ordered cooking steps with structured parameters",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["order", "action"],
+        "additionalProperties": false,
+        "properties": {
+          "order": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "action": {
+            "type": "string",
+            "description": "Primary cooking technique",
+            "examples": ["blanch", "sear", "braise", "rest", "season", "reduce"]
+          },
+          "action_zh": {
+            "type": ["string", "null"],
+            "description": "Chinese technique term",
+            "examples": ["白灼", "煎", "红烧", "醒肉", "调味", "收汁"]
+          },
+          "targets": {
+            "type": "array",
+            "description": "Ingredient names acted upon in this step",
+            "items": { "type": "string" }
+          },
+          "target_state": {
+            "type": ["string", "null"],
+            "description": "Desired end state after this step",
+            "examples": ["golden crust", "熟透不柴", "弹牙", "软烂", "color: amber"]
+          },
+          "params": {
+            "type": "object",
+            "description": "Quantitative parameters — L0 linkage anchor points",
+            "additionalProperties": false,
+            "properties": {
+              "temp_c": {
+                "type": ["number", "null"],
+                "description": "Target temperature in Celsius"
+              },
+              "temp_range_c": {
+                "type": ["array", "null"],
+                "items": { "type": "number" },
+                "minItems": 2,
+                "maxItems": 2,
+                "description": "[min, max] temperature range"
+              },
+              "time_s": {
+                "type": ["integer", "null"],
+                "description": "Duration in seconds"
+              },
+              "time_range_s": {
+                "type": ["array", "null"],
+                "items": { "type": "integer" },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "ratio": {
+                "type": ["string", "null"],
+                "description": "Ingredient ratio (e.g., '1:3 protein:liquid')"
+              },
+              "salt_pct": {
+                "type": ["number", "null"],
+                "description": "Salt as percentage of protein/total weight"
+              },
+              "equipment": {
+                "type": ["string", "null"],
+                "examples": ["cast iron skillet", "wok", "steam rack", "oven"]
+              }
+            }
+          },
+          "note": {
+            "type": ["string", "null"],
+            "description": "Free-text chef note or critical technique cue"
+          }
+        }
+      }
+    },
+
+    "source": {
+      "type": "object",
+      "required": ["site"],
+      "additionalProperties": false,
+      "properties": {
+        "site": {
+          "type": "string",
+          "enum": [
+            "xiachufang",
+            "allrecipes",
+            "marmiton",
+            "serious_eats",
+            "nytimes_cooking",
+            "food52",
+            "weibo",
+            "douyin",
+            "manual",
+            "book",
+            "other"
+          ]
+        },
+        "url": { "type": ["string", "null"] },
+        "author": { "type": ["string", "null"] },
+        "popularity": {
+          "type": ["number", "null"],
+          "description": "Platform popularity signal (views, saves, likes — normalized 0-1 or raw)"
+        },
+        "retrieved_at": {
+          "type": ["string", "null"],
+          "format": "date",
+          "description": "ISO date when scraped"
+        }
+      }
+    },
+
+    "raw_text": {
+      "type": ["string", "null"],
+      "description": "Original recipe text before normalization (kept for provenance)"
+    },
+
+    "servings": {
+      "type": ["integer", "null"],
+      "description": "Number of servings"
+    },
+
+    "total_time_min": {
+      "type": ["integer", "null"],
+      "description": "Total time in minutes (active + passive)"
+    },
+
+    "difficulty": {
+      "type": ["string", "null"],
+      "enum": ["easy", "medium", "hard", null]
+    },
+
+    "l0_domains": {
+      "type": "array",
+      "description": "L0 domain tags inferred from techniques/ingredients (for Y-system linking)",
+      "items": {
+        "type": "string",
+        "enum": [
+          "protein_science", "carbohydrate", "lipid_science", "fermentation",
+          "food_safety", "water_activity", "enzyme", "color_pigment",
+          "equipment_physics", "maillard_caramelization", "oxidation_reduction",
+          "salt_acid_chemistry", "taste_perception", "aroma_volatiles",
+          "thermal_dynamics", "mass_transfer", "texture_rheology"
+        ]
+      }
+    },
+
+    "x_cluster_id": {
+      "type": ["string", "null"],
+      "description": "X-axis cluster assignment (populated by clustering pipeline, null at ingest)"
+    },
+
+    "template_id": {
+      "type": ["string", "null"],
+      "description": "Template ID after template induction (null at ingest)"
+    },
+
+    "normalization_meta": {
+      "type": "object",
+      "description": "Provenance for the normalization step itself",
+      "additionalProperties": false,
+      "properties": {
+        "normalized_by": { "type": "string", "description": "Model or script that normalized" },
+        "normalized_at": { "type": "string", "format": "date-time" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "needs_review": { "type": "boolean", "default": false },
+        "review_notes": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

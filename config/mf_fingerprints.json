@@ -1,0 +1,1478 @@
+{
+  "MF-T01": {
+    "id": "MF-T01",
+    "canonical_name": "Fourier_1D",
+    "display_name": "Fourier's 2nd Law (1D Heat Conduction)",
+    "domains": [
+      "thermal_dynamics"
+    ],
+    "keywords_en": [
+      "Fourier 1D",
+      "Fourier's 2nd Law (1D Heat Conduction)",
+      "heat transfer",
+      "thermal conductivity",
+      "specific heat",
+      "temperature",
+      "thermal diffusivity",
+      "alpha",
+      "rho",
+      "Cp",
+      "m²/s",
+      "kg/m³",
+      "kg"
+    ],
+    "keywords_zh": [
+      "导热系数",
+      "热扩散率",
+      "比热容",
+      "alpha",
+      "k",
+      "rho",
+      "Cp"
+    ],
+    "parameter_names": [
+      "alpha",
+      "k",
+      "rho",
+      "Cp"
+    ],
+    "typical_statements": [
+      "alpha = k / (rho * Cp)"
+    ],
+    "source_books": [
+      "Singh_Heldman_Ch4",
+      "Toledo_Ch7",
+      "Sahin_Sumnu_Ch3"
+    ],
+    "equation_latex": "\\frac{\\partial T}{\\partial t} = \\alpha \\nabla^2 T"
+  },
+  "MF-T02": {
+    "id": "MF-T02",
+    "canonical_name": "Choi_Okos",
+    "display_name": "Choi-Okos Thermal Property Prediction",
+    "domains": [
+      "thermal_dynamics"
+    ],
+    "keywords_en": [
+      "Choi Okos",
+      "Choi-Okos Thermal Property Prediction",
+      "heat transfer",
+      "thermal conductivity",
+      "specific heat",
+      "temperature",
+      "sum",
+      "Xw",
+      "Xp",
+      "Xf",
+      "Xc",
+      "Xa",
+      "Three properties",
+      "weighted",
+      "volume",
+      "parallel",
+      "fraction",
+      "dimensionless",
+      "mass",
+      "°C",
+      "kg",
+      "kg/m³"
+    ],
+    "keywords_zh": [
+      "导热系数",
+      "热扩散率",
+      "比热容",
+      "Xw",
+      "Xp",
+      "Xf",
+      "Xc",
+      "Xa"
+    ],
+    "parameter_names": [
+      "Xw",
+      "Xp",
+      "Xf",
+      "Xc",
+      "Xa"
+    ],
+    "typical_statements": [
+      "Choi, Y. & Okos, M.R. (1986). Three properties: Cp (mass-weighted), rho (volume-parallel), k (volume-fraction-weighted)"
+    ],
+    "source_books": [
+      "Singh_Heldman_Ch4",
+      "Rao_Engineering_Ch4"
+    ],
+    "equation_latex": "C_p^{mix} = \\sum_i X_i C_{p,i}(T)"
+  },
+  "MF-T03": {
+    "id": "MF-T03",
+    "canonical_name": "Arrhenius",
+    "display_name": "Arrhenius Rate Equation",
+    "domains": [
+      "protein_science",
+      "maillard_caramelization",
+      "enzyme",
+      "food_safety",
+      "lipid_science"
+    ],
+    "keywords_en": [
+      "Arrhenius",
+      "Arrhenius Rate Equation",
+      "protein",
+      "denaturation",
+      "gelation",
+      "collagen",
+      "Maillard",
+      "browning",
+      "caramelization",
+      "Amadori",
+      "enzyme",
+      "catalysis",
+      "substrate",
+      "inhibition",
+      "pathogen",
+      "microbial",
+      "sterilization",
+      "pasteurization",
+      "fat",
+      "lipid",
+      "oxidation",
+      "rancidity",
+      "activation energy",
+      "Ea",
+      "T must be in"
+    ],
+    "keywords_zh": [
+      "蛋白质",
+      "变性",
+      "凝胶化",
+      "美拉德反应",
+      "焦糖化",
+      "褐变",
+      "酶",
+      "催化",
+      "底物",
+      "病原体",
+      "微生物",
+      "灭菌",
+      "脂肪",
+      "脂质",
+      "氧化"
+    ],
+    "parameter_names": [
+      "Ea",
+      "A",
+      "R"
+    ],
+    "typical_statements": [
+      "WARNING: T must be in Kelvin. Common mistake: using °C gives wrong result by ~273K offset"
+    ],
+    "source_books": [
+      "van_Boekel_Ch5",
+      "Toledo_Ch8",
+      "Handbook_Ch3"
+    ],
+    "equation_latex": "k = A \\cdot e^{-E_a/RT}"
+  },
+  "MF-T04": {
+    "id": "MF-T04",
+    "canonical_name": "Nusselt_Correlation",
+    "display_name": "Nusselt Number Correlation (Convective h)",
+    "domains": [
+      "thermal_dynamics"
+    ],
+    "keywords_en": [
+      "Nusselt Correlation",
+      "Nusselt Number Correlation (Convective h)",
+      "heat transfer",
+      "thermal conductivity",
+      "specific heat",
+      "temperature",
+      "characteristic",
+      "n depend on geometry and flow re",
+      "dimensionless",
+      "m²"
+    ],
+    "keywords_zh": [
+      "导热系数",
+      "热扩散率",
+      "比热容",
+      "C",
+      "m",
+      "n"
+    ],
+    "parameter_names": [
+      "C",
+      "m",
+      "n"
+    ],
+    "typical_statements": [
+      "h = Nu * k_fluid / L_characteristic; C/m/n depend on geometry and flow regime"
+    ],
+    "source_books": [
+      "Singh_Heldman_Ch4",
+      "Toledo_Ch7"
+    ],
+    "equation_latex": "Nu = C \\cdot Re^m \\cdot Pr^n"
+  },
+  "MF-T05": {
+    "id": "MF-T05",
+    "canonical_name": "Plank_Freezing",
+    "display_name": "Plank's Equation (Freezing Time)",
+    "domains": [
+      "thermal_dynamics"
+    ],
+    "keywords_en": [
+      "Plank Freezing",
+      "Plank's Equation (Freezing Time)",
+      "heat transfer",
+      "thermal conductivity",
+      "specific heat",
+      "temperature",
+      "rho",
+      "L_f",
+      "T_f",
+      "T_m",
+      "R_c",
+      "for slab",
+      "for cylinder",
+      "for sphere",
+      "J/kg",
+      "°C",
+      "freezing",
+      "point",
+      "medium",
+      "half-thickness",
+      "m²"
+    ],
+    "keywords_zh": [
+      "导热系数",
+      "热扩散率",
+      "比热容",
+      "rho",
+      "L_f",
+      "T_f",
+      "T_m",
+      "P",
+      "R_c",
+      "a",
+      "h",
+      "k"
+    ],
+    "parameter_names": [
+      "rho",
+      "L_f",
+      "T_f",
+      "T_m",
+      "P",
+      "R_c",
+      "a",
+      "h",
+      "k"
+    ],
+    "typical_statements": [
+      "P=1/2, R_c=1/8 for slab",
+      "P=1/4, R_c=1/16 for cylinder",
+      "P=1/6, R_c=1/24 for sphere"
+    ],
+    "source_books": [
+      "Singh_Heldman_Ch7",
+      "Handbook_Ch7"
+    ],
+    "equation_latex": "t_f = \\frac{\\rho L_f}{T_f - T_m} \\left(\\frac{Pa}{h} + \\frac{R_c a^2}{k}\\right)"
+  },
+  "MF-K01": {
+    "id": "MF-K01",
+    "canonical_name": "Michaelis_Menten",
+    "display_name": "Michaelis-Menten Enzyme Kinetics",
+    "domains": [
+      "enzyme",
+      "food_safety"
+    ],
+    "keywords_en": [
+      "Michaelis Menten",
+      "Michaelis-Menten Enzyme Kinetics",
+      "enzyme",
+      "catalysis",
+      "substrate",
+      "inhibition",
+      "pathogen",
+      "microbial",
+      "sterilization",
+      "pasteurization",
+      "Michaelis constant",
+      "Km",
+      "maximum velocity",
+      "Vmax",
+      "zeroth order",
+      "first order",
+      "mol",
+      "mol/L"
+    ],
+    "keywords_zh": [
+      "酶",
+      "催化",
+      "底物",
+      "病原体",
+      "微生物",
+      "灭菌",
+      "Vmax",
+      "Km"
+    ],
+    "parameter_names": [
+      "Vmax",
+      "Km"
+    ],
+    "typical_statements": [
+      "At S >> Km: v ≈ Vmax (zeroth order); at S << Km: v ≈ Vmax*S/Km (first order)"
+    ],
+    "source_books": [
+      "van_Boekel_Ch9",
+      "Belitz_Ch2",
+      "Fennema_Ch6"
+    ],
+    "equation_latex": "v = \\frac{V_{max} [S]}{K_m + [S]}"
+  },
+  "MF-K02": {
+    "id": "MF-K02",
+    "canonical_name": "D_Value",
+    "display_name": "D-Value (Decimal Reduction Time)",
+    "domains": [
+      "food_safety"
+    ],
+    "keywords_en": [
+      "D Value",
+      "D-Value (Decimal Reduction Time)",
+      "pathogen",
+      "microbial",
+      "sterilization",
+      "pasteurization",
+      "time for",
+      "log reduction",
+      "at constant temperature",
+      "min",
+      "CFU/mL",
+      "or",
+      "CFU/g"
+    ],
+    "keywords_zh": [
+      "病原体",
+      "微生物",
+      "灭菌",
+      "D"
+    ],
+    "parameter_names": [
+      "D"
+    ],
+    "typical_statements": [
+      "D = time for 1 log reduction (90% kill) at constant temperature"
+    ],
+    "source_books": [
+      "Jay_Ch17",
+      "Toledo_Ch9",
+      "van_Boekel_Ch13"
+    ],
+    "equation_latex": "N = N_0 \\cdot 10^{-t/D}"
+  },
+  "MF-K03": {
+    "id": "MF-K03",
+    "canonical_name": "z_Value",
+    "display_name": "z-Value (Thermal Resistance)",
+    "domains": [
+      "food_safety"
+    ],
+    "keywords_en": [
+      "z Value",
+      "z-Value (Thermal Resistance)",
+      "pathogen",
+      "microbial",
+      "sterilization",
+      "pasteurization",
+      "Typical",
+      "C for vegetative bacteria",
+      "Clostridium spores",
+      "°C",
+      "min"
+    ],
+    "keywords_zh": [
+      "病原体",
+      "微生物",
+      "灭菌",
+      "z"
+    ],
+    "parameter_names": [
+      "z"
+    ],
+    "typical_statements": [
+      "Typical: z=10°C for vegetative bacteria, z=7°C for Clostridium spores"
+    ],
+    "source_books": [
+      "Jay_Ch17",
+      "Toledo_Ch9",
+      "Singh_Heldman_Ch5"
+    ],
+    "equation_latex": "D_2 = D_1 \\cdot 10^{(T_1 - T_2)/z}"
+  },
+  "MF-K04": {
+    "id": "MF-K04",
+    "canonical_name": "F_Value",
+    "display_name": "F-Value / Sterilizing Value (F0)",
+    "domains": [
+      "food_safety"
+    ],
+    "keywords_en": [
+      "F Value",
+      "F-Value / Sterilizing Value (F0)",
+      "pathogen",
+      "microbial",
+      "sterilization",
+      "pasteurization",
+      "D concept for",
+      "botulinum",
+      "minimum",
+      "min",
+      "equiv.",
+      "at",
+      "121.1°C",
+      "°C"
+    ],
+    "keywords_zh": [
+      "病原体",
+      "微生物",
+      "灭菌",
+      "z"
+    ],
+    "parameter_names": [
+      "z"
+    ],
+    "typical_statements": [
+      "12-D concept for C. botulinum: F0 ≥ 2.52 min (minimum)"
+    ],
+    "source_books": [
+      "Toledo_Ch9",
+      "Jay_Ch17",
+      "Handbook_Ch12"
+    ],
+    "equation_latex": "F_0 = \\int_0^t 10^{(T-121.1)/z} \\, dt"
+  },
+  "MF-K05": {
+    "id": "MF-K05",
+    "canonical_name": "Gompertz_Microbial",
+    "display_name": "Gompertz Microbial Growth Model",
+    "domains": [
+      "food_safety",
+      "fermentation"
+    ],
+    "keywords_en": [
+      "Gompertz Microbial",
+      "Gompertz Microbial Growth Model",
+      "pathogen",
+      "microbial",
+      "sterilization",
+      "pasteurization",
+      "fermentation",
+      "yeast",
+      "bacteria",
+      "pH",
+      "ln",
+      "Modified",
+      "Gompertz",
+      "lag time",
+      "N0",
+      "Nmax/N0",
+      "1/h",
+      "max",
+      "growth",
+      "rate",
+      "inflection",
+      "time"
+    ],
+    "keywords_zh": [
+      "病原体",
+      "微生物",
+      "灭菌",
+      "发酵",
+      "酵母",
+      "细菌",
+      "A",
+      "C",
+      "B",
+      "M"
+    ],
+    "parameter_names": [
+      "A",
+      "C",
+      "B",
+      "M"
+    ],
+    "typical_statements": [
+      "lag time = M - 1/B"
+    ],
+    "source_books": [
+      "van_Boekel_Ch12",
+      "Jay_Ch3"
+    ],
+    "equation_latex": "\\ln(N) = A + C \\cdot e^{-e^{-B(t-M)}}"
+  },
+  "MF-M01": {
+    "id": "MF-M01",
+    "canonical_name": "Fick_2nd_Law",
+    "display_name": "Fick's 2nd Law (Unsteady Diffusion)",
+    "domains": [
+      "mass_transfer",
+      "water_activity",
+      "aroma_volatiles"
+    ],
+    "keywords_en": [
+      "Fick 2nd Law",
+      "Fick's 2nd Law (Unsteady Diffusion)",
+      "diffusion",
+      "mass transfer",
+      "concentration gradient",
+      "permeability",
+      "water activity",
+      "aw",
+      "moisture",
+      "sorption isotherm",
+      "aroma",
+      "volatile",
+      "headspace",
+      "partition coefficient",
+      "effective diffusivity",
+      "D_eff",
+      "eff for water in food",
+      "for aroma",
+      "m²/s",
+      "kg/m³",
+      "or",
+      "mol/m³"
+    ],
+    "keywords_zh": [
+      "扩散",
+      "传质",
+      "浓度梯度",
+      "水活度",
+      "水分活度",
+      "水分",
+      "香气",
+      "挥发物",
+      "顶空",
+      "D_eff"
+    ],
+    "parameter_names": [
+      "D_eff"
+    ],
+    "typical_statements": [
+      "D_eff for water in food: 1e-12 to 1e-9 m²/s",
+      "for aroma: 1e-11 to 1e-8 m²/s"
+    ],
+    "source_books": [
+      "Rao_Engineering_Ch8",
+      "van_Boekel_Ch11",
+      "Handbook_Ch8"
+    ],
+    "equation_latex": "\\frac{\\partial C}{\\partial t} = D_{eff} \\nabla^2 C"
+  },
+  "MF-M02": {
+    "id": "MF-M02",
+    "canonical_name": "GAB_Isotherm",
+    "display_name": "GAB Water Activity Isotherm",
+    "domains": [
+      "water_activity"
+    ],
+    "keywords_en": [
+      "GAB Isotherm",
+      "GAB Water Activity Isotherm",
+      "water activity",
+      "aw",
+      "moisture",
+      "sorption isotherm",
+      "monolayer moisture content",
+      "Xm",
+      "T is special case where",
+      "preferred over",
+      "T for aw",
+      "g_water/g_dry",
+      "dimensionless",
+      "0-1"
+    ],
+    "keywords_zh": [
+      "水活度",
+      "水分活度",
+      "水分",
+      "Xm",
+      "C",
+      "K"
+    ],
+    "parameter_names": [
+      "Xm",
+      "C",
+      "K"
+    ],
+    "typical_statements": [
+      "BET is special case where K=1",
+      "preferred over BET for aw > 0.5"
+    ],
+    "source_books": [
+      "Rao_Engineering_Ch7",
+      "Toledo_Ch12",
+      "Handbook_Ch11",
+      "Sahin_Sumnu_Ch5"
+    ],
+    "equation_latex": "X = \\frac{X_m C K a_w}{(1 - K a_w)(1 - K a_w + C K a_w)}"
+  },
+  "MF-M03": {
+    "id": "MF-M03",
+    "canonical_name": "Antoine_Equation",
+    "display_name": "Antoine Vapor Pressure Equation",
+    "domains": [
+      "aroma_volatiles",
+      "water_activity"
+    ],
+    "keywords_en": [
+      "Antoine Equation",
+      "Antoine Vapor Pressure Equation",
+      "aroma",
+      "volatile",
+      "headspace",
+      "partition coefficient",
+      "water activity",
+      "aw",
+      "moisture",
+      "sorption isotherm",
+      "C constants are compound",
+      "specific",
+      "T database is authoritative sour",
+      "mmHg",
+      "or",
+      "Pa",
+      "check",
+      "per",
+      "compound",
+      "°C"
+    ],
+    "keywords_zh": [
+      "香气",
+      "挥发物",
+      "顶空",
+      "水活度",
+      "水分活度",
+      "水分",
+      "A",
+      "B",
+      "C"
+    ],
+    "parameter_names": [
+      "A",
+      "B",
+      "C"
+    ],
+    "typical_statements": [
+      "A/B/C constants are compound-specific; NIST database is authoritative source"
+    ],
+    "source_books": [
+      "Sahin_Sumnu_Ch5",
+      "Toledo_Ch4"
+    ],
+    "equation_latex": "\\log_{10}(P) = A - \\frac{B}{C + T}"
+  },
+  "MF-M04": {
+    "id": "MF-M04",
+    "canonical_name": "Henderson_Hasselbalch",
+    "display_name": "Henderson-Hasselbalch (Buffer pH)",
+    "domains": [
+      "salt_acid_chemistry"
+    ],
+    "keywords_en": [
+      "Henderson Hasselbalch",
+      "Henderson-Hasselbalch (Buffer pH)",
+      "pH",
+      "buffer",
+      "acid",
+      "alkali",
+      "pKa",
+      "Valid for",
+      "for food buffers",
+      "acetic acid p",
+      "citric acid p",
+      "dimensionless",
+      "mol/L"
+    ],
+    "keywords_zh": [
+      "pH值",
+      "缓冲液",
+      "酸",
+      "pKa"
+    ],
+    "parameter_names": [
+      "pKa"
+    ],
+    "typical_statements": [
+      "Valid for 10% < A-/HA < 1000%",
+      "for food buffers: acetic acid pKa=4.76, citric acid pKa1=3.13"
+    ],
+    "source_books": [
+      "Fennema_Ch2",
+      "Belitz_Ch0"
+    ],
+    "equation_latex": "pH = pK_a + \\log_{10}\\frac{[A^-]}{[HA]}"
+  },
+  "MF-M05": {
+    "id": "MF-M05",
+    "canonical_name": "Henry_Law_Aroma",
+    "display_name": "Henry's Law (Aroma Partition)",
+    "domains": [
+      "aroma_volatiles"
+    ],
+    "keywords_en": [
+      "Henry Law Aroma",
+      "Henry's Law (Aroma Partition)",
+      "aroma",
+      "volatile",
+      "headspace",
+      "partition coefficient",
+      "H increases with",
+      "dimensionless",
+      "critical for flavor retention in",
+      "cooking",
+      "Pa",
+      "m³/mol",
+      "or",
+      "Hcc",
+      "mol/m³"
+    ],
+    "keywords_zh": [
+      "香气",
+      "挥发物",
+      "顶空",
+      "H"
+    ],
+    "parameter_names": [
+      "H"
+    ],
+    "typical_statements": [
+      "H increases with T; Hcc (dimensionless) = Hcp / (RT); critical for flavor retention in cooking"
+    ],
+    "source_books": [
+      "Rao_Engineering_Ch8",
+      "Belitz_Ch5"
+    ],
+    "equation_latex": "p = H \\cdot c"
+  },
+  "MF-M06": {
+    "id": "MF-M06",
+    "canonical_name": "Latent_Heat",
+    "display_name": "Latent Heat Phase Change",
+    "domains": [
+      "thermal_dynamics",
+      "water_activity"
+    ],
+    "keywords_en": [
+      "Latent Heat",
+      "Latent Heat Phase Change",
+      "heat transfer",
+      "thermal conductivity",
+      "specific heat",
+      "temperature",
+      "water activity",
+      "aw",
+      "moisture",
+      "sorption isotherm",
+      "L_fg",
+      "vaporization at",
+      "fusion",
+      "freezing",
+      "J/kg",
+      "kg"
+    ],
+    "keywords_zh": [
+      "导热系数",
+      "热扩散率",
+      "比热容",
+      "水活度",
+      "水分活度",
+      "水分",
+      "L_fg"
+    ],
+    "parameter_names": [
+      "L_fg"
+    ],
+    "typical_statements": [
+      "Water: L_fg=2260 kJ/kg (vaporization at 100°C), L_f=334 kJ/kg (fusion/freezing)"
+    ],
+    "source_books": [
+      "Toledo_Ch5",
+      "Singh_Heldman_Ch7"
+    ],
+    "equation_latex": "Q = m \\cdot L_{fg}"
+  },
+  "MF-R01": {
+    "id": "MF-R01",
+    "canonical_name": "Power_Law",
+    "display_name": "Power Law (Ostwald-de Waele)",
+    "domains": [
+      "texture_rheology"
+    ],
+    "keywords_en": [
+      "Power Law",
+      "Power Law (Ostwald-de Waele)",
+      "viscosity",
+      "rheology",
+      "yield stress",
+      "elasticity",
+      "tau",
+      "dot",
+      "pseudoplastic",
+      "most foods",
+      "Newtonian",
+      "dilatant",
+      "consistency index",
+      "Pa",
+      "sⁿ",
+      "dimensionless",
+      "1/s"
+    ],
+    "keywords_zh": [
+      "黏度",
+      "流变",
+      "屈服应力",
+      "K",
+      "n"
+    ],
+    "parameter_names": [
+      "K",
+      "n"
+    ],
+    "typical_statements": [
+      "n<1: pseudoplastic (most foods)",
+      "n=1: Newtonian",
+      "n>1: dilatant. K=consistency index"
+    ],
+    "source_books": [
+      "Rao_Engineering_Ch2",
+      "Bourne_Ch3",
+      "Handbook_Ch1"
+    ],
+    "equation_latex": "\\tau = K \\dot{\\gamma}^n"
+  },
+  "MF-R02": {
+    "id": "MF-R02",
+    "canonical_name": "Herschel_Bulkley",
+    "display_name": "Herschel-Bulkley Model",
+    "domains": [
+      "texture_rheology"
+    ],
+    "keywords_en": [
+      "Herschel Bulkley",
+      "Herschel-Bulkley Model",
+      "viscosity",
+      "rheology",
+      "yield stress",
+      "elasticity",
+      "tau_0",
+      "tau",
+      "dot",
+      "Generalization of",
+      "Bingham",
+      "useful for ketchup",
+      "starch gels",
+      "chocolate",
+      "Pa",
+      "yield",
+      "stress",
+      "sⁿ",
+      "dimensionless"
+    ],
+    "keywords_zh": [
+      "黏度",
+      "流变",
+      "屈服应力",
+      "tau_0",
+      "K",
+      "n"
+    ],
+    "parameter_names": [
+      "tau_0",
+      "K",
+      "n"
+    ],
+    "typical_statements": [
+      "Generalization of Power Law + Bingham; useful for ketchup, starch gels, chocolate"
+    ],
+    "source_books": [
+      "Rao_Engineering_Ch2",
+      "Bourne_Ch3",
+      "Sahin_Sumnu_Ch2"
+    ],
+    "equation_latex": "\\tau = \\tau_0 + K \\dot{\\gamma}^n"
+  },
+  "MF-R03": {
+    "id": "MF-R03",
+    "canonical_name": "Casson_Model",
+    "display_name": "Casson Model",
+    "domains": [
+      "texture_rheology",
+      "lipid_science"
+    ],
+    "keywords_en": [
+      "Casson Model",
+      "viscosity",
+      "rheology",
+      "yield stress",
+      "elasticity",
+      "fat",
+      "lipid",
+      "oxidation",
+      "rancidity",
+      "tau",
+      "eta",
+      "dot",
+      "tau_c",
+      "eta_c",
+      "Standard model for chocolate",
+      "specifies",
+      "Casson for molten chocolate",
+      "Pa",
+      "Casson",
+      "yield",
+      "stress"
+    ],
+    "keywords_zh": [
+      "黏度",
+      "流变",
+      "屈服应力",
+      "脂肪",
+      "脂质",
+      "氧化",
+      "tau_c",
+      "eta_c"
+    ],
+    "parameter_names": [
+      "tau_c",
+      "eta_c"
+    ],
+    "typical_statements": [
+      "ISO 2884 specifies Casson for molten chocolate"
+    ],
+    "source_books": [
+      "Rao_Engineering_Ch2",
+      "Bourne_Ch3"
+    ],
+    "equation_latex": "\\sqrt{\\tau} = \\sqrt{\\tau_c} + \\sqrt{\\eta_c \\dot{\\gamma}}"
+  },
+  "MF-R04": {
+    "id": "MF-R04",
+    "canonical_name": "Gordon_Taylor",
+    "display_name": "Gordon-Taylor Equation (Glass Transition)",
+    "domains": [
+      "texture_rheology",
+      "water_activity",
+      "carbohydrate"
+    ],
+    "keywords_en": [
+      "Gordon Taylor",
+      "Gordon-Taylor Equation (Glass Transition)",
+      "viscosity",
+      "rheology",
+      "yield stress",
+      "elasticity",
+      "water activity",
+      "aw",
+      "moisture",
+      "sorption isotherm",
+      "starch",
+      "gelatinization",
+      "retrogradation",
+      "sugar",
+      "glass transition temperature",
+      "Tg",
+      "Tg1",
+      "Tg2",
+      "for sugar",
+      "°C",
+      "or",
+      "mass",
+      "fraction",
+      "dimensionless",
+      "Gordon-Taylor"
+    ],
+    "keywords_zh": [
+      "黏度",
+      "流变",
+      "屈服应力",
+      "水活度",
+      "水分活度",
+      "水分",
+      "淀粉",
+      "糊化",
+      "回生",
+      "k",
+      "Tg1",
+      "Tg2"
+    ],
+    "parameter_names": [
+      "k",
+      "Tg1",
+      "Tg2"
+    ],
+    "typical_statements": [
+      "k = rho1*DeltaCp1 / (rho2*DeltaCp2)",
+      "for sugar-water: k ≈ 4.5-7",
+      "Tg_water = -135°C"
+    ],
+    "source_books": [
+      "Rao_Engineering_Ch3",
+      "Handbook_Ch4",
+      "Belitz_Ch0"
+    ],
+    "equation_latex": "T_g = \\frac{w_1 T_{g1} + k w_2 T_{g2}}{w_1 + k w_2}"
+  },
+  "MF-R05": {
+    "id": "MF-R05",
+    "canonical_name": "WLF_Equation",
+    "display_name": "WLF Equation (Time-Temperature Superposition)",
+    "domains": [
+      "texture_rheology",
+      "water_activity"
+    ],
+    "keywords_en": [
+      "WLF Equation",
+      "WLF Equation (Time-Temperature Superposition)",
+      "viscosity",
+      "rheology",
+      "yield stress",
+      "elasticity",
+      "water activity",
+      "aw",
+      "moisture",
+      "sorption isotherm",
+      "glass transition temperature",
+      "Tg",
+      "C1",
+      "C2",
+      "Universal constants",
+      "referenced to",
+      "valid for",
+      "dimensionless",
+      "°C",
+      "or",
+      "shift",
+      "factor"
+    ],
+    "keywords_zh": [
+      "黏度",
+      "流变",
+      "屈服应力",
+      "水活度",
+      "水分活度",
+      "水分",
+      "C1",
+      "C2",
+      "Tg"
+    ],
+    "parameter_names": [
+      "C1",
+      "C2",
+      "Tg"
+    ],
+    "typical_statements": [
+      "Universal constants: C1=17.44, C2=51.6 (referenced to Tg)",
+      "valid for Tg < T < Tg+100"
+    ],
+    "source_books": [
+      "Rao_Engineering_Ch3",
+      "Handbook_Ch4",
+      "Belitz_Ch0"
+    ],
+    "equation_latex": "\\log_{10}(a_T) = \\frac{-C_1(T - T_g)}{C_2 + T - T_g}"
+  },
+  "MF-R06": {
+    "id": "MF-R06",
+    "canonical_name": "Stevens_Power_Law",
+    "display_name": "Stevens' Power Law (Psychophysical Perception)",
+    "domains": [
+      "taste_perception",
+      "texture_rheology"
+    ],
+    "keywords_en": [
+      "Stevens Power Law",
+      "Stevens' Power Law (Psychophysical Perception)",
+      "taste",
+      "perception",
+      "threshold",
+      "bitterness",
+      "viscosity",
+      "rheology",
+      "yield stress",
+      "elasticity",
+      "psi",
+      "phi",
+      "for saltiness",
+      "for sweetness",
+      "for hardness",
+      "approximate",
+      "perceived",
+      "magnitude",
+      "physical",
+      "stimulus",
+      "intensity",
+      "modality",
+      "constant"
+    ],
+    "keywords_zh": [
+      "味觉",
+      "感知",
+      "阈值",
+      "黏度",
+      "流变",
+      "屈服应力",
+      "k",
+      "n"
+    ],
+    "parameter_names": [
+      "k",
+      "n"
+    ],
+    "typical_statements": [
+      "n=0.67 for saltiness, n=1.1 for sweetness, n=1.3 for hardness (approximate)"
+    ],
+    "source_books": [
+      "Bourne_Ch8"
+    ],
+    "equation_latex": "\\psi = k \\phi^n"
+  },
+  "MF-R07": {
+    "id": "MF-R07",
+    "canonical_name": "Griffith_Fracture",
+    "display_name": "Griffith Fracture Criterion",
+    "domains": [
+      "texture_rheology"
+    ],
+    "keywords_en": [
+      "Griffith Fracture",
+      "Griffith Fracture Criterion",
+      "viscosity",
+      "rheology",
+      "yield stress",
+      "elasticity",
+      "pi",
+      "gamma_s",
+      "For brittle foods",
+      "crackers",
+      "critical for crispy",
+      "crunchy texture prediction",
+      "Pa",
+      "critical",
+      "fracture",
+      "stress",
+      "Young's",
+      "modulus",
+      "J/m²",
+      "surface",
+      "energy",
+      "crack",
+      "half-length"
+    ],
+    "keywords_zh": [
+      "黏度",
+      "流变",
+      "屈服应力",
+      "E",
+      "gamma_s",
+      "a"
+    ],
+    "parameter_names": [
+      "E",
+      "gamma_s",
+      "a"
+    ],
+    "typical_statements": [
+      "For brittle foods (crackers, chips); critical for crispy/crunchy texture prediction"
+    ],
+    "source_books": [
+      "Bourne_Ch3"
+    ],
+    "equation_latex": "\\sigma_c = \\sqrt{\\frac{2 E \\gamma_s}{\\pi a}}"
+  },
+  "MF-C01": {
+    "id": "MF-C01",
+    "canonical_name": "Stokes_Sedimentation",
+    "display_name": "Stokes' Law (Sedimentation/Creaming)",
+    "domains": [
+      "texture_rheology",
+      "lipid_science"
+    ],
+    "keywords_en": [
+      "Stokes Sedimentation",
+      "Stokes' Law (Sedimentation/Creaming)",
+      "viscosity",
+      "rheology",
+      "yield stress",
+      "elasticity",
+      "fat",
+      "lipid",
+      "oxidation",
+      "rancidity",
+      "rho",
+      "mu",
+      "rho_p",
+      "rho_f",
+      "Valid for",
+      "laminar regime",
+      "negative v means creaming",
+      "droplet rises",
+      "m/s",
+      "particle",
+      "radius",
+      "kg/m³",
+      "Pa",
+      "9.81",
+      "m/s²"
+    ],
+    "keywords_zh": [
+      "黏度",
+      "流变",
+      "屈服应力",
+      "脂肪",
+      "脂质",
+      "氧化",
+      "r",
+      "rho_p",
+      "rho_f",
+      "mu"
+    ],
+    "parameter_names": [
+      "r",
+      "rho_p",
+      "rho_f",
+      "mu"
+    ],
+    "typical_statements": [
+      "Valid for Re < 0.5 (laminar regime)"
+    ],
+    "source_books": [
+      "Sahin_Sumnu_Ch6",
+      "Fennema_Ch13"
+    ],
+    "equation_latex": "v = \\frac{2 r^2 (\\rho_p - \\rho_f) g}{9 \\mu}"
+  },
+  "MF-C02": {
+    "id": "MF-C02",
+    "canonical_name": "HLB_Griffin",
+    "display_name": "HLB Number (Griffin Method)",
+    "domains": [
+      "lipid_science",
+      "texture_rheology"
+    ],
+    "keywords_en": [
+      "HLB Griffin",
+      "HLB Number (Griffin Method)",
+      "fat",
+      "lipid",
+      "oxidation",
+      "rancidity",
+      "viscosity",
+      "rheology",
+      "yield stress",
+      "elasticity",
+      "Mh",
+      "O emulsifier",
+      "W emulsifier",
+      "dimensionless",
+      "0-20",
+      "g/mol",
+      "hydrophilic",
+      "part",
+      "total"
+    ],
+    "keywords_zh": [
+      "脂肪",
+      "脂质",
+      "氧化",
+      "黏度",
+      "流变",
+      "屈服应力",
+      "Mh",
+      "M"
+    ],
+    "parameter_names": [
+      "Mh",
+      "M"
+    ],
+    "typical_statements": [
+      "HLB 1-6: W/O emulsifier",
+      "HLB 8-18: O/W emulsifier",
+      "3-6: anti-foam"
+    ],
+    "source_books": [
+      "Belitz_Ch8",
+      "Fennema_Ch13"
+    ],
+    "equation_latex": "HLB = 20 \\cdot \\frac{M_h}{M}"
+  },
+  "MF-C03": {
+    "id": "MF-C03",
+    "canonical_name": "DLVO_Theory",
+    "display_name": "DLVO Colloidal Stability",
+    "domains": [
+      "texture_rheology",
+      "lipid_science"
+    ],
+    "keywords_en": [
+      "DLVO Theory",
+      "DLVO Colloidal Stability",
+      "viscosity",
+      "rheology",
+      "yield stress",
+      "elasticity",
+      "fat",
+      "lipid",
+      "oxidation",
+      "rancidity",
+      "A_hamaker",
+      "kappa",
+      "zeta",
+      "Simplified",
+      "full expression",
+      "for spheres",
+      "m⁻¹",
+      "inverse",
+      "Debye",
+      "length"
+    ],
+    "keywords_zh": [
+      "黏度",
+      "流变",
+      "屈服应力",
+      "脂肪",
+      "脂质",
+      "氧化",
+      "A_hamaker",
+      "kappa",
+      "zeta"
+    ],
+    "parameter_names": [
+      "A_hamaker",
+      "kappa",
+      "zeta"
+    ],
+    "typical_statements": [
+      "full expression: V_vdW = -A/(6h) * [r1*r2/(r1+r2)] for spheres"
+    ],
+    "source_books": [
+      "Sahin_Sumnu_Ch6",
+      "Fennema_Ch13"
+    ],
+    "equation_latex": "V_{total} = V_{vdW} + V_{EDL}"
+  },
+  "MF-C04": {
+    "id": "MF-C04",
+    "canonical_name": "Laplace_Pressure",
+    "display_name": "Laplace Pressure (Capillary)",
+    "domains": [
+      "texture_rheology",
+      "lipid_science"
+    ],
+    "keywords_en": [
+      "Laplace Pressure",
+      "Laplace Pressure (Capillary)",
+      "viscosity",
+      "rheology",
+      "yield stress",
+      "elasticity",
+      "fat",
+      "lipid",
+      "oxidation",
+      "rancidity",
+      "gamma",
+      "For spherical droplet",
+      "for cylindrical",
+      "critical for emulsion stability",
+      "Pa",
+      "N/m",
+      "surface",
+      "tension",
+      "droplet",
+      "radius"
+    ],
+    "keywords_zh": [
+      "黏度",
+      "流变",
+      "屈服应力",
+      "脂肪",
+      "脂质",
+      "氧化",
+      "gamma",
+      "r"
+    ],
+    "parameter_names": [
+      "gamma",
+      "r"
+    ],
+    "typical_statements": [
+      "For spherical droplet; for cylindrical: ΔP = γ/r; critical for emulsion stability"
+    ],
+    "source_books": [
+      "Sahin_Sumnu_Ch6"
+    ],
+    "equation_latex": "\\Delta P = \\frac{2 \\gamma}{r}"
+  },
+  "MF-C05": {
+    "id": "MF-C05",
+    "canonical_name": "Q10_Rule",
+    "display_name": "Q10 Temperature Coefficient",
+    "domains": [
+      "maillard_caramelization",
+      "protein_science",
+      "food_safety"
+    ],
+    "keywords_en": [
+      "Q10 Rule",
+      "Q10 Temperature Coefficient",
+      "Maillard",
+      "browning",
+      "caramelization",
+      "Amadori",
+      "protein",
+      "denaturation",
+      "gelation",
+      "collagen",
+      "pathogen",
+      "microbial",
+      "sterilization",
+      "pasteurization",
+      "Q10",
+      "Maillard reaction",
+      "rate doubles or triples per",
+      "simpler than",
+      "Arrhenius",
+      "dimensionless",
+      "same",
+      "units",
+      "cancel",
+      "°C"
+    ],
+    "keywords_zh": [
+      "美拉德反应",
+      "焦糖化",
+      "褐变",
+      "蛋白质",
+      "变性",
+      "凝胶化",
+      "病原体",
+      "微生物",
+      "灭菌",
+      "Q10"
+    ],
+    "parameter_names": [
+      "Q10"
+    ],
+    "typical_statements": [
+      "Maillard reaction: Q10 ≈ 2-3 (rate doubles or triples per 10°C)"
+    ],
+    "source_books": [
+      "Toledo_Ch8",
+      "van_Boekel_Ch5"
+    ],
+    "equation_latex": "Q_{10} = \\left(\\frac{k_2}{k_1}\\right)^{10/(T_2-T_1)}"
+  }
+}

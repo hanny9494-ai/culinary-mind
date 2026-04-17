@@ -19,6 +19,9 @@ import { CostTracker } from './cost-tracker.js';
 import { Scheduler } from './scheduler.js';
 import { buildApp } from './api.js';
 import { ResumeBuilder } from './resume-builder.js';
+import { ResourceLock } from './resource-lock.js';
+import { BookDispatcher } from './book-dispatcher.js';
+import { registerMcpSse } from './mcp-server.js';
 
 const CWD = process.env.CE_HUB_CWD || process.cwd();
 const DB_PATH = process.env.CE_HUB_DB_PATH || join(CWD, '.ce-hub', 'ce-hub.db');
@@ -66,8 +69,17 @@ async function main() {
   const resumeBuilder = new ResumeBuilder(store, tmux);
   resumeBuilder.startMonitoring();
 
+  // Initialize MCP dependencies
+  const db = (store as any).db;
+  const resourceLock = new ResourceLock(db);
+  const bookDispatcher = new BookDispatcher(db);
+  const mcpCtx = { store, engine, memory, costTracker, db, resourceLock, bookDispatcher };
+
   // Build REST API (for monitoring, not for agent communication)
   const app = await buildApp(store, engine, tmux, costTracker, memory, scheduler);
+
+  // Register MCP SSE endpoints on the Fastify server
+  registerMcpSse(app, mcpCtx);
 
   // Graceful shutdown
   const shutdown = async (sig: string) => {

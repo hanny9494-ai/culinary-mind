@@ -1,0 +1,230 @@
+[
+  {
+    "_comment": "Sample 1 — Cantonese: 白灼虾",
+    "schema_version": "v1",
+    "title": "白灼虾",
+    "title_translations": { "en": "Cantonese Blanched Shrimp", "zh": "白灼虾" },
+    "cuisine_hint": "cantonese",
+    "dish_category": "seafood_main",
+    "servings": 2,
+    "total_time_min": 15,
+    "difficulty": "easy",
+    "ingredients": [
+      { "name": "基围虾", "name_en": "shrimp", "quantity": 300, "unit": "g",
+        "role": "protein", "preparation": "剪须洗净" },
+      { "name": "葱", "name_en": "scallion", "quantity": 2, "unit": "piece",
+        "role": "aromatic", "preparation": "切段" },
+      { "name": "姜", "name_en": "ginger", "quantity": 3, "unit": "piece",
+        "role": "aromatic", "preparation": "切片" },
+      { "name": "盐", "name_en": "salt", "quantity": 5, "unit": "g",
+        "role": "seasoning" },
+      { "name": "生抽", "name_en": "light soy sauce", "quantity": 30, "unit": "ml",
+        "role": "seasoning" },
+      { "name": "花生油", "name_en": "peanut oil", "quantity": 15, "unit": "ml",
+        "role": "fat" },
+      { "name": "香油", "name_en": "sesame oil", "quantity": 5, "unit": "ml",
+        "role": "fat" }
+    ],
+    "steps": [
+      {
+        "order": 1, "action": "boil",
+        "targets": ["水", "盐", "葱", "姜"],
+        "target_state": "rolling boil",
+        "params": { "temp_c": 100, "time_s": 120, "equipment": "wok" },
+        "note": "加盐、葱姜去腥"
+      },
+      {
+        "order": 2, "action": "blanch",
+        "targets": ["基围虾"],
+        "target_state": "刚熟变红，尾部卷曲",
+        "params": { "temp_c": 100, "time_s": 90 },
+        "note": "水重新沸腾后计时，切勿过熟，虾肉发柴无法挽救"
+      },
+      {
+        "order": 3, "action": "drain",
+        "targets": ["基围虾"],
+        "target_state": "沥干，不带多余水",
+        "params": { "time_s": 30 }
+      },
+      {
+        "order": 4, "action": "plate",
+        "targets": ["基围虾"],
+        "note": "摆盘，淋热油激香"
+      },
+      {
+        "order": 5, "action": "season",
+        "targets": ["生抽", "花生油", "香油"],
+        "target_state": "酱汁热烫冒烟",
+        "params": { "temp_c": 180, "time_s": 10 },
+        "note": "热油激沙姜蒜末，增加香气层次"
+      }
+    ],
+    "source": { "site": "manual", "url": null, "author": "Jeff" },
+    "raw_text": null,
+    "l0_domains": ["protein_science", "thermal_dynamics", "aroma_volatiles"],
+    "x_cluster_id": null,
+    "template_id": null,
+    "normalization_meta": {
+      "normalized_by": "human", "normalized_at": "2026-04-09T00:00:00Z",
+      "confidence": 1.0, "needs_review": false, "review_notes": null
+    }
+  },
+
+  {
+    "_comment": "Sample 2 — French: Poulet Rôti",
+    "schema_version": "v1",
+    "title": "Poulet rôti aux herbes",
+    "title_translations": { "en": "French Herb-Roasted Chicken", "zh": "法式香草烤鸡" },
+    "cuisine_hint": "french",
+    "dish_category": "protein_main",
+    "servings": 4,
+    "total_time_min": 90,
+    "difficulty": "medium",
+    "ingredients": [
+      { "name": "poulet fermier", "name_en": "free-range chicken", "quantity": 1600, "unit": "g",
+        "role": "protein", "preparation": "室温回温 30min，擦干表皮" },
+      { "name": "beurre", "name_en": "butter", "quantity": 50, "unit": "g",
+        "role": "fat", "preparation": "软化" },
+      { "name": "thym", "name_en": "thyme", "quantity": 4, "unit": "bunch",
+        "role": "aromatic" },
+      { "name": "romarin", "name_en": "rosemary", "quantity": 2, "unit": "bunch",
+        "role": "aromatic" },
+      { "name": "ail", "name_en": "garlic", "quantity": 6, "unit": "piece",
+        "role": "aromatic", "preparation": "拍碎带皮" },
+      { "name": "sel fin", "name_en": "fine salt", "quantity": 12, "unit": "g",
+        "role": "seasoning" },
+      { "name": "poivre noir", "name_en": "black pepper", "quantity": 3, "unit": "g",
+        "role": "seasoning" }
+    ],
+    "steps": [
+      {
+        "order": 1, "action": "season",
+        "targets": ["poulet fermier", "sel fin", "poivre noir"],
+        "target_state": "盐均匀覆盖表皮及腔内",
+        "params": { "salt_pct": 0.75, "time_s": 1800 },
+        "note": "提前 30min 调味，让盐渗透入肉，辅助保水"
+      },
+      {
+        "order": 2, "action": "stuff",
+        "targets": ["thym", "romarin", "ail", "beurre"],
+        "target_state": "腔内填满香草，表皮下抹黄油",
+        "params": {}
+      },
+      {
+        "order": 3, "action": "roast",
+        "targets": ["poulet fermier"],
+        "target_state": "表皮金黄酥脆，大腿内温 74°C",
+        "params": {
+          "temp_c": 220, "time_range_s": [3600, 4500],
+          "equipment": "oven"
+        },
+        "note": "前 20min 高温 230°C 上色，之后降至 180°C 慢烤至熟"
+      },
+      {
+        "order": 4, "action": "rest",
+        "targets": ["poulet fermier"],
+        "target_state": "汁水重新分布，切割不流汁",
+        "params": { "time_s": 900 },
+        "note": "静置时间 = 烤制时间的 1/4，不可省略"
+      }
+    ],
+    "source": { "site": "manual", "url": null, "author": "Jeff" },
+    "raw_text": null,
+    "l0_domains": ["protein_science", "thermal_dynamics", "maillard_caramelization",
+                    "aroma_volatiles", "salt_acid_chemistry"],
+    "x_cluster_id": null,
+    "template_id": null,
+    "normalization_meta": {
+      "normalized_by": "human", "normalized_at": "2026-04-09T00:00:00Z",
+      "confidence": 1.0, "needs_review": false, "review_notes": null
+    }
+  },
+
+  {
+    "_comment": "Sample 3 — Teochew: 潮州卤水拼盘（鹅）",
+    "schema_version": "v1",
+    "title": "潮州卤水鹅",
+    "title_translations": { "en": "Teochew Braised Goose (Lu Shui)", "zh": "潮州卤水鹅" },
+    "cuisine_hint": "teochew",
+    "dish_category": "braised",
+    "servings": 8,
+    "total_time_min": 180,
+    "difficulty": "hard",
+    "ingredients": [
+      { "name": "狮头鹅", "name_en": "lion head goose", "quantity": 4500, "unit": "g",
+        "role": "protein", "preparation": "清洗，去内脏，擦干" },
+      { "name": "生抽", "name_en": "light soy sauce", "quantity": 200, "unit": "ml",
+        "role": "seasoning" },
+      { "name": "老抽", "name_en": "dark soy sauce", "quantity": 50, "unit": "ml",
+        "role": "seasoning" },
+      { "name": "鱼露", "name_en": "fish sauce", "quantity": 80, "unit": "ml",
+        "role": "seasoning" },
+      { "name": "冰糖", "name_en": "rock sugar", "quantity": 60, "unit": "g",
+        "role": "seasoning" },
+      { "name": "南姜（高良姜）", "name_en": "galangal", "quantity": 80, "unit": "g",
+        "role": "aromatic", "preparation": "切片" },
+      { "name": "八角", "name_en": "star anise", "quantity": 4, "unit": "piece",
+        "role": "aromatic" },
+      { "name": "桂皮", "name_en": "cassia bark", "quantity": 2, "unit": "piece",
+        "role": "aromatic" },
+      { "name": "香叶", "name_en": "bay leaf", "quantity": 4, "unit": "piece",
+        "role": "aromatic" },
+      { "name": "草果", "name_en": "tsao-ko", "quantity": 2, "unit": "piece",
+        "role": "aromatic", "preparation": "拍裂" },
+      { "name": "蒜头", "name_en": "garlic", "quantity": 30, "unit": "g",
+        "role": "aromatic" },
+      { "name": "清水", "name_en": "water", "quantity": 2000, "unit": "ml",
+        "role": "liquid" }
+    ],
+    "steps": [
+      {
+        "order": 1, "action": "blanch",
+        "targets": ["狮头鹅"],
+        "target_state": "表面定型，血水逼出",
+        "params": { "temp_c": 100, "time_s": 120 },
+        "note": "冷水下锅，水开后计时，去除腥味"
+      },
+      {
+        "order": 2, "action": "sear",
+        "targets": ["狮头鹅"],
+        "target_state": "表皮上色（浅金棕色）",
+        "params": { "temp_c": 175, "time_s": 300, "equipment": "wok" },
+        "note": "潮州卤水上色主要靠糖色+老抽，不强调焦化，微上色即可"
+      },
+      {
+        "order": 3, "action": "braise",
+        "targets": ["狮头鹅", "卤水"],
+        "target_state": "筷子插入大腿无血水，鹅肉弹嫩不柴",
+        "params": {
+          "temp_c": 95,
+          "time_range_s": [5400, 7200],
+          "equipment": "large pot"
+        },
+        "note": "微沸状态（95°C 而非 100°C）使胶原蛋白缓慢水解成明胶，保持肉质弹嫩"
+      },
+      {
+        "order": 4, "action": "rest",
+        "targets": ["狮头鹅"],
+        "target_state": "浸泡入味，表皮呈深琥珀色",
+        "params": { "time_s": 3600 },
+        "note": "关火后浸泡 1 小时以上，风味继续渗透"
+      },
+      {
+        "order": 5, "action": "slice",
+        "targets": ["狮头鹅"],
+        "target_state": "切面紧实，汁水不大量流失",
+        "note": "完全冷却后切片，热切易散"
+      }
+    ],
+    "source": { "site": "manual", "url": null, "author": "Jeff" },
+    "raw_text": null,
+    "l0_domains": ["protein_science", "thermal_dynamics", "salt_acid_chemistry",
+                    "enzyme", "aroma_volatiles", "maillard_caramelization"],
+    "x_cluster_id": null,
+    "template_id": null,
+    "normalization_meta": {
+      "normalized_by": "human", "normalized_at": "2026-04-09T00:00:00Z",
+      "confidence": 1.0, "needs_review": false, "review_notes": null
+    }
+  }
+]
