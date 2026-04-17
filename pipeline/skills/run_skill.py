@@ -715,9 +715,9 @@ def main() -> None:
                     )
                     sys.exit(1)
         else:
-            consecutive_failures = 0   # reset on any success
-
-        done_pages.add(page_num)
+            # try succeeded (no exception) — mark page done and reset failure counter
+            consecutive_failures = 0
+            done_pages.add(page_num)
 
         # Checkpoint every 10 pages
         if (i + 1) % 10 == 0:
