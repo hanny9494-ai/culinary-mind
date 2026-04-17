@@ -6,15 +6,19 @@ Zero-cost regex pre-filter for Skill A pages (before calling Opus).
 Signal router uses recall-first strategy → 30-40% false positives on signal A.
 This filter removes FPs before they reach Opus ($0.12/page).
 
-Rules (any one match = keep):
-  1. Numeric + unit pattern  (°C, %, g/mol, kJ, Pa, pH, ppm, mg, mM, J/g, ...)
-  2. Formula symbols          (=, ±, ×, √, ∫, ∑, LaTeX markers)
-  3. Table pattern            (3+ tabs OR 6+ pipe chars on a page)
-  4. MF hints present         (signal router already identified a specific MF)
+Filter logic (in evaluation order):
+  1. Veto-exempt check: if Rule 4 (MF hints) or Rule 5 (high confidence) → skip Veto, keep
+  2. Veto rules (if triggered → filter regardless of Rule 1-3):
+       Veto-2: figure caption page (no data table)
+       Veto-3: references / bibliography page
+       Veto-4: index page (word, page# entries)
+  3. Positive rules (any one match = keep):
+       Rule 1: numeric + unit pattern (°C, %, kJ, Pa, ...)
+       Rule 2: formula / equation symbols
+       Rule 3: table pattern (3+ tabs OR 6+ pipe chars)
 
-Expected effect: ~50% FP reduction, zero LLM cost, minimal FN risk.
-Marginal FN risk: pages with pure-text quantitative statements like
-"fat explains 20% of variation" will be caught by Rule 1 (% sign).
+Expected Veto effect: filter 15-30% of previously-passing FP pages (figure
+captions, reference lists, index pages) with near-zero FN risk.
 
 Usage:
     python secondary_filter.py --book-id mc_vol1 --dry-run
@@ -88,12 +92,66 @@ _TABLE_PIPE_PATTERN = re.compile(r"\|")
 # Rule 4: MF-prefixed candidates
 _MF_PREFIX_PATTERN = re.compile(r"MF-[TKMRC]\d{2}")
 
+# ── Veto patterns ─────────────────────────────────────────────────────────────
+
+# Veto-2: figure/chart caption page — line starting with "Fig." or "Figure N"
+# Indicates an illustration page with a caption but no data table
+_VETO2_FIGURE = re.compile(r"^(Fig\.?|Figure)\s+\d+", re.MULTILINE | re.IGNORECASE)
+
+# Veto-3: references / bibliography section
+# Header keyword + 3+ author-year citations like (1999) or (Smith, 2003)
+_VETO3_HEADER = re.compile(r"(References|Bibliography|Literature Cited)", re.IGNORECASE)
+_VETO3_CITATION = re.compile(r"\(\d{4}\)")          # (YYYY) style
+_VETO3_CITATION2 = re.compile(                       # Author, YYYY. style
+    r"[A-Z][a-z]+,\s+[A-Z]\..*?\d{4}[.;,]",
+    re.DOTALL,
+)
+
+# Veto-4: book index — lines of format "Term or phrase, page_number(s)"
+_VETO4_INDEX_LINE = re.compile(r"[A-Za-z][A-Za-z\s\-()]+,\s*\d{1,4}(?:[-–]\d{1,4})?")
+
+
+def _check_veto(page_text: str, tab_count: int, pipe_count: int) -> tuple[bool, str]:
+    """
+    Check all Veto rules. Returns (vetoed: bool, veto_reason: str).
+    Call this only for pages that are NOT veto-exempt (no MF hints, low confidence).
+    """
+    lines = page_text.splitlines()
+
+    # Veto-2: figure caption page
+    # Condition: page has a "Fig. N" / "Figure N" line AND no real data table
+    if _VETO2_FIGURE.search(page_text) and tab_count < 3 and pipe_count < 4:
+        return True, "veto2_figure_caption"
+
+    # Veto-3: references / bibliography
+    # Condition: header keyword present AND 3+ author-year citations
+    if _VETO3_HEADER.search(page_text):
+        year_hits = len(_VETO3_CITATION.findall(page_text))
+        if year_hits >= 3:
+            return True, "veto3_references"
+
+    # Veto-4: index page
+    # Condition: 10+ lines matching "word(s), page-number" index-entry format
+    index_matches = sum(
+        1 for line in lines
+        if _VETO4_INDEX_LINE.match(line.strip())
+    )
+    if index_matches >= 10:
+        return True, "veto4_index"
+
+    return False, ""
+
 
 # ── Core filter function ──────────────────────────────────────────────────────
 
 def filter_skill_a(page_text: str, signal: dict) -> tuple[bool, str]:
     """
     Decide whether a Skill-A-signaled page is worth sending to Opus.
+
+    Evaluation order:
+      1. Veto-exempt: Rule 4 (MF hints) or Rule 5 (high confidence) → keep immediately
+      2. Veto rules (2/3/4) → filter if triggered
+      3. Positive rules 1-3 → keep if any matches
 
     Args:
         page_text: raw page text from pages.json
@@ -104,34 +162,36 @@ def filter_skill_a(page_text: str, signal: dict) -> tuple[bool, str]:
         keep=True  → send to Opus
         keep=False → skip (FP filtered)
     """
-    # Rule 4 first (cheapest check): MF hints in signal
+    # ── Veto-exempt: Rule 4 (MF hints from router) ───────────────────────────
     hints_a = signal.get("hints", {}).get("A", {})
     if isinstance(hints_a, dict):
         mf_cands = hints_a.get("mf_candidates", [])
         if mf_cands:
             return True, "rule4_mf_hints"
-        # Also check has_table / has_equation flags from router
         if hints_a.get("has_table") or hints_a.get("has_equation"):
             return True, "rule4_router_flags"
 
-    # Rule 1: numeric + unit
-    if _UNIT_PATTERN.search(page_text):
-        return True, "rule1_numeric_unit"
-
-    # Rule 2: formula symbols
-    if _FORMULA_PATTERN.search(page_text):
-        return True, "rule2_formula_symbol"
-
-    # Rule 3: table pattern
-    tab_count = len(_TABLE_TAB_PATTERN.findall(page_text))
-    pipe_count = len(_TABLE_PIPE_PATTERN.findall(page_text))
-    if tab_count >= 3 or pipe_count >= 6:
-        return True, "rule3_table_pattern"
-
-    # High confidence from router → trust it even without pattern match
+    # ── Veto-exempt: Rule 5 (high confidence from router) ────────────────────
     confidence = signal.get("confidence", 0)
     if confidence >= 0.85:
         return True, "rule5_high_confidence"
+
+    # ── Veto rules (only for pages that aren't veto-exempt) ──────────────────
+    tab_count  = len(_TABLE_TAB_PATTERN.findall(page_text))
+    pipe_count = len(_TABLE_PIPE_PATTERN.findall(page_text))
+    vetoed, veto_reason = _check_veto(page_text, tab_count, pipe_count)
+    if vetoed:
+        return False, veto_reason
+
+    # ── Positive rules 1-3 ───────────────────────────────────────────────────
+    if _UNIT_PATTERN.search(page_text):
+        return True, "rule1_numeric_unit"
+
+    if _FORMULA_PATTERN.search(page_text):
+        return True, "rule2_formula_symbol"
+
+    if tab_count >= 3 or pipe_count >= 6:
+        return True, "rule3_table_pattern"
 
     return False, "filtered_no_pattern"
 
@@ -145,9 +205,10 @@ def explain_filter(page_text: str, signal: dict) -> dict[str, Any]:
 
     unit_matches = _UNIT_PATTERN.findall(page_text[:500])
     formula_matches = _FORMULA_PATTERN.findall(page_text[:500])
-    tab_count = len(_TABLE_TAB_PATTERN.findall(page_text))
+    tab_count  = len(_TABLE_TAB_PATTERN.findall(page_text))
     pipe_count = len(_TABLE_PIPE_PATTERN.findall(page_text))
 
+    vetoed, veto_reason = _check_veto(page_text, tab_count, pipe_count)
     keep, reason = filter_skill_a(page_text, signal)
 
     return {
@@ -161,6 +222,15 @@ def explain_filter(page_text: str, signal: dict) -> dict[str, Any]:
         "rule4_mf_candidates": mf_cands,
         "rule4_has_table": hints_a.get("has_table") if isinstance(hints_a, dict) else False,
         "rule4_has_equation": hints_a.get("has_equation") if isinstance(hints_a, dict) else False,
+        "veto_triggered": vetoed,
+        "veto_reason": veto_reason,
+        "veto2_figure_match": bool(_VETO2_FIGURE.search(page_text)),
+        "veto3_ref_header": bool(_VETO3_HEADER.search(page_text)),
+        "veto3_citation_count": len(_VETO3_CITATION.findall(page_text)),
+        "veto4_index_lines": sum(
+            1 for line in page_text.splitlines()
+            if _VETO4_INDEX_LINE.match(line.strip())
+        ),
     }
 
 
@@ -187,14 +257,6 @@ def secondary_filter_d(page_text: str, language: str = "zh") -> bool:
 
     Returns True (keep) if the page likely contains FlavorTarget or Glossary content.
     Returns False (skip) if no aesthetic/sensory terms are found.
-
-    Args:
-        page_text: raw page text
-        language: book language ("zh" or "en")
-
-    Rules:
-      zh: any of: 嫩滑|爽脆|入口即化|镬气|断生|过冷河|飞水|走油|口感|质感|...
-      en: any of: texture|mouthfeel|crisp|tender|juicy|umami|aroma|silky|...
     """
     if language == "zh":
         return bool(_ZH_AESTHETIC_PATTERN.search(page_text))
@@ -226,7 +288,7 @@ def analyze_book(book_id: str) -> dict[str, Any]:
     Analyze all Skill-A-signaled pages in a book and return filter statistics.
     Does NOT call any LLM — pure analysis.
     """
-    pages_path = OUTPUT_ROOT / book_id / "pages.json"
+    pages_path   = OUTPUT_ROOT / book_id / "pages.json"
     signals_path = OUTPUT_ROOT / book_id / "signals.json"
 
     if not pages_path.exists():
@@ -234,11 +296,10 @@ def analyze_book(book_id: str) -> dict[str, Any]:
     if not signals_path.exists():
         return {"error": f"signals.json not found for {book_id}"}
 
-    pages = json.loads(pages_path.read_text())
+    pages   = json.loads(pages_path.read_text())
     signals = json.loads(signals_path.read_text())
 
     pages_map = {p["page"]: p.get("text", "") for p in pages}
-    signals_map = {s["page"]: s for s in signals}
 
     # Pages with A signal set
     a_signal_pages = [
@@ -247,14 +308,14 @@ def analyze_book(book_id: str) -> dict[str, Any]:
     ]
 
     total_pages = len(pages)
-    a_count = len(a_signal_pages)
-    kept = 0
-    filtered = 0
+    a_count     = len(a_signal_pages)
+    kept        = 0
+    filtered    = 0
     reason_counts: dict[str, int] = {}
 
     for sig in a_signal_pages:
         page_num = sig["page"]
-        text = pages_map.get(page_num, "")
+        text     = pages_map.get(page_num, "")
         keep, reason = filter_skill_a(text, sig)
         reason_counts[reason] = reason_counts.get(reason, 0) + 1
         if keep:
@@ -262,19 +323,21 @@ def analyze_book(book_id: str) -> dict[str, Any]:
         else:
             filtered += 1
 
+    # Break out veto counts separately
+    veto_counts = {k: v for k, v in reason_counts.items() if k.startswith("veto")}
     filter_rate = filtered / a_count * 100 if a_count > 0 else 0
-    estimated_cost_saved = filtered * 0.12  # Opus cost per page
 
     return {
-        "book_id": book_id,
-        "total_pages": total_pages,
-        "a_signal_pages": a_count,
-        "kept_for_opus": kept,
-        "filtered_out": filtered,
-        "filter_rate_pct": round(filter_rate, 1),
-        "estimated_opus_cost_usd": round(kept * 0.12, 2),
-        "estimated_cost_saved_usd": round(estimated_cost_saved, 2),
-        "reason_breakdown": reason_counts,
+        "book_id":                  book_id,
+        "total_pages":              total_pages,
+        "a_signal_pages":           a_count,
+        "kept_for_opus":            kept,
+        "filtered_out":             filtered,
+        "filter_rate_pct":          round(filter_rate, 1),
+        "estimated_opus_cost_usd":  round(kept * 0.12, 2),
+        "estimated_cost_saved_usd": round(filtered * 0.12, 2),
+        "reason_breakdown":         reason_counts,
+        "veto_breakdown":           veto_counts,
     }
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -296,7 +359,6 @@ def main() -> None:
     args = parse_args()
 
     if args.page_text:
-        # Single text test
         try:
             signal = json.loads(args.signal_json)
         except Exception:
@@ -329,9 +391,13 @@ def main() -> None:
         pct = count / stats["a_signal_pages"] * 100 if stats["a_signal_pages"] else 0
         print(f"    {reason:<30} {count:>5} ({pct:.0f}%)")
 
+    if stats["veto_breakdown"]:
+        print(f"\n  Veto breakdown:")
+        for reason, count in sorted(stats["veto_breakdown"].items(), key=lambda x: -x[1]):
+            print(f"    {reason:<30} {count:>5}")
+
     if args.verbose:
-        # Show per-page detail for filtered pages
-        pages = json.loads((OUTPUT_ROOT / args.book_id / "pages.json").read_text())
+        pages   = json.loads((OUTPUT_ROOT / args.book_id / "pages.json").read_text())
         signals = json.loads((OUTPUT_ROOT / args.book_id / "signals.json").read_text())
         pages_map = {p["page"]: p.get("text", "") for p in pages}
         a_sigs = [s for s in signals if (s.get("signals") or {}).get("A") and not s.get("skip_reason")]
@@ -340,7 +406,7 @@ def main() -> None:
             text = pages_map.get(sig["page"], "")
             keep, reason = filter_skill_a(text, sig)
             if not keep:
-                print(f"    p{sig['page']:04d}: {text[:80].replace(chr(10),' ')!r}")
+                print(f"    p{sig['page']:04d} [{reason}]: {text[:80].replace(chr(10),' ')!r}")
 
 
 if __name__ == "__main__":
