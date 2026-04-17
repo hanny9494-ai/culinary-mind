@@ -94,9 +94,10 @@ _MF_PREFIX_PATTERN = re.compile(r"MF-[TKMRC]\d{2}")
 
 # ── Veto patterns ─────────────────────────────────────────────────────────────
 
-# Veto-2: figure/chart caption page — line starting with "Fig." or "Figure N"
-# Indicates an illustration page with a caption but no data table
-_VETO2_FIGURE = re.compile(r"^(Fig\.?|Figure)\s+\d+", re.MULTILINE | re.IGNORECASE)
+# Veto-2: figure/chart caption page
+# Matched against the first non-empty line only (via .match() in _check_veto)
+# to distinguish "page IS a figure page" from "page mentions a figure in passing"
+_VETO2_FIGURE = re.compile(r"(Fig\.?|Figure)\s+\d+", re.IGNORECASE)
 
 # Veto-3: references / bibliography section
 # Header keyword + 3+ author-year citations like (1999) or (Smith, 2003)
@@ -111,6 +112,15 @@ _VETO3_CITATION2 = re.compile(                       # Author, YYYY. style
 _VETO4_INDEX_LINE = re.compile(r"[A-Za-z][A-Za-z\s\-()]+,\s*\d{1,4}(?:[-–]\d{1,4})?")
 
 
+def _first_nonblank_line(text: str) -> str:
+    """Return the first non-empty line of text, stripped."""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
 def _check_veto(page_text: str, tab_count: int, pipe_count: int) -> tuple[bool, str]:
     """
     Check all Veto rules. Returns (vetoed: bool, veto_reason: str).
@@ -118,16 +128,30 @@ def _check_veto(page_text: str, tab_count: int, pipe_count: int) -> tuple[bool, 
     """
     lines = page_text.splitlines()
 
-    # Veto-2: figure caption page
-    # Condition: page has a "Fig. N" / "Figure N" line AND no real data table
-    if _VETO2_FIGURE.search(page_text) and tab_count < 3 and pipe_count < 4:
+    # Veto-2: pure figure caption page — ALL 4 conditions must be true
+    #   1. First non-empty line starts with "Fig." or "Figure N" (page IS a figure page)
+    #   2. Page is short (< 2000 chars — pure caption, no body text)
+    #   3. No table structure (tab<3, pipe<4)
+    #   4. No scientific unit matches (if °C/kJ/Pa present, caption sits next to data)
+    first_line = _first_nonblank_line(page_text)
+    if (
+        _VETO2_FIGURE.match(first_line)         # condition 1: first line is Fig./Figure N
+        and len(page_text) < 2000               # condition 2: short page
+        and tab_count < 3                        # condition 3: no tab table
+        and pipe_count < 4                       # condition 3: no pipe table
+        and not _UNIT_PATTERN.search(page_text) # condition 4: no scientific units
+    ):
         return True, "veto2_figure_caption"
 
-    # Veto-3: references / bibliography
-    # Condition: header keyword present AND 3+ author-year citations
-    if _VETO3_HEADER.search(page_text):
+    # Veto-3: references / bibliography — header must appear in first 200 chars
+    # Extra guards: reject veto if page has formula symbols OR scientific units
+    # (handles chemistry books where "2.8 References" heads a reactions section,
+    # or handbook pages where a data table follows a References subheading)
+    if _VETO3_HEADER.search(page_text[:200]):
         year_hits = len(_VETO3_CITATION.findall(page_text))
-        if year_hits >= 3:
+        has_formulas = bool(_FORMULA_PATTERN.search(page_text))
+        has_units    = bool(_UNIT_PATTERN.search(page_text))
+        if year_hits >= 3 and not has_formulas and not has_units:
             return True, "veto3_references"
 
     # Veto-4: index page
