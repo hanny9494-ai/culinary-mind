@@ -76,6 +76,7 @@ MF-R01~R07（流变/结构）, MF-C01~C05（化学反应）
 
 输出 schema（每个元素）：
 {
+  "_v": "1.1",
   "mother_formula": "Arrhenius",
   "formula_id": "MF-T03",
   "parameter_name": "卵清蛋白变性温度",
@@ -85,8 +86,15 @@ MF-R01~R07（流变/结构）, MF-C01~C05（化学反应）
   "source": {"book": "...", "chapter": "...", "page": ..., "table": "..."},
   "confidence": "high",
   "causal_context": "80°C以上卵清蛋白发生二硫键交联，凝胶网络收缩挤出水分",
+  "evidence_type": "textbook",
   "notes": "..."
 }
+每条记录必须包含字段 "_v": "1.1"（schema 版本）。
+evidence_type 选其一：textbook / empirical / review / computed。
+  - textbook：来自权威教科书/专著（最常见默认值）
+  - empirical：来自实验研究/同行评议数据集
+  - review：来自综述文章汇总
+  - computed：由求解器/模型/其他记录推导得到
 
 causal_context（必填，不可为空字符串）：
 - 用 1-2 句话解释该参数在哪条因果链中起作用
@@ -105,6 +113,7 @@ causal_context（必填，不可为空字符串）：
 
 输出 schema:
 {
+  "_v": "1.1",
   "recipe_id": "auto",
   "name": "English name",
   "name_zh": "中文名",
@@ -116,8 +125,11 @@ causal_context（必填，不可为空字符串）：
   "flavor_tags": [],
   "dietary_tags": [],
   "key_science_points": [{"l0_domain": "...", "decision_point": "...", "confidence": "high/medium/low"}],
-  "source": {"book": "...", "page": ...}
+  "source": {"book": "...", "page": ...},
+  "evidence_type": "textbook"
 }
+每条记录必须包含字段 "_v": "1.1"（schema 版本）。
+evidence_type 选其一：textbook / empirical / review / computed（食谱书通常填 textbook）。
 
 不要解释。只输出 JSON 数组。""",
 
@@ -129,6 +141,7 @@ causal_context（必填，不可为空字符串）：
 
 输出 schema:
 {
+  "_v": "1.1",
   "atom_id": "ingredient_name_state",
   "canonical_name": "English name",
   "canonical_name_zh": "中文名",
@@ -142,8 +155,11 @@ causal_context（必填，不可为空字符串）：
   "sensory_profile": {"texture_raw": "...", "flavor_cooked": "..."},
   "substitutes": [],
   "l0_domain_tags": [],
-  "source": {"book": "...", "page": ...}
+  "source": {"book": "...", "page": ...},
+  "evidence_type": "textbook"
 }
+每条记录必须包含字段 "_v": "1.1"（schema 版本）。
+evidence_type 选其一：textbook / empirical / review / computed。
 
 不要解释。只输出 JSON 数组。""",
 
@@ -153,57 +169,99 @@ causal_context（必填，不可为空字符串）：
 # ── Skill D language-specific prompts ────────────────────────────────────────
 # Shared schema preamble — embedded in both zh and en variants
 _SKILL_D_SCHEMA = """
+Every record (both FlavorTarget and Glossary) MUST include
+"_v": "1.1"           // schema version; default v1.0 when missing on read
+"evidence_type": "textbook"  // one of: textbook | empirical | review | computed
+                             // cookbooks / chef manuals default to "textbook"
+
 FlavorTarget schema:
 {
+  "_v": "1.1",
   "ft_id": "slug",
   "aesthetic_word": "审美词/sensory word",
   "aesthetic_word_en": "English",
   "matrix_type": "基质类型/matrix type",
   "substrate": "食材/ingredient",
   "target_states": {"parameter": {"target": null, "range": []}},
-  "l0_domains": [],
-  "source": {"book": "...", "page": ...}
+  "l0_domains": [],  // array of strings; each MUST be drawn from the 17 L0 domains listed in the prompt, or "other"
+  "source": {"book": "...", "page": ...},
+  "evidence_type": "textbook"
 }
 
 Glossary schema:
 {
+  "_v": "1.1",
   "term_zh": "术语",
   "term_en": "English",
   "definition_zh": "中文定义",
   "definition_en": "English definition",
-  "l0_domains": [],
+  "l0_domains": [],  // same constraint as above: 17 domains or "other"
   "context": "使用场景/usage context",
-  "source": {"book": "...", "page": ...}
+  "source": {"book": "...", "page": ...},
+  "evidence_type": "textbook"
 }
 """
 
 SKILL_D_PROMPTS: dict[str, str] = {
-    "zh": """\
+    "zh": f"""\
 你是粤菜审美词和中式烹饪术语提取器。从给定页面提取：
 1. 审美词-基质-目标状态三元组 (FlavorTarget)
    - 重点关注：镬气、嫩滑、爽脆、入口即化、断生、过冷河、飞水、走油等粤菜特有审美表达
    - 每个审美词必须绑定具体食材/基质
    - target_states 映射到可量化物理参数
+   - 每条记录必须包含 ft_id / aesthetic_word / aesthetic_word_en / matrix_type / substrate / target_states / l0_domains / source 全部字段
 2. 粤菜/中式烹饪术语定义 (L6 Glossary)
-   - 术语的上下文实体（在什么食材/场景下使用）
-   - 映射到 L0 物理现象
+   - 每条记录必须包含 term_zh / term_en / definition_zh / definition_en / l0_domains / context / source 全部字段
+   - 中英双语对照；definition_en 可以简短但不能为空
 
-如果页面不含相关内容，输出 {"flavor_targets": [], "glossary": []}
+l0_domains 字段硬约束（对 FlavorTarget 和 Glossary 都适用）：
+   - 只能从以下 17 个 L0 域中选择（大小写、下划线严格匹配）：
+     protein_science, carbohydrate, lipid_science, fermentation, food_safety,
+     water_activity, enzyme, color_pigment, equipment_physics,
+     maillard_caramelization, oxidation_reduction, salt_acid_chemistry,
+     taste_perception, aroma_volatiles, thermal_dynamics, mass_transfer,
+     texture_rheology
+   - 如果内容确实不属于以上 17 域中的任何一个，填 "other"
+   - 禁止使用其他自造域名（如 "culinary_technique"、"sensory" 等），要么 17 域之一，要么 "other"
+
+严格按下方 schema 输出，字段名和结构必须完全一致：
+{_SKILL_D_SCHEMA}
+如果页面不含相关内容，输出 {{"flavor_targets": [], "glossary": []}}
 
 不要解释。只输出包含 flavor_targets 和 glossary 两个数组的 JSON 对象。""",
 
-    "en": """\
+    "en": f"""\
 You are a sensory descriptor and flavor terminology extractor. From the given page, extract:
 1. FlavorTarget triplets: aesthetic_word x substrate x target_states
    - Focus on: texture descriptors (crispy, tender, silky, creamy, crunchy, chewy, flaky),
      mouthfeel terms (succulent, velvety, unctuous), flavor profile terms (umami, bright, round)
    - Each aesthetic word must be bound to a specific ingredient/matrix
    - target_states map to quantifiable physical parameters
-2. Culinary glossary entries
-   - Context entity (which ingredient/scenario)
-   - Mapped phenomenon (physical process)
+   - Every record MUST include all fields: ft_id, aesthetic_word, aesthetic_word_en,
+     matrix_type, substrate, target_states, l0_domains, source
+2. Culinary glossary entries (L6 Glossary)
+   - Every record MUST include all fields: term_zh, term_en, definition_zh,
+     definition_en, l0_domains, context, source
+   - Provide bilingual term + definition (translate to Chinese when source is English-only;
+     term_zh/definition_zh can be concise but must not be empty)
+   - context describes the scenario/ingredient where the term applies
+   - Map to the underlying L0 physical process in the definition
 
-If page has no relevant content, output {"flavor_targets": [], "glossary": []}
+l0_domains field hard constraint (applies to BOTH FlavorTarget and Glossary):
+   - Each element MUST be chosen from EXACTLY these 17 L0 domains
+     (case and underscores must match verbatim):
+     protein_science, carbohydrate, lipid_science, fermentation, food_safety,
+     water_activity, enzyme, color_pigment, equipment_physics,
+     maillard_caramelization, oxidation_reduction, salt_acid_chemistry,
+     taste_perception, aroma_volatiles, thermal_dynamics, mass_transfer,
+     texture_rheology
+   - If the content truly does not fit any of the 17 domains above, use "other".
+   - Do NOT invent other domain names (no "culinary_technique", "sensory", etc.) —
+     it's either one of the 17 or "other".
+
+Strictly follow the schema below — field names and structure must match exactly:
+{_SKILL_D_SCHEMA}
+If page has no relevant content, output {{"flavor_targets": [], "glossary": []}}
 
 Output only the JSON object with flavor_targets and glossary arrays. No explanations.""",
 }
@@ -608,6 +666,25 @@ def main() -> None:
     log = logging.getLogger(f"skill_{skill}")
     log.info(f"book_id={book_id}, skill={skill}, provider={SKILL_MODELS[skill]}")
 
+    # ── Pre-flight: validate skill against books.yaml ─────────────────────
+    try:
+        _yaml_path = Path(args.books_yaml) if args.books_yaml else (REPO_ROOT / "config" / "books.yaml")
+        with open(_yaml_path) as _bf:
+            _books_list = yaml.safe_load(_bf) or []
+        _book_entry = next((b for b in _books_list if b.get("id") == book_id), None)
+        if _book_entry is None:
+            log.warning(f"book_id {book_id} not in books.yaml — skipping skills-field check")
+        else:
+            _allowed = [s.upper() for s in (_book_entry.get("skills") or [])]
+            if skill.upper() not in _allowed:
+                log.error(
+                    f"Skill {skill.upper()} not in books.yaml skills field for {book_id} "
+                    f"(allowed: {_allowed}). Aborting."
+                )
+                sys.exit(1)
+    except FileNotFoundError:
+        log.warning("config/books.yaml not found — skipping skills-field check")
+
     # Load book language for Skill D prompt selection
     book_language = "zh"  # default fallback
     if skill == "d":
@@ -727,6 +804,11 @@ def main() -> None:
 
                 if items:
                     for item in items:
+                        # Server-side schema-version fallback — the prompt
+                        # asks the model for `_v: "1.1"` but we don't trust
+                        # the model to always emit it. setdefault so any
+                        # record reaching results.jsonl carries a version.
+                        item.setdefault("_v", "1.1")
                         item["_page"] = page_num
                         item["_skill"] = skill
                         item["_book"] = book_id

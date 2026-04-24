@@ -14,7 +14,13 @@
   equation_latex: "\\frac{\\partial T}{\\partial t} = \\alpha \\nabla^2 T"
   sympy_expression: "alpha * (T_prev - 2*T + T_next) / dx**2"
   domain: [thermal_dynamics]
-  parameters_needed: [alpha, k, rho, Cp]
+  # parameters_needed: [alpha, k, rho, Cp]   # legacy — replaced by role-split schema below
+  output_symbol: T(x,t)
+  runtime_variables: [T_init, T_boundary, thickness, time, x_position]
+  one_of_inputs:
+    - [alpha]
+    - [k, rho, Cp]
+  constants: [dx]
   units: {alpha: "m²/s", k: "W/(m·K)", rho: "kg/m³", Cp: "J/(kg·K)"}
   applicable_range: {T: {min: -40, max: 300, unit: "°C"}}
   source_books: ["Singh_Heldman_Ch4", "Toledo_Ch7", "Sahin_Sumnu_Ch3"]
@@ -26,7 +32,12 @@
   equation_latex: "C_p^{mix} = \\sum_i X_i C_{p,i}(T)"
   sympy_expression: "Xw*Cp_water + Xp*Cp_protein + Xf*Cp_fat + Xc*Cp_carb + Xa*Cp_ash"
   domain: [thermal_dynamics]
-  parameters_needed: [Xw, Xp, Xf, Xc, Xa]
+  # parameters_needed: [Xw, Xp, Xf, Xc, Xa]   # legacy — replaced by role-split schema below
+  output_symbol: Cp_mix
+  runtime_variables: [T]
+  one_of_inputs:
+    - [Xw, Xp, Xf, Xc, Xa]
+  constants: []
   units: {Xi: "dimensionless (mass fraction)", T: "°C", Cp: "J/(kg·K)", k: "W/(m·K)", rho: "kg/m³"}
   applicable_range: {T: {min: -40, max: 150, unit: "°C"}, moisture: {min: 0, max: 1}}
   source_books: ["Singh_Heldman_Ch4", "Rao_Engineering_Ch4"]
@@ -38,7 +49,12 @@
   equation_latex: "k = A \\cdot e^{-E_a/RT}"
   sympy_expression: "A * exp(-Ea / (R * T))"
   domain: [protein_science, maillard_caramelization, enzyme, food_safety, lipid_science]
-  parameters_needed: [Ea, A, R]
+  # parameters_needed: [Ea, A, R]   # legacy — replaced by role-split schema below
+  output_symbol: k_rate
+  runtime_variables: [T]
+  one_of_inputs:
+    - [Ea, A]
+  constants: [R]
   units: {Ea: "J/mol", A: "same unit as k (varies)", R: "8.314 J/(mol·K)", T: "K (NOT °C!)"}
   applicable_range: {T: {min: 273, max: 573, unit: "K"}}
   source_books: ["van_Boekel_Ch5", "Toledo_Ch8", "Handbook_Ch3"]
@@ -50,7 +66,12 @@
   equation_latex: "Nu = C \\cdot Re^m \\cdot Pr^n"
   sympy_expression: "C * Re**m * Pr**n"
   domain: [thermal_dynamics]
-  parameters_needed: [C, m, n]
+  # parameters_needed: [C, m, n]   # legacy — replaced by role-split schema below
+  output_symbol: Nu
+  runtime_variables: [Re, Pr]
+  one_of_inputs:
+    - [C, m, n]
+  constants: []
   units: {Nu: "dimensionless", Re: "dimensionless", Pr: "dimensionless", h: "W/(m²·K)"}
   applicable_range: {}
   source_books: ["Singh_Heldman_Ch4", "Toledo_Ch7"]
@@ -62,7 +83,12 @@
   equation_latex: "t_f = \\frac{\\rho L_f}{T_f - T_m} \\left(\\frac{Pa}{h} + \\frac{R_c a^2}{k}\\right)"
   sympy_expression: "(rho * L_f) / (T_f - T_m) * (P * a / h + R_c * a**2 / k)"
   domain: [thermal_dynamics]
-  parameters_needed: [rho, L_f, T_f, T_m, P, R_c, a, h, k]
+  # parameters_needed: [rho, L_f, T_f, T_m, P, R_c, a, h, k]   # legacy — replaced by role-split schema below
+  output_symbol: t_f
+  runtime_variables: [T_f, T_m, a, h]
+  one_of_inputs:
+    - [rho, L_f, k]
+  constants: [P, R_c]
   units: {L_f: "J/kg", T_f: "°C (freezing point)", T_m: "°C (medium)", a: "m (half-thickness)", h: "W/(m²·K)"}
   applicable_range: {}
   source_books: ["Singh_Heldman_Ch7", "Handbook_Ch7"]
@@ -76,7 +102,12 @@
   equation_latex: "v = \\frac{V_{max} [S]}{K_m + [S]}"
   sympy_expression: "Vmax * S / (Km + S)"
   domain: [enzyme, food_safety]
-  parameters_needed: [Vmax, Km]
+  # parameters_needed: [Vmax, Km]   # legacy — replaced by role-split schema below
+  output_symbol: v
+  runtime_variables: [S]
+  one_of_inputs:
+    - [Vmax, Km]
+  constants: []
   units: {Vmax: "mol/(L·s)", Km: "mol/L", S: "mol/L", v: "mol/(L·s)"}
   applicable_range: {S: {min: 0, max: "inf"}}
   source_books: ["van_Boekel_Ch9", "Belitz_Ch2", "Fennema_Ch6"]
@@ -88,7 +119,12 @@
   equation_latex: "N = N_0 \\cdot 10^{-t/D}"
   sympy_expression: "N0 * 10**(-t / D)"
   domain: [food_safety]
-  parameters_needed: [D]
+  # parameters_needed: [D]   # legacy — replaced by role-split schema below
+  output_symbol: N
+  runtime_variables: [N0, t]
+  one_of_inputs:
+    - [D]
+  constants: []
   units: {D: "min", t: "min", N: "CFU/mL or CFU/g"}
   applicable_range: {T: {min: 60, max: 140, unit: "°C"}}
   source_books: ["Jay_Ch17", "Toledo_Ch9", "van_Boekel_Ch13"]
@@ -100,7 +136,12 @@
   equation_latex: "D_2 = D_1 \\cdot 10^{(T_1 - T_2)/z}"
   sympy_expression: "D1 * 10**((T1 - T2) / z)"
   domain: [food_safety]
-  parameters_needed: [z]
+  # parameters_needed: [z]   # legacy — replaced by role-split schema below
+  output_symbol: D2
+  runtime_variables: [D1, T1, T2]
+  one_of_inputs:
+    - [z]
+  constants: []
   units: {z: "°C", D: "min", T: "°C"}
   applicable_range: {z: {min: 2, max: 40, unit: "°C"}}
   source_books: ["Jay_Ch17", "Toledo_Ch9", "Singh_Heldman_Ch5"]
@@ -112,7 +153,12 @@
   equation_latex: "F_0 = \\int_0^t 10^{(T-121.1)/z} \\, dt"
   sympy_expression: "Integral(10**((T - 121.1) / z), t)"
   domain: [food_safety]
-  parameters_needed: [z]
+  # parameters_needed: [z]   # legacy — replaced by role-split schema below
+  output_symbol: F0
+  runtime_variables: [T_profile, t]
+  one_of_inputs:
+    - [z]
+  constants: [T_ref]
   units: {F0: "min (equiv. at 121.1°C)", T: "°C", z: "°C"}
   applicable_range: {}
   source_books: ["Toledo_Ch9", "Jay_Ch17", "Handbook_Ch12"]
@@ -124,7 +170,12 @@
   equation_latex: "\\ln(N) = A + C \\cdot e^{-e^{-B(t-M)}}"
   sympy_expression: "A + C * exp(-exp(-B * (t - M)))"
   domain: [food_safety, fermentation]
-  parameters_needed: [A, C, B, M]
+  # parameters_needed: [A, C, B, M]   # legacy — replaced by role-split schema below
+  output_symbol: ln_N
+  runtime_variables: [t]
+  one_of_inputs:
+    - [A, C, B, M]
+  constants: []
   units: {A: "ln(N0)", C: "ln(Nmax/N0)", B: "1/h (max growth rate)", M: "h (inflection time)"}
   applicable_range: {}
   source_books: ["van_Boekel_Ch12", "Jay_Ch3"]
@@ -140,7 +191,12 @@
   equation_latex: "\\frac{\\partial C}{\\partial t} = D_{eff} \\nabla^2 C"
   sympy_expression: "D_eff * (C_prev - 2*C + C_next) / dx**2"
   domain: [mass_transfer, water_activity, aroma_volatiles]
-  parameters_needed: [D_eff]
+  # parameters_needed: [D_eff]   # legacy — replaced by role-split schema below
+  output_symbol: C(x,t)
+  runtime_variables: [C_init, C_boundary, thickness, time, x_position]
+  one_of_inputs:
+    - [D_eff]
+  constants: [dx]
   units: {D_eff: "m²/s", C: "kg/m³ or mol/m³", x: "m", t: "s"}
   applicable_range: {}
   source_books: ["Rao_Engineering_Ch8", "van_Boekel_Ch11", "Handbook_Ch8"]
@@ -152,11 +208,17 @@
   equation_latex: "X = \\frac{X_m C K a_w}{(1 - K a_w)(1 - K a_w + C K a_w)}"
   sympy_expression: "Xm * C * K * aw / ((1 - K*aw) * (1 - K*aw + C*K*aw))"
   domain: [water_activity]
-  parameters_needed: [Xm, C, K]
+  # parameters_needed: [Xm, C, K]   # legacy — replaced by role-split schema below
+  output_symbol: X_moisture
+  runtime_variables: [aw]
+  one_of_inputs:
+    - [Xm, C, K]     # full GAB fit
+    - [Xm, C]        # BET special case with K implicitly = 1 (constant K_implicit handled downstream)
+  constants: []
   units: {Xm: "g_water/g_dry", C: "dimensionless", K: "dimensionless", aw: "dimensionless (0-1)"}
   applicable_range: {aw: {min: 0, max: 0.95}, K: {min: 0.5, max: 1.0}, C: {min: 0.1, max: 100}}
   source_books: ["Rao_Engineering_Ch7", "Toledo_Ch12", "Handbook_Ch11", "Sahin_Sumnu_Ch5"]
-  notes: "BET is special case where K=1; preferred over BET for aw > 0.5"
+  notes: "BET is special case where K=1; preferred over BET for aw > 0.5. When only [Xm, C] supplied, downstream solver should set K=1 (BET approximation)."
 
 - id: MF-M03
   canonical_name: Antoine_Equation
@@ -164,7 +226,12 @@
   equation_latex: "\\log_{10}(P) = A - \\frac{B}{C + T}"
   sympy_expression: "10**(A - B / (C + T))"
   domain: [aroma_volatiles, water_activity]
-  parameters_needed: [A, B, C]
+  # parameters_needed: [A, B, C]   # legacy — replaced by role-split schema below
+  output_symbol: P_vapor
+  runtime_variables: [T]
+  one_of_inputs:
+    - [A, B, C]
+  constants: []
   units: {P: "mmHg or Pa (check per compound)", T: "°C or K (check per compound)"}
   applicable_range: {}
   source_books: ["Sahin_Sumnu_Ch5", "Toledo_Ch4"]
@@ -176,7 +243,12 @@
   equation_latex: "pH = pK_a + \\log_{10}\\frac{[A^-]}{[HA]}"
   sympy_expression: "pKa + log(A_conc / HA_conc, 10)"
   domain: [salt_acid_chemistry]
-  parameters_needed: [pKa]
+  # parameters_needed: [pKa]   # legacy — replaced by role-split schema below
+  output_symbol: pH
+  runtime_variables: [A_conc, HA_conc]
+  one_of_inputs:
+    - [pKa]
+  constants: []
   units: {pH: "dimensionless", concentrations: "mol/L"}
   applicable_range: {}
   source_books: ["Fennema_Ch2", "Belitz_Ch0"]
@@ -188,7 +260,12 @@
   equation_latex: "p = H \\cdot c"
   sympy_expression: "H * c"
   domain: [aroma_volatiles]
-  parameters_needed: [H]
+  # parameters_needed: [H]   # legacy — replaced by role-split schema below
+  output_symbol: p_partial
+  runtime_variables: [c]
+  one_of_inputs:
+    - [H]
+  constants: []
   units: {H: "Pa·m³/mol or dimensionless (Hcc)", p: "Pa", c: "mol/m³"}
   applicable_range: {T: {min: 20, max: 80, unit: "°C"}}
   source_books: ["Rao_Engineering_Ch8", "Belitz_Ch5"]
@@ -200,7 +277,12 @@
   equation_latex: "Q = m \\cdot L_{fg}"
   sympy_expression: "m * L_fg"
   domain: [thermal_dynamics, water_activity]
-  parameters_needed: [L_fg]
+  # parameters_needed: [L_fg]   # legacy — replaced by role-split schema below
+  output_symbol: Q
+  runtime_variables: [m]
+  one_of_inputs:
+    - [L_fg]
+  constants: []
   units: {L_fg: "J/kg", m: "kg", Q: "J"}
   applicable_range: {}
   source_books: ["Toledo_Ch5", "Singh_Heldman_Ch7"]
@@ -216,7 +298,12 @@
   equation_latex: "\\tau = K \\dot{\\gamma}^n"
   sympy_expression: "K * gamma_dot**n"
   domain: [texture_rheology]
-  parameters_needed: [K, n]
+  # parameters_needed: [K, n]   # legacy — replaced by role-split schema below
+  output_symbol: tau
+  runtime_variables: [gamma_dot]
+  one_of_inputs:
+    - [K, n]
+  constants: []
   units: {K: "Pa·sⁿ", n: "dimensionless", tau: "Pa", gamma_dot: "1/s"}
   applicable_range: {n: {min: 0, max: 2}}
   source_books: ["Rao_Engineering_Ch2", "Bourne_Ch3", "Handbook_Ch1"]
@@ -228,7 +315,12 @@
   equation_latex: "\\tau = \\tau_0 + K \\dot{\\gamma}^n"
   sympy_expression: "tau_0 + K * gamma_dot**n"
   domain: [texture_rheology]
-  parameters_needed: [tau_0, K, n]
+  # parameters_needed: [tau_0, K, n]   # legacy — replaced by role-split schema below
+  output_symbol: tau
+  runtime_variables: [gamma_dot]
+  one_of_inputs:
+    - [tau_0, K, n]
+  constants: []
   units: {tau_0: "Pa (yield stress)", K: "Pa·sⁿ", n: "dimensionless"}
   applicable_range: {n: {min: 0, max: 2}}
   source_books: ["Rao_Engineering_Ch2", "Bourne_Ch3", "Sahin_Sumnu_Ch2"]
@@ -240,7 +332,12 @@
   equation_latex: "\\sqrt{\\tau} = \\sqrt{\\tau_c} + \\sqrt{\\eta_c \\dot{\\gamma}}"
   sympy_expression: "sqrt(tau_c) + sqrt(eta_c * gamma_dot)"
   domain: [texture_rheology, lipid_science]
-  parameters_needed: [tau_c, eta_c]
+  # parameters_needed: [tau_c, eta_c]   # legacy — replaced by role-split schema below
+  output_symbol: tau
+  runtime_variables: [gamma_dot]
+  one_of_inputs:
+    - [tau_c, eta_c]
+  constants: []
   units: {tau_c: "Pa (Casson yield stress)", eta_c: "Pa·s (Casson viscosity)"}
   applicable_range: {}
   source_books: ["Rao_Engineering_Ch2", "Bourne_Ch3"]
@@ -252,11 +349,17 @@
   equation_latex: "T_g = \\frac{w_1 T_{g1} + k w_2 T_{g2}}{w_1 + k w_2}"
   sympy_expression: "(w1 * Tg1 + k * w2 * Tg2) / (w1 + k * w2)"
   domain: [texture_rheology, water_activity, carbohydrate]
-  parameters_needed: [k, Tg1, Tg2]
+  # parameters_needed: [k, Tg1, Tg2]   # legacy — replaced by role-split schema below
+  output_symbol: Tg_mix
+  runtime_variables: [w1, w2]
+  one_of_inputs:
+    - [k, Tg1, Tg2]   # fitted Gordon-Taylor constant
+    - [Tg1, Tg2]      # Couchman-Karasz simplification — solver assumes k = 1
+  constants: []
   units: {Tg: "°C or K", w: "mass fraction", k: "dimensionless (Gordon-Taylor constant)"}
   applicable_range: {}
   source_books: ["Rao_Engineering_Ch3", "Handbook_Ch4", "Belitz_Ch0"]
-  notes: "k = rho1*DeltaCp1 / (rho2*DeltaCp2); for sugar-water: k ≈ 4.5-7; Tg_water = -135°C"
+  notes: "k = rho1*DeltaCp1 / (rho2*DeltaCp2); for sugar-water: k ≈ 4.5-7; Tg_water = -135°C. When only [Tg1, Tg2] supplied, downstream solver should set k=1 (Couchman-Karasz)."
 
 - id: MF-R05
   canonical_name: WLF_Equation
@@ -264,11 +367,17 @@
   equation_latex: "\\log_{10}(a_T) = \\frac{-C_1(T - T_g)}{C_2 + T - T_g}"
   sympy_expression: "-C1 * (T - Tg) / (C2 + T - Tg)"
   domain: [texture_rheology, water_activity]
-  parameters_needed: [C1, C2, Tg]
+  # parameters_needed: [C1, C2, Tg]   # legacy — replaced by role-split schema below
+  output_symbol: a_T
+  runtime_variables: [T]
+  one_of_inputs:
+    - [C1, C2, Tg]    # material-specific fit
+    - [Tg]            # WLF-universal approximation — solver uses C1=17.44, C2=51.6
+  constants: []
   units: {C1: "dimensionless", C2: "°C or K", Tg: "°C or K", aT: "dimensionless shift factor"}
   applicable_range: {T: {min: "Tg", max: "Tg + 100", unit: "°C"}}
   source_books: ["Rao_Engineering_Ch3", "Handbook_Ch4", "Belitz_Ch0"]
-  notes: "Universal constants: C1=17.44, C2=51.6 (referenced to Tg); valid for Tg < T < Tg+100"
+  notes: "Universal constants: C1=17.44, C2=51.6 (referenced to Tg); valid for Tg < T < Tg+100. When only [Tg] supplied, downstream solver uses these universal C1/C2."
 
 - id: MF-R06
   canonical_name: Stevens_Power_Law
@@ -276,7 +385,12 @@
   equation_latex: "\\psi = k \\phi^n"
   sympy_expression: "k * phi**n"
   domain: [taste_perception, texture_rheology]
-  parameters_needed: [k, n]
+  # parameters_needed: [k, n]   # legacy — replaced by role-split schema below
+  output_symbol: psi
+  runtime_variables: [phi]
+  one_of_inputs:
+    - [k, n]
+  constants: []
   units: {psi: "perceived magnitude", phi: "physical stimulus intensity", k: "modality constant"}
   applicable_range: {}
   source_books: ["Bourne_Ch8"]
@@ -288,7 +402,12 @@
   equation_latex: "\\sigma_c = \\sqrt{\\frac{2 E \\gamma_s}{\\pi a}}"
   sympy_expression: "sqrt(2 * E * gamma_s / (pi * a))"
   domain: [texture_rheology]
-  parameters_needed: [E, gamma_s, a]
+  # parameters_needed: [E, gamma_s, a]   # legacy — replaced by role-split schema below
+  output_symbol: sigma_c
+  runtime_variables: [a]
+  one_of_inputs:
+    - [E, gamma_s]
+  constants: [pi]
   units: {sigma_c: "Pa (critical fracture stress)", E: "Pa (Young's modulus)", gamma_s: "J/m² (surface energy)", a: "m (crack half-length)"}
   applicable_range: {}
   source_books: ["Bourne_Ch3"]
@@ -304,7 +423,12 @@
   equation_latex: "v = \\frac{2 r^2 (\\rho_p - \\rho_f) g}{9 \\mu}"
   sympy_expression: "2 * r**2 * (rho_p - rho_f) * g / (9 * mu)"
   domain: [texture_rheology, lipid_science]
-  parameters_needed: [r, rho_p, rho_f, mu]
+  # parameters_needed: [r, rho_p, rho_f, mu]   # legacy — replaced by role-split schema below
+  output_symbol: v_settling
+  runtime_variables: [r]
+  one_of_inputs:
+    - [rho_p, rho_f, mu]
+  constants: [g]
   units: {v: "m/s", r: "m (particle radius)", rho: "kg/m³", mu: "Pa·s", g: "9.81 m/s²"}
   applicable_range: {Re: {max: 0.5}}
   source_books: ["Sahin_Sumnu_Ch6", "Fennema_Ch13"]
@@ -316,7 +440,12 @@
   equation_latex: "HLB = 20 \\cdot \\frac{M_h}{M}"
   sympy_expression: "20 * Mh / M"
   domain: [lipid_science, texture_rheology]
-  parameters_needed: [Mh, M]
+  # parameters_needed: [Mh, M]   # legacy — replaced by role-split schema below
+  output_symbol: HLB
+  runtime_variables: []
+  one_of_inputs:
+    - [Mh, M]
+  constants: []
   units: {HLB: "dimensionless (0-20)", Mh: "g/mol (hydrophilic part)", M: "g/mol (total)"}
   applicable_range: {}
   source_books: ["Belitz_Ch8", "Fennema_Ch13"]
@@ -328,7 +457,12 @@
   equation_latex: "V_{total} = V_{vdW} + V_{EDL}"
   sympy_expression: "V_vdW + V_EDL"
   domain: [texture_rheology, lipid_science]
-  parameters_needed: [A_hamaker, kappa, zeta]
+  # parameters_needed: [A_hamaker, kappa, zeta]   # legacy — replaced by role-split schema below
+  output_symbol: V_total
+  runtime_variables: [h_separation]
+  one_of_inputs:
+    - [A_hamaker, kappa, zeta]
+  constants: []
   units: {V: "J", A_hamaker: "J", kappa: "m⁻¹ (inverse Debye length)"}
   applicable_range: {}
   source_books: ["Sahin_Sumnu_Ch6", "Fennema_Ch13"]
@@ -340,7 +474,12 @@
   equation_latex: "\\Delta P = \\frac{2 \\gamma}{r}"
   sympy_expression: "2 * gamma / r"
   domain: [texture_rheology, lipid_science]
-  parameters_needed: [gamma, r]
+  # parameters_needed: [gamma, r]   # legacy — replaced by role-split schema below
+  output_symbol: delta_P
+  runtime_variables: [r]
+  one_of_inputs:
+    - [gamma]
+  constants: []
   units: {delta_P: "Pa", gamma: "N/m (surface tension)", r: "m (droplet radius)"}
   applicable_range: {}
   source_books: ["Sahin_Sumnu_Ch6"]
@@ -352,7 +491,12 @@
   equation_latex: "Q_{10} = \\left(\\frac{k_2}{k_1}\\right)^{10/(T_2-T_1)}"
   sympy_expression: "(k2 / k1)**(10 / (T2 - T1))"
   domain: [maillard_caramelization, protein_science, food_safety]
-  parameters_needed: [Q10]
+  # parameters_needed: [Q10]   # legacy — replaced by role-split schema below
+  output_symbol: k2
+  runtime_variables: [T1, T2, k1]
+  one_of_inputs:
+    - [Q10]
+  constants: []
   units: {Q10: "dimensionless", k: "same units cancel", T: "°C"}
   applicable_range: {T: {min: 0, max: 200, unit: "°C"}}
   source_books: ["Toledo_Ch8", "van_Boekel_Ch5"]
