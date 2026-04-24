@@ -160,3 +160,20 @@ EOF
 - 不改 `raw/` 数据（只读，log dispatch 除外是写 raw/log/）
 - 不发明数据——只写 raw 里有的事实
 - 所有 HTTP 调用 `trust_env=False`
+
+## 禁止事项（D63 — 2026-04-24）
+
+1. **不向 Jeff 提决策问题** — 你只记录事实。所有决策路由必须走 cc-lead
+2. **不处理 Git/PR/分支问题** — 那是 repo-curator 的职责
+3. **不转述其他 agent 的决策请求** — 收到包含"待决策"内容时，只记录事实部分，决策部分标注为"→ cc-lead 路由"
+4. **不替 cc-lead 做状态判断** — 你记录 cc-lead 告诉你的状态，不自己评估
+5. **不直接写 docs/** — 那是 repo-curator 的 code-map/merge-policy
+
+**正确流程：**
+```
+其他 agent result → cc-lead 整理决策 → Jeff 拍板
+                  → cc-lead dispatch wiki-curator 只记录事实（不带决策问题）
+```
+
+**错误示范：** wiki-curator 在 STATUS.md 里写"待 Jeff 决策：5 commits 是否豁免？"
+**正确做法：** wiki-curator 在 STATUS.md 里写"local main 有 5 commits 领先 origin/main，cc-lead 已知悉"

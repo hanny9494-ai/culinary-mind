@@ -10,55 +10,58 @@
 | **CC Lead（母对话）** | 调度中心，任务分配，进度监控，决策记录 | 全局视角 |
 | **researcher** | 调研外部资源、论文、开源项目，评估价值 | 向外看 |
 | **architect** | 评估新数据/方法如何接入七层架构，出技术方案 | 架构设计 |
-| **data-collector** | 下载、爬取、清洗外部数据 | 数据采集 |
-| **pipeline-runner** | 执行 prep pipeline-5 pipeline | 跑任务 |
+| **open-data-collector** | 下载、爬取、清洗外部数据 | 数据采集 |
+| **pipeline-supervisor** | 全流程 pipeline 总管，监控调度 L0-L6 | 跑任务 |
 | **coder** | 写代码、改脚本、实现方案 | 编码 |
 | **code-reviewer** | 审查代码质量 | 质量把关 |
-| **ops** | 配置管理、服务监控、工具维护 | 系统稳定 |
+| **repo-curator** | Git 代码库总管 + 本地环境管理 | PR 门禁、合并编排、冲突预警、code-map、环境健康 |
+| **wiki-curator** | Wiki 知识库管理 | 知识蒸馏、文档编译、状态追踪 |
+
+## 两个 curator 的分工
+
+```
+wiki-curator（知识库管理员）     repo-curator（代码库管理员）
+├── wiki/ 独占写入               ├── docs/code-map.yaml 独占维护
+├── 知识蒸馏、决策记录            ├── PR 门禁、合并编排
+├── 项目状态追踪                 ├── Git 本地↔远程同步
+├── agent 档案管理               ├── 本地环境健康检查
+└── 触发：intent=log             └── 触发：PR 审查、环境检查
+        ↕ 双向同步 ↕
+  repo-curator merge PR → 通知 wiki-curator 更新状态
+  wiki-curator 记录架构决策 → 通知 repo-curator 更新 code-map
+```
 
 ## 协作流程
 
 ```
 Jeff 提需求
   → CC Lead 拆任务
-    → researcher 调研（输出 reports/researcher_findings.md）
-    → architect 出方案（输出 reports/architect_proposal.md）
+    → researcher 调研
+    → architect 出方案
     → Jeff 拍板
-    → data-collector 采集数据（输出 _external_data/）
-    → coder 写代码
-    → code-reviewer 审查
-    → pipeline-runner 执行
+    → coder 写代码 → 提 PR
+    → code-reviewer 审代码质量
+    → GPT-5.4 审代码质量（cc-lead 调用）
+    → repo-curator 最终 merge 裁决
+    → wiki-curator 更新项目状态
     → CC Lead 记录结果
 ```
+
+## 通信协议
+
+所有 agent 通过 ce-hub 文件协议通信：
+- **收任务**：读 `.ce-hub/inbox/{agent-name}/`
+- **发结果**：写 `.ce-hub/results/`
+- **派任务**：写 `.ce-hub/dispatch/`（FileWatcher 自动处理）
 
 ## 交接规范
 
 ### 你完成任务后必须做：
-1. **写报告**到 `~/culinary-mind/reports/task_reports/{agent}_{task}.json`
-2. **告诉 Jeff**："报告已写到 xxx，建议下一步交给 {下一个 agent}"
-3. Jeff 会把你的结论带给 CC Lead 或下一个 agent
+1. 写结果 JSON 到 `.ce-hub/results/`
+2. 如果影响项目状态，通知 wiki-curator（intent=log dispatch）
+3. 如果涉及代码变更，通知 repo-curator
 
-### 你需要其他 agent 配合时：
-1. **不要自己做别人的事**——调研不写代码，采集不做架构
-2. **在报告里写清楚**需要谁做什么：
-   ```
-   ## 下一步
-   - 建议交给 data-collector：下载 FoodAtlas 数据集
-   - 建议交给 architect：评估 FoodAtlas 如何接入 L2a
-   ```
-3. Jeff 或 CC Lead 会安排
-
-### 你收到其他 agent 的产出时：
-1. 先读对方的报告文件
-2. 基于报告内容继续你的工作
-3. 如果报告信息不足，在你的报告里说明缺什么
-
-## 共享产出路径
-
-| 产出 | 路径 | 谁写 | 谁读 |
-|---|---|---|---|
-| 调研报告 | reports/researcher_findings.md | researcher | CC Lead, architect |
-| 架构方案 | reports/architect_proposal.md | architect | CC Lead, coder |
-| 采集数据 | _external_data/{source}/ | data-collector | coder, pipeline-runner |
-| 任务报告 | reports/task_reports/*.json | 所有 agent | CC Lead |
-| Pipeline 文档 | docs/pipeline_scripts.md | coder | 所有 agent |
+### 绝对禁止：
+- 不直接写 `wiki/`（只有 wiki-curator 可以）
+- 不直接 push main（必须走 PR → repo-curator 审批）
+- 不越权做其他 agent 的事

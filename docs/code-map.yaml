@@ -1,0 +1,248 @@
+# code-map.yaml — repo-curator 独占维护
+# 版本: 1.0 (初始盘点)
+# 更新: 2026-04-24
+# 维护者: repo-curator agent
+
+version: "1.1"
+status: "draft"  # draft → reviewed → locked
+last_updated: "2026-04-24"
+changelog:
+  - "1.1 (2026-04-24): 根目录杂文件清理完成 — 12个垃圾文件删除，7个OpenClaw残留归档至 _archive/openclaw-legacy/，run_signal_router_batch.sh 移入 scripts/"
+
+# ═══════════════════════════════════════════════════════
+# 目录白名单（不在此列表的顶级目录需要 repo-curator 审批）
+# ═══════════════════════════════════════════════════════
+
+directories:
+
+  # ── 核心代码 ──
+  pipeline/:
+    purpose: "Phase 0-1 数据蒸馏 pipeline（Python）"
+    status: active
+    owner: coder
+    children:
+      prep/:     "OCR / 预处理（PaddleOCR、epub 转换）"
+      l0/:       "L0 科学原理提取 + dedup + quality"
+      l2a/:      "L2a 食材数据处理（R1/R2 蒸馏、merge、normalize）"
+      l2b/:      "L2b 食谱处理（提取、标准化、assign_id）"
+      skills/:   "Skill A/B/C/D 提取 + 信号路由 + 过滤"
+      etl/:      "ETL 公共模块 + 外部数据适配器（Phase 1E）"
+      utils/:    "pipeline 工具函数（API client、merge、quality）"
+      _archive/: "已废弃的 pipeline 代码"
+
+  engine/:
+    purpose: "核心引擎 — 求解器 + 推理（Phase 1D/4B，待建）"
+    status: planned
+    owner: coder
+    children:
+      solver/:    "28 MF 数值求解器 + Choi-Okos + Fourier 1D"
+      tools/:     "Task-oriented wrapper（estimate_heating_time 等）"
+      agent/:     "LangGraph Agent（Phase 4B）"
+      retrieval/: "检索策略（Phase 4B）"
+
+  graph/:
+    purpose: "Neo4j 图谱构建/查询（Phase 1F/4A，待建）"
+    status: planned
+    owner: coder
+    children:
+      schema/:  "Graph Schema 定义"
+      import/:  "数据导入脚本"
+      query/:   "查询模板 + Cypher"
+
+  eval/:
+    purpose: "评测 — Golden Dataset + Benchmark（Phase 1F/4C，待建）"
+    status: planned
+    owner: coder
+    children:
+      golden/:    "Golden Dataset（50-60 题）"
+      benchmark/: "Benchmark 套件"
+      reports/:   "评测报告"
+
+  # ── 基础设施 ──
+  ce-hub/:
+    purpose: "Agent 调度 daemon（TypeScript）"
+    status: active
+    owner: coder
+    note: "独立的 Node.js 项目，有自己的 package.json"
+
+  # ── 配置 ──
+  config/:
+    purpose: "YAML/JSON 配置文件"
+    status: active
+    sensitive: true
+    children:
+      books.yaml:            "书目注册表（118本）"
+      mother_formulas.yaml:  "28 MF 定义"
+      api.yaml:              "API 配置"
+
+  docs/:
+    purpose: "技术文档（git 管理）"
+    status: active
+    children:
+      schemas/:         "Schema 版本文档（各层 v1.x.md + CHANGELOG.md）"
+      code-map.yaml:    "本文件（repo-curator 独占）"
+      merge-policy.yaml: "合并策略"
+
+  # ── 脚本 ──
+  scripts/:
+    purpose: "辅助脚本 + 一次性工具"
+    status: active
+    note: "核心代码不放这里。phn_seed_input.py 等应迁移到 pipeline/"
+    children:
+      orchestrator.py: "蒸馏编排器"
+      y_s1/:           "Neo4j 导入（应迁移到 graph/import/）"
+
+  # ── 数据（不入 git） ──
+  output/:
+    purpose: "数据产出（symlink → 大数据盘）"
+    status: active
+    gitignored: true
+
+  data/:
+    purpose: "外部数据集（FooDB/USDA/FlavorGraph）"
+    status: active
+    gitignored: true
+
+  # ── 知识管理 ──
+  wiki/:
+    purpose: "Obsidian 知识库（wiki-curator 独占写入）"
+    status: active
+    owner: wiki-curator
+    write_locked: true
+
+  raw/:
+    purpose: "Agent 产出原始记录（所有 agent 可写）"
+    status: active
+    gitignored: true
+
+  # ── Agent 定义 ──
+  .claude/agents/:
+    purpose: "Agent system prompt 定义"
+    status: active
+    sensitive: true
+
+  # ── 待清理 ──
+  src/:
+    purpose: "dashboard + evaluation（半废弃，待迁移）"
+    status: legacy
+    migrate_to: "ce-hub/dashboard/ + eval/"
+
+  mind/:
+    purpose: "ingest 脚本（半废弃，待迁移）"
+    status: legacy
+    migrate_to: "graph/import/"
+
+  tools/:
+    purpose: "爬虫+杂项工具（与 scripts/ 重复，待合并）"
+    status: legacy
+    migrate_to: "scripts/"
+
+  extensions/:
+    purpose: "VS Code 插件（culinary-bridge）"
+    status: dormant
+
+  _archive/:
+    purpose: "已废弃代码归档"
+    status: archive
+    children:
+      openclaw-legacy/: "OpenClaw 残留文件（AGENTS/HEARTBEAT/IDENTITY/MEMORY/SOUL/TOOLS/USER.md），归档于 2026-04-24"
+
+  config.yaml:
+    purpose: "wiki-curator 调度配置（API endpoint、raw 数据路径、decay 参数、schedule）"
+    status: active
+    note: "非 config/ 目录内容，是 ce-hub wiki 编译系统的配置文件，根目录保留"
+
+  infrastructure/:
+    purpose: "空目录"
+    status: empty
+    action: delete
+
+  memory/:
+    purpose: "空目录"
+    status: empty
+    action: delete
+
+  logs/:
+    purpose: "空目录"
+    status: empty
+    action: delete
+
+# ═══════════════════════════════════════════════════════
+# Import 边界（禁止的依赖方向）
+# ═══════════════════════════════════════════════════════
+
+import_boundaries:
+  - from: engine/
+    cannot_import: pipeline/
+    reason: "engine 是产品核心，不依赖数据 pipeline"
+
+  - from: eval/
+    cannot_import: engine/_internal/
+    reason: "eval 只用 engine 公开接口"
+
+  - from: graph/
+    cannot_import: pipeline/skills/
+    reason: "graph 不直接依赖 skill 提取逻辑"
+
+# ═══════════════════════════════════════════════════════
+# 敏感路径（改动需额外审查）
+# ═══════════════════════════════════════════════════════
+
+sensitive_paths:
+  - config/mother_formulas.yaml
+  - config/books.yaml
+  - config/api.yaml
+  - pipeline/skills/run_skill.py
+  - pipeline/l0/extract.py
+  - pipeline/etl/common.py
+  - docs/schemas/*.md
+  - docs/code-map.yaml
+  - docs/merge-policy.yaml
+  - .claude/agents/*.md
+  - ce-hub/src/*.ts
+  - start.sh
+
+# ═══════════════════════════════════════════════════════
+# 迁移计划（待 Jeff 批准后执行）
+# ═══════════════════════════════════════════════════════
+
+pending_migrations:
+  - id: M01
+    description: "scripts/y_s1/import_l0_neo4j.py → graph/import/"
+    status: planned
+    risk: medium
+
+  - id: M02
+    description: "scripts/phn_seed_input.py → pipeline/etl/"
+    status: planned
+    risk: low
+
+  - id: M03
+    description: "scripts/choi_okos.py + fdm_solver.py → engine/solver/"
+    status: planned
+    risk: low
+
+  - id: M04
+    description: "src/dashboard/ → ce-hub/dashboard/"
+    status: planned
+    risk: low
+
+  - id: M05
+    description: "src/evaluation/ → eval/"
+    status: planned
+    risk: low
+
+  - id: M06
+    description: "tools/ 内容归入 scripts/ 或 _archive/"
+    status: planned
+    risk: low
+
+  - id: M07
+    description: "mind/ 内容归入 graph/import/ 或 _archive/"
+    status: planned
+    risk: low
+
+  - id: M08
+    description: "删除空目录 infrastructure/ memory/ logs/"
+    status: planned
+    risk: none
