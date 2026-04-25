@@ -122,10 +122,34 @@ def load_phns() -> tuple[list[dict], list[str]]:
 
 # ── L0 source discovery ──────────────────────────────────────────────────────
 
-def discover_l0_files() -> list[Path]:
-    """Return sorted list of stage4_dedup.jsonl paths (one per book)."""
-    files = sorted(OUTPUT_ROOT.glob("*/stage4/stage4_dedup.jsonl"))
-    return files
+def discover_l0_files() -> list[tuple[Path, str]]:
+    """Return sorted list of (path, source_type) pairs, one per book.
+
+    Per-book preference:
+      1. stage4/stage4_dedup.jsonl  (preferred — intra-book deduped)
+      2. stage4/l0_principles_open.jsonl  (fallback for books that never
+         went through the dedup pass — usually older / smaller books)
+
+    The source_type string ("dedup" | "open") is injected into each
+    routing row as `_source_type` so downstream consumers can distinguish
+    the two.
+    """
+    pairs: list[tuple[Path, str]] = []
+    # A few known non-book subdirectories under output/ that still have a
+    # stage4/ child from historical runs. Skip them explicitly so they
+    # don't masquerade as books.
+    skip_names = {"output", "_archive", "_archive_comparison", "_tmp"}
+    for book_dir in sorted(OUTPUT_ROOT.glob("*/stage4")):
+        book_id = book_dir.parent.name
+        if book_id in skip_names or book_id.startswith("_") or book_id.startswith("."):
+            continue
+        dedup = book_dir / "stage4_dedup.jsonl"
+        opn   = book_dir / "l0_principles_open.jsonl"
+        if dedup.exists():
+            pairs.append((dedup, "dedup"))
+        elif opn.exists():
+            pairs.append((opn, "open"))
+    return pairs
 
 
 def _l0_record_text(rec: dict) -> str:
@@ -159,6 +183,7 @@ def _save_progress(progress: dict) -> None:
 
 def process_book(
     book_path: Path,
+    source_type: str,
     phn_ids:   list[str],
     anchors:   np.ndarray,            # (P, D) L2-normalised
     client:    httpx.Client,
@@ -209,6 +234,7 @@ def process_book(
                 out["phenomenon_tags"] = []
                 out["phn_scores"] = []
                 out["_book_id"] = book_id
+                out["_source_type"] = source_type
                 out_fh.write(json.dumps(out, ensure_ascii=False) + "\n")
                 processed += 1
             continue
@@ -232,6 +258,7 @@ def process_book(
             r = records[start + i]
             out = dict(r)
             out["_book_id"] = book_id
+            out["_source_type"] = source_type
             row_sims = sims_by_batch_idx.get(i)
             if row_sims is None:
                 out["phenomenon_tags"] = []
@@ -294,11 +321,14 @@ def main() -> int:
         anc_norms = np.linalg.norm(anchors_raw, axis=1, keepdims=True) + 1e-12
         anchors = anchors_raw / anc_norms
 
-        files = discover_l0_files()
+        pairs = discover_l0_files()
         if args.only_book:
             selected = set(args.only_book)
-            files = [f for f in files if f.parent.parent.name in selected]
-        print(f"[phn-router] scanning {len(files)} stage4_dedup.jsonl files", flush=True)
+            pairs = [(p, st) for p, st in pairs if p.parent.parent.name in selected]
+        n_dedup = sum(1 for _, st in pairs if st == "dedup")
+        n_open  = sum(1 for _, st in pairs if st == "open")
+        print(f"[phn-router] scanning {len(pairs)} L0 files "
+              f"({n_dedup} dedup, {n_open} open-fallback)", flush=True)
 
         progress = _load_progress() if args.resume else {"books_done": []}
         done_set = set(progress.get("books_done") or [])
@@ -313,7 +343,7 @@ def main() -> int:
         limit_remaining = args.limit
 
         try:
-            for fp in tqdm(files, desc="books"):
+            for fp, source_type in tqdm(pairs, desc="books"):
                 book_id = fp.parent.parent.name
                 if book_id in done_set:
                     tqdm.write(f"  [skip] {book_id} already done")
@@ -322,7 +352,7 @@ def main() -> int:
                     break
 
                 proc, tagged = process_book(
-                    fp, phn_ids, anchors, client, out_fh,
+                    fp, source_type, phn_ids, anchors, client, out_fh,
                     args.batch_size, args.top_k, args.threshold,
                     per_phn_count,
                     limit_remaining,
@@ -335,36 +365,68 @@ def main() -> int:
                 done_set.add(book_id)
                 progress["books_done"] = sorted(done_set)
                 _save_progress(progress)
-                tqdm.write(f"  [done] {book_id}: {proc} records, {tagged} tagged "
-                           f"(total: {total_proc} / tagged {total_tag})")
+                tqdm.write(f"  [done] {book_id} ({source_type}): {proc} records, "
+                           f"{tagged} tagged (total: {total_proc} / tagged {total_tag})")
         finally:
             out_fh.close()
 
-    # Stats
+    # ── Cumulative stats ────────────────────────────────────────────────
+    # We re-aggregate from the on-disk jsonl rather than the in-memory
+    # `per_phn_count`, so --resume runs report cumulative counts (across
+    # this run + every prior run that appended to the same file) instead
+    # of only the current run.
+    full_per_phn: dict[str, int] = defaultdict(int)
+    full_total = 0
+    full_tagged = 0
+    full_books: set[str] = set()
+    by_src: dict[str, int] = defaultdict(int)
+    if OUT_ROUTING.exists():
+        with open(OUT_ROUTING, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                full_total += 1
+                if rec.get("_book_id"):
+                    full_books.add(rec["_book_id"])
+                by_src[rec.get("_source_type") or "unknown"] += 1
+                tags = rec.get("phenomenon_tags") or []
+                if tags:
+                    full_tagged += 1
+                    for tid in tags:
+                        full_per_phn[tid] += 1
+
     stats = {
         "_meta": {
-            "task":           "P1-08",
-            "date":           time.strftime("%Y-%m-%d", time.gmtime()),
-            "model":          MODEL,
-            "threshold":      args.threshold,
-            "top_k":          args.top_k,
-            "total_phns":     len(phns),
-            "total_records":  total_proc,
-            "tagged_records": total_tag,
-            "coverage_pct":   round(100.0 * total_tag / total_proc, 2) if total_proc else 0.0,
+            "task":             "P1-08",
+            "date":             time.strftime("%Y-%m-%d", time.gmtime()),
+            "model":            MODEL,
+            "threshold":        args.threshold,
+            "top_k":            args.top_k,
+            "total_phns":       len(phns),
+            "total_records":    full_total,
+            "tagged_records":   full_tagged,
+            "coverage_pct":     round(100.0 * full_tagged / full_total, 2) if full_total else 0.0,
+            "books_processed":  len(full_books),
+            "by_source_type":   dict(by_src),
+            "this_run":         {
+                "records_processed": total_proc,
+                "records_tagged":    total_tag,
+            },
         },
         "per_phn": [
             {
                 "phn_id":     pid,
                 "name_en":    p.get("name_en"),
                 "domain":     p.get("domain"),
-                "l0_count":   per_phn_count.get(pid, 0),
+                "l0_count":   full_per_phn.get(pid, 0),
             }
             for pid, p in zip(phn_ids, phns)
         ],
         "low_coverage_phns": [
             pid for pid in phn_ids
-            if per_phn_count.get(pid, 0) < LOW_COVERAGE
+            if full_per_phn.get(pid, 0) < LOW_COVERAGE
         ],
     }
     # sort per_phn by l0_count desc for easy reading
