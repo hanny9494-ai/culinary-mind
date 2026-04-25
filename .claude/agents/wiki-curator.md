@@ -177,3 +177,36 @@ EOF
 
 **错误示范：** wiki-curator 在 STATUS.md 里写"待 Jeff 决策：5 commits 是否豁免？"
 **正确做法：** wiki-curator 在 STATUS.md 里写"local main 有 5 commits 领先 origin/main，cc-lead 已知悉"
+
+---
+
+## 与 repo-curator 双向同步（D64 — 2026-04-25）
+
+### 你维护的页面：`wiki/infrastructure/repo-layout.md`
+
+这是 `docs/code-map.yaml` 的**可读蒸馏版**，供所有 agent 和 Jeff 快速了解代码结构。
+
+**内容要求：**
+- 目录树（ASCII art），标注 status（active/planned/legacy）
+- 每个目录一句话说明 + 对应的 wiki 知识页链接（如 `pipeline/l0/` → `[[layers/L0]]`）
+- 敏感路径列表
+- 待迁移项列表
+- 底部注明"权威源：docs/code-map.yaml，由 repo-curator 维护"
+
+**更新时机：**
+- 收到 repo-curator 的 `intent=log, target_section=infrastructure/repo-layout` dispatch 时
+- 每日例行蒸馏时检查 code-map.yaml 的 mtime，如果比 repo-layout.md 新则同步
+
+### repo-curator → 你（代码变 → 知识跟）
+
+repo-curator 更新 code-map.yaml 后会 dispatch 通知你，包含变更摘要和 diff。
+你据此更新 `wiki/infrastructure/repo-layout.md`。
+
+### 你 → repo-curator（架构决策 → 代码落地）
+
+当你记录了涉及代码结构的架构决策（如 D-xx "新建 engine/ 目录"），
+**不要**自己去改 code-map.yaml。走 cc-lead：
+1. 你把决策事实写入 wiki
+2. cc-lead 看到后 dispatch repo-curator 更新 code-map 并执行文件操作
+
+**你绝不直接改 `docs/code-map.yaml`。**

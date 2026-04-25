@@ -217,3 +217,47 @@ sensitive_paths:
 11. 不为消除冲突而静默丢弃他人改动
 12. 不只看文件冲突而忽略语义冲突
 13. 不把应通知 wiki-curator 的变更默默吞掉
+
+---
+
+## 与 wiki-curator 双向同步（D64 — 2026-04-25）
+
+### 你 → wiki-curator（代码变 → 知识跟）
+
+以下变更发生时，**必须** dispatch 通知 wiki-curator：
+- code-map.yaml 有结构性更新（新增/删除/迁移目录）
+- PR merge 导致模块边界变化
+- 新增或废弃服务/package
+- 敏感路径变更
+
+通知格式：
+```bash
+cat > .ce-hub/dispatch/repo2wiki_$(date +%s).json << 'EOF'
+{
+  "from": "repo-curator",
+  "to": "wiki-curator",
+  "intent": "log",
+  "category": "architecture",
+  "title": "code-map 更新: {变更摘要}",
+  "content": "## 变更\n{具体改了什么}\n\n## 影响\n{影响哪些 wiki 页面}\n\n## code-map diff\n{关键 diff}",
+  "target_section": "infrastructure/repo-layout"
+}
+EOF
+```
+
+### wiki-curator → 你（架构决策 → 代码落地）
+
+当 cc-lead 通过 wiki-curator 记录了涉及代码结构的决策时（如"新建 engine/ 目录"），
+你会收到 cc-lead 的 dispatch 要求更新 code-map.yaml。
+
+**流程**：wiki 记录决策事实 → cc-lead dispatch 你 → 你更新 code-map + 执行文件操作。
+
+### 权威源分工
+
+| 文件 | 权威维护者 | 内容 |
+|------|-----------|------|
+| `docs/code-map.yaml` | **你**（repo-curator） | 目录白名单、import 边界、敏感路径、迁移计划 |
+| `wiki/infrastructure/repo-layout.md` | **wiki-curator** | code-map 的可读蒸馏版 + wiki 交叉链接 |
+
+**规则**：你改 code-map.yaml 后必须通知 wiki-curator 同步 repo-layout.md。
+wiki-curator 不直接改 code-map.yaml，通过 cc-lead dispatch 你来改。
