@@ -66,6 +66,35 @@ def principle_id(record: dict, source_book: str) -> str:
 
 
 def iter_l0_records() -> Iterator[tuple[str, dict]]:
+    # SI enforcement: L0 records sometimes embed Skill-A-style parameter
+    # sub-records with raw units (°F, BTU, psi, cup, lb). We normalise
+    # those to SI at ingest time so downstream queries can rely on
+    # consistent units. `enforce_si(strict=False)` returns (None,
+    # 'unconvertible') for unknown units — we annotate the record rather
+    # than drop it.
+    from pipeline.etl.common import UnitNormalizer
+    _un = UnitNormalizer()
+
+    def _enforce_params(rec: dict) -> None:
+        params = rec.get("parameters") or []
+        if not isinstance(params, list):
+            return
+        for p in params:
+            if not isinstance(p, dict):
+                continue
+            v, u = p.get("value"), p.get("unit")
+            if v is None or u is None:
+                continue
+            nv, nu = _un.enforce_si(v, u)
+            if nv is not None and nu != "unconvertible":
+                # preserve original for provenance, add SI-canonical.
+                p.setdefault("_raw_value", v)
+                p.setdefault("_raw_unit", u)
+                p["value"] = nv
+                p["unit"]  = nu
+            else:
+                p["_unit_unconvertible"] = True
+
     files = sorted(OUTPUT_DIR.rglob("l0_principles_open.jsonl"))
     for path in files:
         book = path.parent.name.replace("stage4_", "").replace("stage4", "stage4_base")
@@ -75,9 +104,14 @@ def iter_l0_records() -> Iterator[tuple[str, dict]]:
                 if not line:
                     continue
                 try:
-                    yield book, json.loads(line)
+                    rec = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                # Schema version fallback: pre-versioning records default to v1.0
+                # (see docs/schemas/CHANGELOG.md, 2026-04-23 baseline).
+                rec.setdefault("_v", "1.0")
+                _enforce_params(rec)
+                yield book, rec
 
 
 def get_embeddings_gemini(texts: list[str], client: httpx.Client) -> list[list[float]]:

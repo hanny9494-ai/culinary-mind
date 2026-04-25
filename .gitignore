@@ -30,3 +30,29 @@ node_modules/
 
 # Archives (tracked separately)
 _archive/logs/
+.culinary-bridge-tmp/
+
+# Runtime databases & state
+.ce-hub/cehub.db
+.ce-hub/raw/
+.ce-hub/state/
+.ce-hub/tmp/
+.openclaw/
+memory/
+data/
+
+# Agent raw logs (tracked selectively)
+raw/log/
+raw/architect/
+raw/coder/
+raw/jeff-anchors/
+raw/open-data-collector/
+raw/researcher/
+
+# Misc
+config/*.bak
+config/mc_toc.json
+.gemini/
+extensions/culinary-bridge-mcp/
+ce-hub/.ce-hub/
+ce-hub/logs/

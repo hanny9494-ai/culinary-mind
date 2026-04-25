@@ -23,7 +23,9 @@ Usage:
 import argparse
 import json
 import os
+import logging
 import re
+import random
 import shutil
 import sys
 import time
@@ -242,7 +244,7 @@ def gate_ocr_qc(book_id: str) -> dict:
 
 # ── G2: Signal QC ────────────────────────────────────────────────────────────
 
-def gate_signal_qc(book_id: str) -> dict:
+def gate_signal_qc(book_id: str, books_yaml_path: Path | str | None = None) -> dict:
     """
     G2 Signal Quality Check — run after Signal routing, before Pilot/Skill.
 
@@ -285,8 +287,10 @@ def gate_signal_qc(book_id: str) -> dict:
         info_notes.append(f"A信号较高({stats['a_pct']:.0f}%>80%) — 正常（参数密集型书籍）")
 
     # True fail conditions:
-    # 1. A% < 5% when book has Skill A — router likely missed science content
-    if stats["a_pct"] < 5:
+    # 1. A% < 5% — only fail if book actually has Skill A assigned
+    book_entry = _load_book_entry(book_id, books_yaml_path)
+    book_has_a = book_entry and "A" in [s.upper() for s in book_entry.get("skills", [])]
+    if book_has_a and stats["a_pct"] < 5:
         anomalies.append(f"A信号过低({stats['a_pct']:.0f}%<5%) — 可能OCR质量差或router配置错误")
     # 2. skip_pct > 40% — too many pages skipped, likely OCR quality issue
     if stats["skip_pct"] > 40:
@@ -326,7 +330,7 @@ def _call_dashscope_sync(
     prompt: str,
     system: str,
     model: str = "qwen3.6-plus",
-    timeout_sec: float = 30.0,
+    timeout_sec: float = 90.0,
 ) -> str | None:
     """
     Synchronous single-shot DashScope call for lightweight tasks (TOC analysis).
@@ -348,18 +352,17 @@ def _call_dashscope_sync(
         ],
         "temperature": 0,
         "max_tokens": 1024,
-        "enable_thinking": False,
-        "response_format": {"type": "json_object"},
+
     }
     try:
         import httpx as _httpx
-        resp = _httpx.post(url, headers=headers, json=body, timeout=timeout_sec,
+        resp = _httpx.post(url, headers=headers, json=body, timeout=timeout_sec, trust_env=False,
                            follow_redirects=False)
         resp.raise_for_status()
         data = resp.json()
         return data["choices"][0]["message"]["content"]
     except Exception as e:
-        logging.getLogger("gate_toc").warning(f"DashScope TOC call failed: {e}")
+        import logging as _logging; _logging.getLogger("gate_toc").warning(f"DashScope TOC call failed: {e}")
         return None
 
 

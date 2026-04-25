@@ -197,6 +197,12 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def append_jsonl(path: Path, record: dict[str, Any]) -> None:
+    # Server-side schema-version fallback — the L0 extraction prompt asks
+    # the model for `_v: "1.1"` but don't trust the model to always emit
+    # it. Stamp version programmatically before writing so every record
+    # hitting l0_principles_open.jsonl / l0_raw.jsonl / l0_filter.jsonl
+    # carries a schema version.
+    record.setdefault("_v", "1.1")
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -305,9 +311,10 @@ EXTRACT_SYSTEM_TEMPLATE = """\
 Domain（17域，选最匹配的一个）：
 {domains_list}
 
-输出JSON数组（可以是0-N条）：
+输出JSON数组（可以是0-N条）。每条记录必须包含字段 "_v": "1.1"（schema 版本）和 "evidence_type"：
 [
   {{
+    "_v": "1.1",
     "scientific_statement": "中文陈述",
     "proposition_type": "causal_chain",
     "causal_chain_steps": ["触发：...", "过程：...", "结果：..."],
@@ -317,9 +324,16 @@ Domain（17域，选最匹配的一个）：
     "domain": "protein_science",
     "confidence": 0.85,
     "citation_quote": "exact quote from text",
-    "domain_note": ""
+    "domain_note": "",
+    "evidence_type": "textbook"
   }}
 ]
+
+evidence_type 选其一（按证据强度）：
+- textbook：来自权威教科书/专著（从教科书蒸馏通常就填这个）
+- empirical：来自实验研究/原始数据集
+- review：来自综述文章汇总其他来源
+- computed：由另一条记录或求解器推导得到
 
 如果这条原理不属于以上17域中的任何一个，domain填"unclassified"，并在domain_note字段写明你认为它应该属于什么领域。
 
