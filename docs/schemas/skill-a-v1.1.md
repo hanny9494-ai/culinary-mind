@@ -10,7 +10,8 @@ Version field: `_v` (default `"1.0"` when absent).
 | Field             | Type              | Required | Description                                                                                  |
 |-------------------|-------------------|----------|----------------------------------------------------------------------------------------------|
 | `_v`              | string            | no       | Schema version. v1.1 producers write `"1.1"`; missing → treat as `"1.0"`.                                                |
-| `evidence_type` | enum string       | no       | Added in v1.1. One of `textbook`, `empirical`, `review`, `computed`. Marks how strongly to trust this record at inference time. |
+| `evidence_type` | enum string       | no       | Added in v1.1. One of `empirical`, `theoretical`, `expert_opinion`, `derived`. Marks how strongly to trust this record at inference time. |
+| `parameter_role`| enum string       | no       | Added in v1.1. One of `fitted`, `runtime`, `derived`. Encodes the parameter's role in its Mother Formula (see `config/mother_formulas.yaml` `one_of_inputs` / `runtime_variables` / `constants`). |
 | `mother_formula`  | string            | yes      | Canonical Mother Formula name (see `config/mother_formulas.yaml`), e.g. `Fourier_1D`.       |
 | `formula_id`      | string            | yes      | Mother Formula id, e.g. `MF-T01`. Must start with `MF-T`/`MF-K`/`MF-M`/`MF-R`/`MF-C`.       |
 | `parameter_name`  | string            | yes      | Symbol or human-readable parameter name, e.g. `Ea`, `alpha`, `denaturation_temperature`.    |
@@ -30,18 +31,35 @@ Version field: `_v` (default `"1.0"` when absent).
 - `confidence` ∈ `{high, medium, low}` exactly — no numeric values in v1.0.
 - `causal_context` is explicitly non-empty (enforced by the Skill A prompt).
 - `formula_id` prefix must be one of `MF-T / MF-K / MF-M / MF-R / MF-C`.
+- `parameter_role` (when present) must be one of `fitted | runtime | derived`.
+
+## `parameter_role` (added in v1.1)
+
+Encodes the role the parameter plays in its Mother Formula, decoupled
+from `evidence_type`:
+
+| Value      | Meaning                                                                          |
+|------------|----------------------------------------------------------------------------------|
+| `fitted`   | A material/system constant fitted to data (e.g. `Ea`, `k0`, `Vmax`, GAB `Xm/C/K`).|
+| `runtime`  | Scenario state supplied at solve time (e.g. `T_init`, `time`, `thickness`).      |
+| `derived`  | Computed from other parameters (e.g. `alpha = k/(rho*Cp)`).                      |
+
+Use the Mother Formula registry as the source of truth: a parameter
+appearing in a MF's `one_of_inputs` is `fitted`; appearing in
+`runtime_variables` is `runtime`; otherwise compute it and tag
+`derived`.
 
 
 ## `evidence_type` (added in v1.1)
 
 Optional enum describing the provenance quality of this record.
 
-| Value      | Meaning                                                                       |
-|------------|-------------------------------------------------------------------------------|
-| `textbook` | From an authoritative textbook / monograph. Default for distilled book data.  |
-| `empirical`| From an experimental study / peer-reviewed dataset. Primary evidence.         |
-| `review`   | From a review paper aggregating other sources. Secondary evidence.            |
-| `computed` | Derived by a solver / model / another record. Not primary source.             |
+| Value            | Meaning                                                                                |
+|------------------|----------------------------------------------------------------------------------------|
+| `empirical`      | From an experimental study / peer-reviewed dataset. Primary evidence.                  |
+| `theoretical`    | Derived from established physical/chemical laws (Arrhenius, Fick, Henderson-Hasselbalch).|
+| `expert_opinion` | From an authoritative textbook / monograph / chef manual — synthesised expert summary. |
+| `derived`        | Derived by a solver / model / another record. Not a primary source.                    |
 
 Backward compatibility: missing field → treat as `None` (unknown).
 Consumers should not reject v1.0 records lacking this field.

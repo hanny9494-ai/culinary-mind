@@ -42,12 +42,12 @@ Version field: `_v` (default `"1.0"` when absent).
 
 Optional enum describing the provenance quality of this record.
 
-| Value      | Meaning                                                                       |
-|------------|-------------------------------------------------------------------------------|
-| `textbook` | From an authoritative textbook / monograph. Default for distilled book data.  |
-| `empirical`| From an experimental study / peer-reviewed dataset. Primary evidence.         |
-| `review`   | From a review paper aggregating other sources. Secondary evidence.            |
-| `computed` | Derived by a solver / model / another record. Not primary source.             |
+| Value            | Meaning                                                                                |
+|------------------|----------------------------------------------------------------------------------------|
+| `empirical`      | From an experimental study / peer-reviewed dataset. Primary evidence.                  |
+| `theoretical`    | Derived from established physical/chemical laws (Arrhenius, Fick, Henderson-Hasselbalch).|
+| `expert_opinion` | From an authoritative textbook / monograph / chef manual — synthesised expert summary. |
+| `derived`        | Derived by a solver / model / another record. Not a primary source.                    |
 
 Backward compatibility: missing field → treat as `None` (unknown).
 Consumers should not reject v1.0 records lacking this field.
