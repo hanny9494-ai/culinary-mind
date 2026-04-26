@@ -77,6 +77,9 @@ def main(inplace: bool) -> None:
             if field in r2_atom:
                 merged[field] = r2_atom[field]
         merged["canonical_id"] = cid
+        # Schema version stamp — see docs/schemas/l2a-atom-v1.1.md.
+        # Use setdefault so a pre-existing `_v` from R1 input is honoured.
+        merged.setdefault("_v", "1.1")
 
         if inplace:
             try:

@@ -366,6 +366,9 @@ async def process_batch(
             merged["data_confidence"] = r2.get("data_confidence", "high")
 
         out_path = ATOMS_R2_DIR / f"{cid}.json"
+        # Stamp L2a atom schema version — see docs/schemas/l2a-atom-v1.1.md.
+        if isinstance(merged, dict):
+            merged.setdefault("_v", "1.1")
         try:
             out_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2))
             log.info(f"  ✓ {cid} ({latency_ms}ms)")

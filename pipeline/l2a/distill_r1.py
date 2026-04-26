@@ -237,6 +237,10 @@ def main() -> int:
         existing = [item for item in existing if str(item.get("source") or "") != source]
 
     merged = dedupe_items(existing + cached_items)
+    # Stamp L2a atom schema version on each item — see docs/schemas/l2a-atom-v1.1.md.
+    for _item in merged:
+        if isinstance(_item, dict):
+            _item.setdefault("_v", "1.1")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
 

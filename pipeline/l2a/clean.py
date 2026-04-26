@@ -112,6 +112,8 @@ def main():
     L2C_DIR.mkdir(parents=True, exist_ok=True)
 
     clean_data = {
+        # Canonical-map schema version — see docs/schemas/l2a-canonical-v2.0.md.
+        '_v': '2.0',
         'metadata': {**metadata, 'total_canonical': len(clean), 'cleaned_from': total, 'junk_removed': len(junk_removed), 'moved_to_l2c': len(commercial)},
         'canonicals': clean,
     }
