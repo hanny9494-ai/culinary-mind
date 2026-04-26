@@ -1,5 +1,22 @@
 # Schema Version Changelog
 
+## 2026-04-26 — evidence_type vocabulary refresh
+
+The `evidence_type` enum (added 2026-04-24) is renamed to align with
+the empirical-vs-theoretical-vs-secondary distinction used by the
+inference layer:
+
+  Old → New
+  textbook → expert_opinion
+  empirical → empirical (unchanged)
+  review   → (folded into expert_opinion / derived per case)
+  computed → derived
+  (new)    → theoretical
+
+The schema version stays at v1.1 because this is a *value-set* change
+(no field added/removed). Pipelines emit the new enum starting now;
+older records still validate (we never enforced a closed enum).
+
 ## 2026-04-24 — v1.1 Minor (evidence_type)
 
 All L0, Skill A/B, FT (Skill D), L6 (Skill D), L2a atom schemas bump to

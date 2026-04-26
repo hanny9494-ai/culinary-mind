@@ -325,15 +325,15 @@ Domain（17域，选最匹配的一个）：
     "confidence": 0.85,
     "citation_quote": "exact quote from text",
     "domain_note": "",
-    "evidence_type": "textbook"
+    "evidence_type": "expert_opinion"
   }}
 ]
 
 evidence_type 选其一（按证据强度）：
-- textbook：来自权威教科书/专著（从教科书蒸馏通常就填这个）
-- empirical：来自实验研究/原始数据集
-- review：来自综述文章汇总其他来源
-- computed：由另一条记录或求解器推导得到
+- empirical：来自实验研究/原始数据集（primary evidence）
+- theoretical：从已知物理/化学定律推导（如 Arrhenius、Fick）
+- expert_opinion：教科书/专著的权威总结陈述（从教科书蒸馏通常填这个）
+- derived：由另一条记录或求解器二次推导得到
 
 如果这条原理不属于以上17域中的任何一个，domain填"unclassified"，并在domain_note字段写明你认为它应该属于什么领域。
 
