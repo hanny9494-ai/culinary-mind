@@ -262,6 +262,63 @@ class TestCompoundRegistry(unittest.TestCase):
         self.assertIsNone(r.match({"cas_number": ""}))
         self.assertIsNone(r.match({"canonical_smiles": ""}))
 
+    # ── GPT-5.4 review WARN coverage ────────────────────────────────────
+    def test_strict_register_does_not_pollute_on_rejection(self):
+        """When register(strict=True) rejects a weak-name merge, the
+        registry state must stay unchanged — no half-merged record, no
+        leaked normalized_name index entry."""
+        r = CompoundRegistry()
+        cid = r.register({"pubchem_id": "702", "name": "Ethanol"})
+        before_size = len(r)
+        before_record = dict(r.get(cid))   # copy
+        with self.assertRaises(WeakNameMergeError):
+            r.register({"name": "Ethanol", "source": "external"}, strict=True)
+        # State invariants
+        self.assertEqual(len(r), before_size)         # no new record
+        self.assertEqual(r.get(cid), before_record)   # existing untouched
+
+    def test_cross_key_conflict_register_leaves_state_intact(self):
+        """register() detecting a cross-key conflict must NOT merge any
+        of the input keys before raising."""
+        r = CompoundRegistry()
+        cid_a = r.register({"pubchem_id": "702"})
+        cid_b = r.register({"cas_number": "64-17-5"})
+        rec_a_before = dict(r.get(cid_a))
+        rec_b_before = dict(r.get(cid_b))
+        with self.assertRaises(CrossKeyConflictError):
+            r.register({"pubchem_id": "702", "cas_number": "64-17-5",
+                        "name": "Ethanol"})
+        # Neither record received the foreign keys
+        self.assertEqual(r.get(cid_a), rec_a_before)
+        self.assertEqual(r.get(cid_b), rec_b_before)
+        # And no new compound was created
+        self.assertEqual(len(r), 2)
+
+    def test_cross_key_conflict_smiles_vs_name(self):
+        """Cross-key conflict spanning a strong key vs a weak key:
+        smiles → cmpd_A, normalized_name → cmpd_B must still raise."""
+        r = CompoundRegistry()
+        a = r.register({"canonical_smiles": "CCO", "name": "Ethanol"})
+        b = r.register({"name": "Methanol"})
+        self.assertNotEqual(a, b)
+        # probe: smiles points to A, name points to B → conflict
+        with self.assertRaises(CrossKeyConflictError):
+            r.match({"canonical_smiles": "CCO", "name": "Methanol"})
+
+    def test_batchwriter_finalize_idempotent(self):
+        """Calling finalize() twice (or after a context-manager exit)
+        must not raise — important when callers wrap an already-with'd
+        BatchWriter for paranoia / resource tracking."""
+        with tempfile.TemporaryDirectory() as td:
+            bw = BatchWriter(layer="l2a", source="test_idem",
+                             output_dir=td, flush_every=2)
+            bw.write([{"id": "1", "name": "x"}])
+            bw.finalize()
+            # second call — must be a no-op, not a crash
+            bw.finalize()
+            out = Path(td) / "etl_staging" / "l2a" / "test_idem.jsonl"
+            self.assertEqual(len(out.read_text().splitlines()), 1)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UnitNormalizer

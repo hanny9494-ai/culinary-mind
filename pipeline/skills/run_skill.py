@@ -754,6 +754,7 @@ def main() -> None:
             if not _keep:
                 log.info(f"  page {page_num}: secondary_filter_a skipped ({_reason})")
                 results_file.write(json.dumps({
+                    "_v": "1.1",
                     "_page": page_num, "_skill": skill, "_book": book_id,
                     "_filtered": True, "_filter_reason": _reason
                 }, ensure_ascii=False) + '\n')
@@ -765,6 +766,7 @@ def main() -> None:
             if not _filter_d(page_text, book_language):
                 log.info(f"  page {page_num}: secondary_filter_d skipped (no aesthetic terms)")
                 results_file.write(json.dumps({
+                    "_v": "1.1",
                     "_page": page_num, "_skill": skill, "_book": book_id,
                     "_filtered": True, "_filter_reason": "filter_d_no_aesthetic"
                 }, ensure_ascii=False) + '\n')
@@ -832,6 +834,7 @@ def main() -> None:
                 )
                 failed += 1
                 results_file.write(json.dumps({
+                    "_v": "1.1",
                     "_page": page_num, "_skill": skill,
                     "_error": f"auth_{e.response.status_code}", "_book": book_id,
                 }, ensure_ascii=False) + "\n")
@@ -845,6 +848,7 @@ def main() -> None:
                 failed += 1
                 consecutive_failures += 1
                 results_file.write(json.dumps({
+                    "_v": "1.1",
                     "_page": page_num, "_skill": skill, "_error": str(e), "_book": book_id,
                 }, ensure_ascii=False) + "\n")
                 # Circuit breaker: abort after N consecutive failures

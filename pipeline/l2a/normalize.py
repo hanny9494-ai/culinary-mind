@@ -325,6 +325,9 @@ def main():
         "canonicals": sorted(all_canonicals.values(), key=lambda c: c["canonical_id"]),
         "raw_to_canonical": dict(sorted(raw_to_canonical.items())),
     }
+    # Canonical-map schema version — see docs/schemas/l2a-canonical-v2.0.md.
+    if isinstance(out, dict):
+        out.setdefault("_v", "2.0")
     args.output.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Wrote: {args.output}")
 

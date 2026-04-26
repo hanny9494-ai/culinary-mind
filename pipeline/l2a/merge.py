@@ -361,7 +361,11 @@ def main():
 
     # Write final output
     total_raw = data["metadata"]["total_raw"]
+    # Schema version stamp — see docs/schemas/l2a-canonical-v2.0.md.
+    # CanonicalMatcher._load() in pipeline.etl.common warns when this is
+    # missing or off-version, so producers MUST emit `_v: "2.0"`.
     final = {
+        "_v": "2.0",
         "metadata": {
             "total_raw": total_raw,
             "total_canonical": len(canonicals_map),
