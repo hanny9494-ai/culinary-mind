@@ -40,6 +40,29 @@ function readJson(path: string): Record<string, unknown> | null {
   }
 }
 
+// L1 — Strict string check helper. Rejects "", 0, {}, non-string truthy values.
+function firstNonEmptyString(...vals: unknown[]): string | undefined {
+  for (const v of vals) {
+    if (typeof v === 'string') {
+      const trimmed = v.trim();
+      if (trimmed.length > 0) return trimmed;
+    }
+  }
+  return undefined;
+}
+
+// Q2 — Build an archive filename that won't collide with previous archives of
+// the same source basename. Suffix combines wall-clock ms + pid + small random
+// string for collision resistance even within the same millisecond.
+function uniqueArchivePath(dir: string, sourceName: string): string {
+  const dotIdx = sourceName.lastIndexOf('.');
+  const stem = dotIdx > 0 ? sourceName.slice(0, dotIdx) : sourceName;
+  const ext = dotIdx > 0 ? sourceName.slice(dotIdx) : '';
+  const rand = Math.random().toString(36).slice(2, 8);
+  const suffix = `${Date.now()}_${process.pid}_${rand}`;
+  return join(dir, `${stem}__${suffix}${ext}`);
+}
+
 export class FileWatcher {
   private tmux: TmuxManager;
   private store: StateStore;
@@ -51,6 +74,17 @@ export class FileWatcher {
   // Dedup: track result files currently being processed to prevent double-handling
   // (watch() event + 30s poll can race on the same file before unlinkSync fires)
   private processingResults = new Set<string>();
+  // Q3+Q7 — cross-call idempotency: side effects already executed for this file.
+  // Set after first successful pass through the side-effect block; cleared once
+  // the file is finally archived or quarantined. Prevents duplicate appendRaw /
+  // DB updates / inbox forwarding when an archive rename fails and the 30s poll
+  // re-enters handleResult.
+  private processedSideEffects = new Set<string>();
+  // Q3+Q7 — cross-call retry counter for archive renames. After
+  // MAX_RENAME_RETRIES failed attempts the file is force-quarantined to
+  // _archive_failed/ with a marker in raw/archive_failures.jsonl.
+  private failedRenameCount = new Map<string, number>();
+  private static readonly MAX_RENAME_RETRIES = 5;
 
   constructor(tmux: TmuxManager, store: StateStore) {
     this.tmux = tmux;
@@ -176,103 +210,188 @@ export class FileWatcher {
     try { unlinkSync(filePath); } catch {}
   }
 
+  // Test seam: rename wrapper. Override on instance for tests.
+  protected safeRenameSync(src: string, dst: string): void {
+    renameSync(src, dst);
+  }
+
+  /**
+   * Q3+Q7 — Archive `filePath` into `targetDir` with retry/quarantine semantics.
+   * Returns true if the source file is no longer at `filePath` (either archived
+   * successfully or force-quarantined to `_archive_failed/`). Returns false if
+   * the rename failed transiently and the caller should leave the file in place
+   * for the next 30s poll cycle to retry.
+   *
+   * Retry counter is keyed by source path and persists across handleResult
+   * invocations. After MAX_RENAME_RETRIES failures the file is force-moved to
+   * `.ce-hub/results/_archive_failed/` and a marker is written to
+   * `raw/archive_failures.jsonl`. Counter is cleared on success or quarantine.
+   */
+  private archiveWithRetry(filePath: string, targetDir: string, taskId?: string): boolean {
+    ensureDir(targetDir);
+    const dst = uniqueArchivePath(targetDir, basename(filePath));
+    try {
+      this.safeRenameSync(filePath, dst);
+      this.failedRenameCount.delete(filePath);
+      this.processedSideEffects.delete(filePath);
+      return true;
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const count = (this.failedRenameCount.get(filePath) ?? 0) + 1;
+      this.failedRenameCount.set(filePath, count);
+      console.error(
+        `[FileWatcher] archive failed (${count}/${FileWatcher.MAX_RENAME_RETRIES}) ${filePath} → ${targetDir}: ${errMsg}`
+      );
+
+      if (count >= FileWatcher.MAX_RENAME_RETRIES) {
+        const failedDir = join(getCeHubDir(), 'results', '_archive_failed');
+        ensureDir(failedDir);
+        const failedPath = uniqueArchivePath(failedDir, basename(filePath));
+        let quarantined = false;
+        try {
+          this.safeRenameSync(filePath, failedPath);
+          quarantined = true;
+        } catch (qErr: unknown) {
+          const qMsg = qErr instanceof Error ? qErr.message : String(qErr);
+          console.error(`[FileWatcher] quarantine rename also failed for ${filePath}: ${qMsg}`);
+        }
+        appendRaw('archive_failures.jsonl', {
+          source: filePath,
+          target_dir: targetDir,
+          quarantined_to: quarantined ? failedPath : null,
+          error: errMsg,
+          attempts: count,
+          task_id: taskId,
+          ts: Date.now(),
+        });
+        this.failedRenameCount.delete(filePath);
+        this.processedSideEffects.delete(filePath);
+        // Even if quarantine renameSync also failed (truly broken FS), clear
+        // the counters and surrender — repeated retries would only spam logs.
+        return true;
+      }
+      return false;
+    }
+  }
+
   private handleResult(filePath: string): void {
     // Dedup guard: skip if already being processed (watch event + poll race)
     if (this.processingResults.has(filePath)) return;
     this.processingResults.add(filePath);
 
-    const data = readJson(filePath);
-    if (!data) { this.processingResults.delete(filePath); return; }
+    try {
+      const data = readJson(filePath);
+      if (!data) return;
 
-    const from = (data.from || data.dispatched_by || "cc-lead") as string;
-    const taskId = (data.task_id || data.ref_dispatch || data.ref_task || data.dispatch_id) as string | undefined;
-    const status = data.status as string;
-    const summary = (data.summary as string) || (data.content as string) || '';
-    const outputFiles = data.output_files as string[] || [];
+      const from = firstNonEmptyString(data.from, data.dispatched_by) ?? 'cc-lead';
+      const taskId = firstNonEmptyString(data.task_id, data.ref_dispatch, data.ref_task, data.dispatch_id);
+      const status = data.status as string;
+      const summary = (data.summary as string) || (data.content as string) || '';
+      const outputFiles = data.output_files as string[] || [];
 
-    console.log(`[FileWatcher] result: ${from} completed ${taskId ?? '(no-task-id)'}: ${status}`);
+      const sideEffectsAlreadyRun = this.processedSideEffects.has(filePath);
+      let originAgent: string | undefined;
+      let undeliverable = false;
 
-    // Archive to raw/ for wiki compiler before any result-specific branching.
-    appendRaw('results.jsonl', { from, task_id: taskId, status, summary, output_files: outputFiles });
+      if (!sideEffectsAlreadyRun) {
+        console.log(`[FileWatcher] result: ${from} completed ${taskId ?? '(no-task-id)'}: ${status}`);
 
-    // Log event
-    this.store.createEvent({
-      type: 'result', source: from,
-      payload: { taskId, status, summary, outputFiles },
-    });
+        // Always archive to raw/ — evidence preserved even for orphans / undeliverable
+        appendRaw('results.jsonl', { from, task_id: taskId, status, summary, output_files: outputFiles });
 
-    if (!taskId) {
-      const orphanDir = join(getCeHubDir(), 'results', '_orphan_no_task_id');
-      ensureDir(orphanDir);
-      const archivedPath = join(orphanDir, basename(filePath));
-      try {
-        renameSync(filePath, archivedPath);
-        console.warn(`[FileWatcher] result file lacks task_id, archived to ${archivedPath}`);
-      } catch (err) {
-        console.error(`[FileWatcher] failed to archive orphan ${filePath}:`, err);
+        this.store.createEvent({
+          type: 'result', source: from,
+          payload: { taskId, status, summary, outputFiles },
+        });
+
+        if (taskId) {
+          // Clear from pending tracking
+          this.pendingResults.delete(taskId);
+
+          // Update task in DB if known
+          const task = this.store.getTask(taskId);
+          if (task) {
+            this.store.updateTask(taskId, {
+              status: status === 'done' ? 'done' : 'failed',
+              result: data as Record<string, unknown>,
+              completed_at: Date.now(),
+            });
+          }
+
+          const dataTo = firstNonEmptyString(data.to);
+          originAgent = task?.from_agent ?? dataTo;
+
+          if (originAgent) {
+            // Forward result to originator's inbox + nudge + attention
+            const originInbox = join(getCeHubDir(), 'inbox', originAgent);
+            ensureDir(originInbox);
+            writeFileSync(join(originInbox, `result_${from}_${Date.now()}.json`), JSON.stringify({
+              id: `result_${Date.now()}`, from, type: 'result',
+              content: `[${from} ${status}] ${summary || '(no summary)'}`, task_id: taskId,
+              output_files: outputFiles, created_at: new Date().toISOString(),
+            }, null, 2));
+
+            if (this.tmux.isAlive(originAgent)) {
+              this.tmux.sendMessage(originAgent, `Task completed by ${from}: ${summary?.slice(0, 200)}`);
+            }
+
+            writeAttention(originAgent, true);
+          } else {
+            // L2 — Undeliverable: task missing from DB AND no data.to.
+            // Don't silently drop into _processed/; emit a marker + dedicated event.
+            undeliverable = true;
+            appendRaw('results.jsonl', {
+              type: 'undeliverable', from, task_id: taskId, summary, output_files: outputFiles,
+            });
+            this.store.createEvent({
+              type: 'result_undeliverable', source: from,
+              payload: { taskId, status, summary, reason: 'no_origin_agent_resolvable' },
+            });
+            console.warn(`[FileWatcher] undeliverable result for task ${taskId}: no origin agent resolvable`);
+          }
+
+          // Trigger downstream DAG tasks
+          if (status === 'done' && this.engine) {
+            try { this.engine.triggerDownstream(taskId); } catch (err) {
+              console.error(`[FileWatcher] failed to trigger downstream for ${taskId}:`, err);
+            }
+          }
+
+          // Clean up the dispatch inbox file we received from `from`
+          const inboxFile = join(getCeHubDir(), 'inbox', from, `${taskId}.json`);
+          try { unlinkSync(inboxFile); } catch {}
+        }
+
+        this.processedSideEffects.add(filePath);
+      } else {
+        // Side effects already ran on a previous (failed) attempt; only re-derive
+        // routing inputs needed for the archive destination decision.
+        if (taskId) {
+          const task = this.store.getTask(taskId);
+          const dataTo = firstNonEmptyString(data.to);
+          originAgent = task?.from_agent ?? dataTo;
+          undeliverable = !originAgent;
+        }
       }
+
+      // Phase 2: Archive (with retry / quarantine)
+      let archiveDir: string;
+      if (!taskId) {
+        archiveDir = join(getCeHubDir(), 'results', '_orphan_no_task_id');
+      } else if (undeliverable) {
+        archiveDir = join(getCeHubDir(), 'inbox', '_undeliverable');
+      } else {
+        archiveDir = join(getCeHubDir(), 'results', '_processed');
+      }
+
+      this.archiveWithRetry(filePath, archiveDir, taskId);
+      // Note: archiveWithRetry returns false on transient failure; the file
+      // remains at filePath and the next 30s poll will re-enter handleResult,
+      // skip side effects (processedSideEffects guard), and retry the rename.
+    } finally {
+      // Always release in-tick lock — cross-call retry counter handles persistent failures.
       this.processingResults.delete(filePath);
-      return;
     }
-
-    // Clear from pending
-    this.pendingResults.delete(taskId);
-
-    // Update task in DB
-    const task = this.store.getTask(taskId);
-    if (task) {
-      this.store.updateTask(taskId, {
-        status: status === 'done' ? 'done' : 'failed',
-        result: data as Record<string, unknown>,
-        completed_at: Date.now(),
-      });
-    }
-
-    let originAgent: string | undefined = task?.from_agent;
-    if (!originAgent && typeof data.to === 'string' && data.to) {
-      originAgent = data.to;
-    }
-
-    // Notify originating agent (from task record or result fallback)
-    if (originAgent) {
-      const originInbox = join(getCeHubDir(), 'inbox', originAgent);
-      ensureDir(originInbox);
-      writeFileSync(join(originInbox, `result_${from}_${Date.now()}.json`), JSON.stringify({
-        id: `result_${Date.now()}`, from, type: 'result',
-        content: `[${from} ${status}] ${summary || '(no summary)'}`, task_id: taskId,
-        output_files: outputFiles, created_at: new Date().toISOString(),
-      }, null, 2));
-
-      // Nudge originating agent
-      if (this.tmux.isAlive(originAgent)) {
-        this.tmux.sendMessage(originAgent, `Task completed by ${from}: ${summary?.slice(0, 200)}`);
-      }
-    }
-
-    // Set attention for originating agent so they see task completion in nav bar
-    if (originAgent) writeAttention(originAgent, true);
-
-    // Trigger downstream DAG tasks
-    if (status === 'done' && this.engine) {
-      try { this.engine.triggerDownstream(taskId); } catch (err) {
-        console.error(`[FileWatcher] failed to trigger downstream for ${taskId}:`, err);
-      }
-    }
-
-    // Clean up inbox file for this task
-    const inboxFile = join(getCeHubDir(), 'inbox', from, `${taskId}.json`);
-    try { unlinkSync(inboxFile); } catch {}
-
-    // Move result file after processing to prevent 30s poll from reprocessing it.
-    const processedDir = join(getCeHubDir(), 'results', '_processed');
-    ensureDir(processedDir);
-    const processedPath = join(processedDir, basename(filePath));
-    try { renameSync(filePath, processedPath); } catch (err) {
-      console.error(`[FileWatcher] failed to archive processed ${filePath}:`, err);
-    }
-
-    // Release dedup lock
-    this.processingResults.delete(filePath);
   }
 
   private nudgePending(): void {
