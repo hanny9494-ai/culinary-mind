@@ -1,0 +1,338 @@
+=== RAW RESPONSE ===
+{
+  "id": "chatcmpl-20260501143628953022228268d9d64S9yWxte",
+  "model": "gpt-5.5",
+  "object": "chat.completion",
+  "created": 0,
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "rol
+
+=== CONTENT ===
+## 1) F1 fallback 字段顺序与空字符串行为
+
+- **严重级别**：Info
+- **文件:行号**：`ce-hub/src/file-watcher.ts:188`
+- **问题陈述**：  
+  `task_id > ref_dispatch > ref_task > dispatch_id` 的优先级整体合理。`task_id` 是 canonical 字段，必须最高；`ref_dispatch` 很可能是旧 result 对 dispatch 的引用，也应优先于更泛化的 `ref_task`；`dispatch_id` 放最后也合理。  
+  当前使用 `||`：
+
+  ```ts
+  const taskId = (data.task_id || data.ref_dispatch || data.ref_task || data.dispatch_id) as string | undefined;
+  ```
+
+  这会隐式跳过 `""`、`0`、`false`。对 task id 来说，空字符串通常不是合法 ID，因此跳过 `""` 是安全且符合 hotfix 目标的。但当前没有做类型校验和 trim，如果字段是非字符串 truthy 值，例如 `{}`、`123`，会被当成 taskId 使用，后续进入 `getTask(taskId)`、拼接 inbox 路径等逻辑，存在脏数据风险。
+- **建议修复**：  
+  可接受当前顺序。建议把 fallback 提取成 helper，明确只接受非空字符串：
+
+  ```ts
+  function firstNonEmptyString(...values: unknown[]): string | undefined {
+    for (const value of values) {
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return undefined;
+  }
+
+  const taskId = firstNonEmptyString(
+    data.task_id,
+    data.ref_dispatch,
+    data.ref_task,
+    data.dispatch_id,
+  );
+  ```
+
+---
+
+## 2) F2 `_orphan_no_task_id/` GC 与文件名冲突
+
+- **严重级别**：P1
+- **文件:行号**：`ce-hub/src/file-watcher.ts:204-212`
+- **问题陈述**：  
+  orphan 文件现在被移动到：
+
+  ```ts
+  const archivedPath = join(orphanDir, basename(filePath));
+  renameSync(filePath, archivedPath);
+  ```
+
+  这里有两个问题：
+
+  1. **需要 GC 或保留策略**：P0 hotfix 的首要目标是“不再删除证据”，因此保留 orphan 是正确的。但如果长期运行，`_orphan_no_task_id/` 会无限增长。至少应有文档化保留策略，或者后续实现按时间/大小 GC。
+  2. **文件名冲突可能造成证据覆盖或 rename 失败**：  
+     Node `renameSync` 在 POSIX 上目标文件已存在时通常会替换目标文件；在部分平台/场景下可能失败。当前 `archivedPath` 只使用 `basename(filePath)`，如果多个 orphan result 使用同名文件，可能覆盖旧证据，违反本次 hotfix 的核心目标。
+- **建议修复**：  
+  orphan 归档路径应保证唯一，例如追加时间戳、pid、随机后缀，或使用 `open` 的 exclusive 语义生成唯一文件名：
+
+  ```ts
+  const parsed = basename(filePath);
+  const archivedPath = join(orphanDir, `${Date.now()}_${process.pid}_${parsed}`);
+  ```
+
+  更稳妥：
+
+  ```ts
+  function uniqueArchivePath(dir: string, name: string): string {
+    const ts = Date.now();
+    const rand = Math.random().toString(36).slice(2, 8);
+    return join(dir, `${ts}_${rand}_${name}`);
+  }
+  ```
+
+  GC 建议作为 follow-up P2，但“避免覆盖”应在本 PR 修。
+
+---
+
+## 3) F3 raw archive 在 rename 失败时重复写入
+
+- **严重级别**：P1
+- **文件:行号**：`ce-hub/src/file-watcher.ts:194`, `ce-hub/src/file-watcher.ts:253-257`
+- **问题陈述**：  
+  PR 将 raw archive 前置：
+
+  ```ts
+  appendRaw('results.jsonl', { from, task_id: taskId, status, summary, output_files: outputFiles });
+  ```
+
+  这是正确方向，保证即使缺 task_id 也先存证据。但当前成功路径末尾：
+
+  ```ts
+  try { renameSync(filePath, processedPath); } catch (err) {
+    console.error(`[FileWatcher] failed to archive processed ${filePath}:`, err);
+  }
+
+  this.processingResults.delete(filePath);
+  ```
+
+  如果 `renameSync` 失败，源文件仍留在 `.ce-hub/results/`。因为 `processingResults` lock 被释放，30 秒 poll fallback 会再次处理同一个文件，并再次执行 `appendRaw`。  
+  如果失败是临时性的，可能产生多条重复 raw 记录；如果是永久性的，例如 `EACCES`、`EROFS`、目标路径冲突、跨设备问题等，会持续重复写入，理论上会无限堆积。
+- **建议修复**：  
+  至少需要让 raw append 幂等，或在 rename 失败时隔离失败文件。可选方案：
+
+  1. **在 raw 记录里加入 source file identity 并去重**：例如 `source_path`、`source_mtime`、`source_size`、hash。
+  2. **rename 失败时写 sidecar marker**，下次看到已处理 marker 不再 appendRaw。
+  3. **rename 失败时移动到 `_archive_failed/` 或 `_quarantine/`**；如果连这个都失败，则保留 lock/backoff 状态，避免 30 秒无限重处理。
+  4. **处理完成后先写入 processed ledger**，再尝试移动文件；后续 poll 根据 ledger 跳过。
+
+  对 P0 hotfix 来说，最小修复可以是：rename 失败时不要无条件释放重试频率，记录失败计数并 backoff，同时避免重复 appendRaw。
+
+---
+
+## 4) F4 `data.to` 缺失且 task 不在 DB 的极端情况
+
+- **严重级别**：P2
+- **文件:行号**：`ce-hub/src/file-watcher.ts:227-247`, `ce-hub/src/file-watcher.ts:253-257`
+- **问题陈述**：  
+  当前逻辑：
+
+  ```ts
+  let originAgent: string | undefined = task?.from_agent;
+  if (!originAgent && typeof data.to === 'string' && data.to) {
+    originAgent = data.to;
+  }
+  ```
+
+  如果 result 有 `task_id`，但 DB 里找不到 task，且 `data.to` 也缺失或不是 string，则：
+
+  - DB 不更新；
+  - 不通知任何 origin agent；
+  - 不设置 attention；
+  - 文件仍然被移动到 `_processed/`。
+
+  这不是本次 root cause 的“缺 task_id 被删除”，因为 raw archive 已保存，原文件也进入 `_processed/`，证据没有丢。但从调度语义看，这是一个“不可投递 result”。如果静默进入 `_processed/`，发起方可能永远不知道任务完成。
+- **建议修复**：  
+  建议区分两类 quarantine：
+
+  - 缺 task id：`results/_orphan_no_task_id/`
+  - 有 task id 但无法定位 origin：`results/_orphan_no_origin/` 或 `results/_undeliverable/`
+
+  并写 warning event：
+
+  ```ts
+  this.store.createEvent({
+    type: 'result_undeliverable',
+    agent: from,
+    payload: { taskId, reason: 'task_not_found_and_no_to', status, summary },
+  });
+  ```
+
+  如果希望保持 P0 hotfix 最小化，当前行为可暂时接受，但应至少 `console.warn` 并补测试。
+
+---
+
+## 5) 正常 result 路径回归风险：`unlinkSync` 被 `renameSync` 取代
+
+- **严重级别**：Info
+- **文件:行号**：`ce-hub/src/file-watcher.ts:249-257`
+- **问题陈述**：  
+  正常路径从删除 result 文件改成移动到 `_processed/`：
+
+  ```ts
+  const processedDir = join(getCeHubDir(), 'results', '_processed');
+  ensureDir(processedDir);
+  const processedPath = join(processedDir, basename(filePath));
+  try { renameSync(filePath, processedPath); } catch (err) {
+    console.error(`[FileWatcher] failed to archive processed ${filePath}:`, err);
+  }
+  ```
+
+  这通常是正确修复：保留证据，避免误删。现有正常 result 的核心流程没有明显被破坏：pending 清理、DB 更新、通知、attention、DAG trigger、inbox cleanup 都仍执行。
+
+  需要注意的回归点：
+
+  1. `_processed/` 需要增长管理，否则长期积累。
+  2. 目标文件名冲突风险与 orphan 一样存在。
+  3. 如果 watcher/poller 会扫描子目录，移动到 `_processed/` 可能导致二次处理；需要确认 poll 只处理 results 根目录下的 result 文件，而不是递归扫描。
+  4. 原来 `unlinkSync` 的副作用是“源文件必然消失”。现在如果 `renameSync` 失败，源文件会留在原位，导致重复处理。
+- **建议修复**：  
+  `renameSync` 替代 `unlinkSync` 的方向正确。建议补唯一文件名、防重复处理，以及 `_processed/` GC/follow-up issue。
+
+---
+
+## 6) race condition：watch 事件 + 30s poll 同时命中
+
+- **严重级别**：Info
+- **文件:行号**：`ce-hub/src/file-watcher.ts:185-257`
+- **问题陈述**：  
+  从 diff 可见，`processingResults` 在处理过程中会持有 filePath 级别的 dedup lock，并在 return 前释放。只要 `handleResult()` 开头已有类似逻辑：
+
+  ```ts
+  if (this.processingResults.has(filePath)) return;
+  this.processingResults.add(filePath);
+  ```
+
+  那么 watch 事件和 30 秒 poll 同时命中同一个 `filePath` 时，Node 单线程同步执行模型下基本可以防止并发双处理。rename 之前 lock 仍然有效。
+
+  但保护并非“完整”：
+
+  1. lock key 是 `filePath`，不是 inode/content hash。相同文件被不同路径观察到时无法 dedup。
+  2. 如果 poll 在 rename 前已经枚举了文件，rename 后再调用旧路径，可能读不到文件；这通常是安全的。
+  3. 如果 rename 失败，lock 释放后下一轮 poll 会重新处理，产生重复 raw archive 和重复通知。
+  4. 如果移动到 `_processed/` 后 watcher 也监听子目录或递归扫描，可能用新路径再次处理。
+- **建议修复**：  
+  当前 race 保护对“同一路径并发进入”基本足够。建议增强：
+
+  - 明确 poll 不递归扫描 `_processed/`、`_orphan_no_task_id/`；
+  - 对 processed/orphan/quarantine 目录加 ignore；
+  - 对 rename 失败场景加 backoff/ledger，避免重复处理；
+  - raw archive 增加 source identity，便于去重。
+
+---
+
+## 7) `renameSync` 失败时的 graceful fallback
+
+- **严重级别**：P1
+- **文件:行号**：`ce-hub/src/file-watcher.ts:204-212`, `ce-hub/src/file-watcher.ts:253-257`
+- **问题陈述**：  
+  当前 orphan 路径和 processed 路径的 `renameSync` 失败处理都只是打印日志：
+
+  ```ts
+  try {
+    renameSync(filePath, archivedPath);
+  } catch (err) {
+    console.error(...);
+  }
+  ```
+
+  对 orphan 分支来说，rename 失败后函数 return，lock 释放，源文件仍在原位置。下一轮 poll 会重复 raw archive，并再次尝试移动。  
+  对正常 processed 分支来说，rename 失败后也会释放 lock，源文件留在原地，后续重复 DB update、重复通知、重复 downstream trigger、重复 appendRaw。
+
+  临时错误，例如 `EBUSY`、`EAGAIN`，应该重试或 backoff；永久错误，例如 `EACCES`、`EROFS`，当前会导致无限循环。
+- **建议修复**：  
+  建议实现分级 fallback：
+
+  1. **生成唯一目标路径，先消除 EEXIST/覆盖类问题**。
+  2. **短重试**：对 `EBUSY`、`EAGAIN`、`EPERM` 可重试 2-3 次，间隔 100-500ms。
+  3. **失败隔离**：重试仍失败时，写入 `_archive_failed/` ledger 或 `.failed.json` marker，记录 source path、error code、处理结果 hash，后续 poll 看到 marker 后不再重复业务处理。
+  4. **幂等业务处理**：在 DB/event/raw 层面记录 result source，避免重复通知和重复 downstream trigger。
+  5. **最后兜底**：如果无法移动文件，至少不要重复 appendRaw 和重复 trigger；可以保留文件原地，但标记为 handled-failed-archive。
+
+  最小 patch 示例：
+
+  ```ts
+  const archived = tryArchiveResult(filePath, processedDir);
+  if (!archived.ok) {
+    this.store.createEvent({
+      type: 'result_archive_failed',
+      agent: from,
+      payload: { taskId, filePath, error: archived.error },
+    });
+    this.failedResultArchives.set(filePath, Date.now());
+  }
+  ```
+
+---
+
+## 8) 测试覆盖完整度
+
+- **严重级别**：P2
+- **文件:行号**：`ce-hub/test/file-watcher-orphan.test.ts:48-125`
+- **问题陈述**：  
+  现有 5 个测试覆盖了核心 P0 场景：
+
+  - 缺 task_id 不删除，进入 `_orphan_no_task_id/`；
+  - `ref_dispatch` fallback；
+  - `data.to` fallback；
+  - orphan 也写 raw；
+  - success path 移动到 `_processed/`。
+
+  但还有几个明显缺口：
+
+  1. 没测 `ref_task` fallback。
+  2. 没测 `dispatch_id` fallback。
+  3. 没测 fallback 优先级，例如同时存在 `task_id` 和 `ref_dispatch` 时应使用 `task_id`。
+  4. 没测空字符串行为，例如 `task_id: ""`, `ref_dispatch: "task_x"`。
+  5. 没测非字符串字段，例如 `task_id: {}`。
+  6. 没测 `renameSync` 失败导致重复 raw archive 或重复处理。
+  7. 没测 task 不在 DB 且 `data.to` 缺失的不可投递结果。
+  8. 没测目标文件名冲突。
+- **建议修复**：  
+  建议本 PR 至少补以下测试：
+
+  - `fallback: ref_task is honored`
+  - `fallback: dispatch_id is honored`
+  - `fallback: task_id has priority over ref_dispatch`
+  - `fallback: empty task_id falls through to ref_dispatch`
+  - `undeliverable: task not found and no data.to is quarantined or warned`
+  - `archive: duplicate basename does not overwrite existing orphan/processed`
+  - `archive failure: does not append raw repeatedly / records archive_failed`
+
+  如果时间紧，rename failure 可以通过抽象 archive 函数后 mock，或者将文件权限设置为不可写目录进行集成测试，但跨平台权限测试需要谨慎。
+
+---
+
+# 总体结论：REQUEST_CHANGES
+
+PR #22 的修复方向是正确的，四个目标 F1-F4 基本覆盖了 P0 root cause：不再因为缺 `task_id` 直接 `unlinkSync` 删除证据，并且 raw archive 前置是必要改动。
+
+但当前实现还有两个与“证据不丢”和“避免重复处理”直接相关的问题，建议在合入前修：
+
+1. **归档文件名冲突可能覆盖已有证据**，尤其是 orphan 和 processed 都只用 `basename(filePath)`。
+2. **`renameSync` 失败后释放 lock，源文件留在原位，会被 poll 反复处理，导致 raw 无限重复、通知/DB/downstream 重复触发。**
+
+这两个问题虽然不是原始 P0 root cause，但会在异常文件系统状态下重新制造证据损坏或系统风暴。因此建议 `REQUEST_CHANGES`：至少补唯一归档路径和 rename 失败的去重/backoff/隔离策略；其余 GC、更多 fallback 测试、undeliverable quarantine 可作为紧随其后的 P1/P2 follow-up。
+
+=== USAGE ===
+{
+  "prompt_tokens": 3872,
+  "completion_tokens": 4336,
+  "total_tokens": 8208,
+  "prompt_tokens_details": {
+    "cached_tokens": 0,
+    "text_tokens": 0,
+    "audio_tokens": 0,
+    "image_tokens": 0
+  },
+  "completion_tokens_details": {
+    "text_tokens": 0,
+    "audio_tokens": 0,
+    "image_tokens": 0,
+    "reasoning_tokens": 0
+  },
+  "input_tokens": 3872,
+  "output_tokens": 4336,
+  "input_tokens_details": null,
+  "claude_cache_creation_5_m_tokens": 0,
+  "claude_cache_creation_1_h_tokens": 0
+}

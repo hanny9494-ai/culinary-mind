@@ -1,0 +1,582 @@
+## 总体结论：REQUEST_CHANGES
+
+PR #23 确实修掉了大部分上轮 P1：Q2 basename 覆盖基本解决；Q3 在“普通 archive rename transient failure → 后续成功/隔离成功”的路径上实现了跨调用幂等；Q7 的 3-tier fallback 主路径也有测试覆盖。
+
+但仍有一个我认为需要阻塞的 P1：当 Tier 3 `_archive_failed/` quarantine rename 也失败时，代码会清空幂等状态并 `return true`，但源文件仍留在 `results/`。下一轮 30s poll 会重新执行 appendRaw / DB update / downstream 等 side effects，重新计数，再失败，再循环。这在“源文件持续 EBUSY/EPERM”的情况下不是纯理论边界，会重新引入上轮 Q3 的重复副作用问题。
+
+---
+
+# Findings
+
+## P1 — quarantine rename 失败后会清空幂等状态，导致下一轮 poll 重复 side effects
+
+**文件:行号**  
+`ce-hub/src/file-watcher.ts:251-269`
+
+**问题陈述**  
+`archiveWithRetry()` 在主 archive rename 连续失败 5 次后尝试把文件移动到 `_archive_failed/`：
+
+```ts
+try {
+  this.safeRenameSync(filePath, failedPath);
+  quarantined = true;
+} catch (qErr) {
+  ...
+}
+
+appendRaw('archive_failures.jsonl', ...);
+
+this.failedRenameCount.delete(filePath);
+this.processedSideEffects.delete(filePath);
+return true;
+```
+
+如果 quarantine rename 也失败：
+
+1. 文件仍然留在原始 `results/*.json` 路径；
+2. `processedSideEffects.delete(filePath)` 清掉了幂等标记；
+3. `failedRenameCount.delete(filePath)` 清掉了失败计数；
+4. `archiveWithRetry()` 返回 `true`，调用方认为“处理结束”；
+5. 下一轮 30s poll 再次扫到同一个文件；
+6. `sideEffectsAlreadyRun === false`；
+7. appendRaw / createEvent / updateTask / inbox forward / triggerDownstream / unlinkSync 又会再跑一遍；
+8. 再重复 5 次失败后再次写 marker，形成无限循环。
+
+这会重新引入上轮 Q3 的核心问题：rename 持续失败时重复 raw append、DB update、downstream trigger 等副作用。
+
+**严重级别判断**  
+我建议定为 **P1**，不是 P2。原因是上轮必修项 Q3/Q7 的目标就是防止 archive rename failure 导致重复 side effects，并提供可终止的 fallback。当前实现在 Tier 3 quarantine 失败时仍会重复副作用，且源文件 EBUSY/EPERM 持续失败是现实可发生的情况，尤其在 Windows、同步盘、杀软、外部进程占用文件时。
+
+**建议修复**  
+至少需要保证：只要源文件还在原位，就不能清掉 `processedSideEffects`。
+
+一种修法：
+
+```ts
+if (count >= FileWatcher.MAX_RENAME_RETRIES) {
+  ...
+  let quarantined = false;
+  try {
+    this.safeRenameSync(filePath, failedPath);
+    quarantined = true;
+  } catch (qErr) {
+    ...
+  }
+
+  appendRaw('archive_failures.jsonl', {
+    ...
+    quarantined_to: quarantined ? failedPath : null,
+  });
+
+  if (quarantined) {
+    this.failedRenameCount.delete(filePath);
+    this.processedSideEffects.delete(filePath);
+    return true;
+  }
+
+  // Source still exists. Preserve idempotency.
+  this.failedRenameCount.set(filePath, FileWatcher.MAX_RENAME_RETRIES);
+  this.processedSideEffects.add(filePath);
+  return false;
+}
+```
+
+更完整的方案：
+
+- 增加 `archiveFailureMarkersWritten` / `terminalArchiveFailures` Set，避免每轮 poll 都 append `archive_failures.jsonl`；
+- quarantine 失败后继续保留 `processedSideEffects`；
+- 后续 poll 只重试 quarantine 或跳过 side effects；
+- 如果要“surrender”，也必须有 tombstone 状态防止重复处理同一 filePath。
+
+**需要新增测试**  
+增加测试覆盖：
+
+- 主 archive rename 失败 5 次；
+- `_archive_failed/` rename 也失败；
+- 源文件仍存在；
+- 后续再调用 `handleResult()` 不应重复写 `raw/results.jsonl`，不应重复 createEvent/updateTask/downstream；
+- `archive_failures.jsonl` 最好不应无限增长，或者至少应有 rate limit / single marker。
+
+---
+
+## P2 — `processedSideEffects` / `failedRenameCount` 在源文件被外部删除时可能泄漏
+
+**文件:行号**  
+`ce-hub/src/file-watcher.ts:80-89`, `ce-hub/src/file-watcher.ts:234-269`, `ce-hub/src/file-watcher.ts:365`
+
+**问题陈述**  
+`processedSideEffects` 和 `failedRenameCount` 的生命周期依赖 archive success 或 quarantine success/finalization：
+
+```ts
+this.failedRenameCount.delete(filePath);
+this.processedSideEffects.delete(filePath);
+```
+
+但如果流程是：
+
+1. side effects 已执行；
+2. archive rename 失败；
+3. `processedSideEffects.add(filePath)` 已设置；
+4. 文件被用户、外部清理脚本、同步工具删除；
+5. 之后 `processExisting(resultsDir)` 不再看到该文件；
+
+那么这两个 map/set 的 entry 没有机会被清理。长期运行的 watcher 如果遇到大量此类文件，可能造成无界增长。
+
+**严重级别判断**  
+建议定为 **P2**。这不是立即数据损坏，但属于长期进程的内存/状态泄漏。
+
+**建议修复**
+
+可选方案：
+
+1. 在 30s poll 中做 sweep：
+
+```ts
+for (const filePath of this.processedSideEffects) {
+  if (!existsSync(filePath)) this.processedSideEffects.delete(filePath);
+}
+
+for (const filePath of this.failedRenameCount.keys()) {
+  if (!existsSync(filePath)) this.failedRenameCount.delete(filePath);
+}
+```
+
+2. 或把 value 改成 `{ count, firstSeen, lastSeen }`，加 TTL / max size；
+3. 或在 `handleResult()` 开头如果 `!existsSync(filePath)`，清理对应状态。
+
+---
+
+## P2 — polling fallback interval 没有保存，`stop()` 无法清理
+
+**文件:行号**  
+`ce-hub/src/file-watcher.ts:130-133`, `ce-hub/src/file-watcher.ts:426-432`
+
+**问题陈述**  
+`start()` 里创建了一个 30s poll interval：
+
+```ts
+setInterval(() => {
+  this.processExisting(dispatchDir, (f) => this.handleDispatch(f));
+  this.processExisting(resultsDir, (f) => this.handleResult(f));
+}, 30_000);
+```
+
+但没有保存到字段，`stop()` 只清理了：
+
+```ts
+if (this.nudgeTimer) clearInterval(this.nudgeTimer);
+if (this.taskTimeoutTimer) clearInterval(this.taskTimeoutTimer);
+for (const w of this.watchers) w.close();
+```
+
+这意味着调用 `stop()` 后 polling interval 仍然活着，可能继续处理文件、持有 watcher 实例、导致测试进程或长期进程泄漏。
+
+**严重级别判断**  
+如果这是 PR #23 之前已有的问题，可以不作为本 PR blocker，但它和本次“内存泄漏 / race condition”审查相关，建议至少 P2 follow-up。若当前 PR touching watcher lifecycle，也可以顺手修。
+
+**建议修复**
+
+增加字段：
+
+```ts
+private pollTimer: ReturnType<typeof setInterval> | null = null;
+```
+
+start：
+
+```ts
+this.pollTimer = setInterval(...);
+```
+
+stop：
+
+```ts
+if (this.pollTimer) clearInterval(this.pollTimer);
+this.pollTimer = null;
+```
+
+---
+
+## P2 — handleResult side-effect block 不是异常安全的，部分 side effect 成功后抛错会导致下轮重复执行
+
+**文件:行号**  
+`ce-hub/src/file-watcher.ts:298-365`
+
+**问题陈述**  
+`processedSideEffects.add(filePath)` 只在整个 side-effect block 末尾执行：
+
+```ts
+...
+this.store.createEvent(...)
+...
+this.store.updateTask(...)
+...
+writeFileSync(...)
+...
+this.engine.triggerDownstream(taskId)
+...
+this.processedSideEffects.add(filePath);
+```
+
+如果中间任一操作抛异常，例如：
+
+- `store.createEvent()` 抛；
+- `store.updateTask()` 抛；
+- `writeFileSync()` 写 origin inbox 抛；
+- `writeAttention()` 间接写文件失败虽然目前吞了；
+- 其他同步 I/O 抛；
+
+则 `finally` 会释放 `processingResults`，但不会设置 `processedSideEffects`，源结果文件也可能仍在 `results/`，下一轮 poll 会重新执行已经成功过的前半部分副作用。
+
+**严重级别判断**  
+建议 P2。当前测试 store 都不抛，主路径没问题，但这仍是幂等语义上的缺口。
+
+**建议修复**
+
+可选：
+
+1. 把关键副作用拆成更细粒度 ledger；
+2. 或在 appendRaw / createEvent 之后尽早记录一个“processing ledger”；
+3. 或对 store/update/downstream 分别 try/catch，确保最终进入 archive path；
+4. 至少保证 appendRaw 不会因为后续 DB 错误而无限重复。
+
+---
+
+## P2 — `processedSideEffects` 以 filePath 为 key，若同路径文件被替换，可能误跳过新文件 side effects
+
+**文件:行号**  
+`ce-hub/src/file-watcher.ts:282-365`
+
+**问题陈述**  
+幂等 key 是 `filePath`：
+
+```ts
+const sideEffectsAlreadyRun = this.processedSideEffects.has(filePath);
+```
+
+如果 archive rename 失败后，原文件仍在路径上，随后外部进程覆盖同一路径为另一个 result，下一轮 poll 会认为 side effects 已经执行，直接跳过新内容的 appendRaw / DB update / downstream 等。
+
+这不是最常见路径，但对 watcher 来说，同名 result 文件被覆盖是可能的。
+
+**严重级别判断**  
+P2 / edge case。
+
+**建议修复**
+
+用更强的 identity：
+
+- `filePath + mtimeMs + size`;
+- 或 content hash；
+- 或读取 JSON 后使用 `taskId + from + status + summary hash`；
+- 或在 `processedSideEffects` value 中存文件 stat/content fingerprint，发现变化则按新文件处理。
+
+---
+
+## Info / P2 — L1 `firstNonEmptyString` 没有覆盖 handleDispatch 和部分 result 字段
+
+**文件:行号**  
+`ce-hub/src/file-watcher.ts:44-52`, `ce-hub/src/file-watcher.ts:154-158`, `ce-hub/src/file-watcher.ts:289-290`
+
+**问题陈述**  
+新增 helper 本身实现合理：
+
+```ts
+function firstNonEmptyString(...vals: unknown[]): string | undefined
+```
+
+在 result 处理里用了：
+
+```ts
+const from = firstNonEmptyString(data.from, data.dispatched_by) ?? 'cc-lead';
+const taskId = firstNonEmptyString(data.task_id, data.ref_dispatch, data.ref_task, data.dispatch_id);
+...
+const dataTo = firstNonEmptyString(data.to);
+```
+
+但 `handleDispatch()` 仍然是旧的 `||` 链：
+
+```ts
+const from = (data.from || data.dispatched_by || "cc-lead") as string;
+const to = (data.to || data.dispatched_to) as string;
+const task = data.task as string;
+const taskId = data.id as string || `dispatch_${Date.now()}`;
+const priority = (data.priority as number) || 1;
+```
+
+此外 result 的 `summary` / `content` 仍使用：
+
+```ts
+const summary = (data.summary as string) || (data.content as string) || '';
+const outputFiles = data.output_files as string[] || [];
+```
+
+所以 L1 “strict string check” 只部分落地。非字符串 truthy 值仍可能流入 dispatch 逻辑，空字符串 fallback 行为在 dispatch/result summary 上也不一致。
+
+**严重级别判断**  
+如果 L1 是 PR 自带 P2 improvement，则这是 **P2 completeness gap**，不是本轮 blocker。若只要求修上轮 P1，则可作为 follow-up。
+
+**建议修复**
+
+把 dispatch 也改成：
+
+```ts
+const from = firstNonEmptyString(data.from, data.dispatched_by) ?? 'cc-lead';
+const to = firstNonEmptyString(data.to, data.dispatched_to);
+const task = firstNonEmptyString(data.task) ?? 'Dispatched task';
+const taskId = firstNonEmptyString(data.id) ?? `dispatch_${Date.now()}`;
+```
+
+并对缺失 `to` 做明确处理，避免创建 `.ce-hub/inbox/undefined`。
+
+---
+
+## Info — `safeRenameSync` 测试 seam 可接受，但建议用测试子类而不是 runtime override protected
+
+**文件:行号**  
+`ce-hub/src/file-watcher.ts:214-216`, `ce-hub/test/file-watcher-orphan.test.ts:217`
+
+**问题陈述**  
+生产代码：
+
+```ts
+protected safeRenameSync(src: string, dst: string): void {
+  renameSync(src, dst);
+}
+```
+
+测试里通过 cast 覆盖：
+
+```ts
+(watcher as unknown as { safeRenameSync: (s: string, d: string) => void }).safeRenameSync = ...
+```
+
+TypeScript 的 `protected` 只在类型层生效，运行时确实可以这样覆盖。作为测试 seam，这个 pattern 可以工作。
+
+**严重级别判断**  
+Info。不是安全问题，也不是 runtime 问题。
+
+**建议**  
+为了更类型安全、可读性更好，可以改成测试子类：
+
+```ts
+class TestFileWatcher extends FileWatcher {
+  renameImpl?: (src: string, dst: string) => void;
+
+  protected override safeRenameSync(src: string, dst: string): void {
+    if (this.renameImpl) return this.renameImpl(src, dst);
+    return super.safeRenameSync(src, dst);
+  }
+}
+```
+
+---
+
+# 对 10 个必查项的逐项回答
+
+## 1. Q2 basename 冲突修复
+
+结论：**基本修复，够用。**
+
+`uniqueArchivePath()` 使用：
+
+```ts
+${stem}__${Date.now()}_${process.pid}_${rand}${ext}
+```
+
+其中 `rand = Math.random().toString(36).slice(2, 8)`，6 位 base36，组合空间约 `36^6 ≈ 2.18e9`。同一毫秒、同一 pid、同一 basename 下碰撞概率约 `1 / 36^6 ≈ 4.6e-10`。对于本地 file watcher archive 文件名防覆盖来说足够。
+
+两处 archive 都用了 unique path：
+
+- target archive dir；
+- `_archive_failed/` quarantine dir。
+
+测试 `Q2 — duplicate basename does not overwrite existing orphan` 覆盖了两次同名 orphan 都保留，测试方向正确。
+
+小建议：如果要严格防止极端碰撞导致 `renameSync` 覆盖已有文件，理论上还可以 loop `existsSync(dst)`，但我不认为这是 blocker。
+
+---
+
+## 2. Q3 跨调用幂等
+
+结论：**主路径修复，但 quarantine 也失败的路径仍破功。**
+
+正向路径：
+
+- 第一次处理执行 side effects；
+- `processedSideEffects.add(filePath)`；
+- archive rename 失败；
+- 下一轮 poll 进入；
+- `sideEffectsAlreadyRun === true`；
+- 跳过 appendRaw / createEvent / updateTask / inbox forward / downstream；
+- 只重试 archive。
+
+这部分设计是对的。
+
+但问题在 `count >= 5` 且 quarantine rename 也失败时，代码清空 `processedSideEffects`，源文件仍在原地，下一轮会重新跑 side effects。因此 Q3 不是完整修复。这个是本次 REQUEST_CHANGES 的主要原因。
+
+---
+
+## 3. Q7 三级 fallback
+
+结论：**Tier 1/2/3 主路径实现了，但 Tier 3 failure handling 有 P1 缺陷。**
+
+当前实现：
+
+- Tier 1：rename 到目标 archive dir；
+- Tier 2：失败后 `failedRenameCount++`，下轮 poll 短重试；
+- Tier 3：5 次失败后 rename 到 `_archive_failed/`，写 `raw/archive_failures.jsonl`。
+
+主路径 OK。
+
+但 quarantine rename 也失败时：
+
+```ts
+this.failedRenameCount.delete(filePath);
+this.processedSideEffects.delete(filePath);
+return true;
+```
+
+这个处理不安全。源文件还在，但状态被清掉，会造成下一轮重复 side effects 和重复 marker。
+
+我不建议把它视为“可接受的 truly broken FS 边界”。更准确地说，这是一个可以用状态机正确处理的边界，而且和上轮 Q3/Q7 的目标直接相关。建议 P1 修。
+
+---
+
+## 4. L1 firstNonEmptyString
+
+结论：**helper 本身 OK，但只部分应用。**
+
+实现没问题：
+
+- 只接受 string；
+- trim；
+- 拒绝空字符串；
+- 拒绝 `0`、`{}`、非字符串 truthy 值。
+
+使用在 result 的 `from`、`taskId`、`data.to` 上是正确的。
+
+但 `handleDispatch()` 仍使用旧 `||` 链，这算漏改。如果 L1 是 P2 improvement，则这是 P2 completeness issue，不阻塞上轮 P1；但建议 follow-up 修掉，尤其是 `to` 缺失时可能写入 `inbox/undefined`。
+
+---
+
+## 5. L2 `_undeliverable/`
+
+结论：**设计合理，测试覆盖 OK。**
+
+触发条件：
+
+- `taskId` 存在；
+- DB 里找不到 task；
+- result payload 里也没有可用 `to`；
+- 无法解析 origin agent。
+
+行为：
+
+- 标准 result raw line；
+- 额外 append `type: 'undeliverable'` marker；
+- create `result_undeliverable` event；
+- archive 到 `.ce-hub/inbox/_undeliverable/`。
+
+路径放在 `inbox/_undeliverable/` 而不是 `results/_undeliverable/` 我认为可以接受：这是“需要人工/lead 收件处理”的语义，不是单纯 processed result。且 watcher 只扫 `results/` 顶层，不会重新处理 inbox 下的文件。
+
+测试 `L2 — undeliverable` 覆盖了基本行为。
+
+---
+
+## 6. 内存泄漏
+
+结论：**有 P2 风险。**
+
+`failedRenameCount` 和 `processedSideEffects` 如果遇到 archive transient failure 后文件被外部删除，不会自动清理。长期运行可能增长。
+
+另外 `start()` 里的 30s polling interval 没有保存，`stop()` 清不掉，也是生命周期泄漏，不过这可能是既有问题。
+
+建议加 sweep / TTL / max size，并保存 poll timer。
+
+---
+
+## 7. handleDispatch 仍 unlinkSync
+
+结论：**不在本次 Q2/Q3/Q7 result hotfix 的核心范围内，但应 follow-up。**
+
+`handleDispatch()` 最后仍然：
+
+```ts
+try { unlinkSync(filePath); } catch {}
+```
+
+dispatch 文件处理后直接删除，没有 processed archive，也没有 retry/quarantine。这个问题不是 PR #23 声称修复的 result archive path，但从证据保全角度看，dispatch 文件失败/删除策略仍弱。
+
+考虑到 dispatch 已经 appendRaw 到 `dispatches.jsonl`，数据不一定完全丢，但原始 JSON 文件不保留。建议后续统一改为 archiveWithRetry 或类似 helper。
+
+---
+
+## 8. safeRenameSync 测试 seam
+
+结论：**可接受。**
+
+`protected` 在 TypeScript runtime 没有强制约束，测试通过 cast override 可以运行。作为测试 seam 安全性没问题。
+
+不过更推荐用测试子类 override `protected safeRenameSync()`，避免直接 monkey patch protected 方法，提高类型可读性。
+
+---
+
+## 9. 测试覆盖缺口
+
+当前新增测试覆盖了：
+
+- Q2 basename collision；
+- Q3/Q7：5 次 EBUSY 后 quarantine 成功；
+- L2 undeliverable；
+- raw archive for orphan；
+- ref_dispatch fallback；
+- data.to fallback。
+
+仍缺：
+
+1. **quarantine rename 也失败**：必须新增，当前有 P1 bug；
+2. transient failure 后成功：例如前 4 次失败，第 5 次 target archive 成功，不应写 `_archive_failed/` marker；
+3. `ref_task` fallback；
+4. `dispatch_id` fallback；
+5. fallback 优先级：`task_id` 与 `ref_dispatch` 同时存在时 `task_id` 应赢；
+6. 空字符串字段：`task_id: ""`, `ref_dispatch: "x"` 应 fallback 到 ref_dispatch；
+7. 非字符串字段：`task_id: 123` 不应被当成 task id；
+8. store/update/downstream 抛异常时是否重复 side effects；
+9. 外部删除源文件后的 map/set cleanup；
+10. 同路径文件被替换后的 fingerprint/idempotency 行为。
+
+---
+
+## 10. 总体结论
+
+**REQUEST_CHANGES**
+
+阻塞项只有一个核心 P1：
+
+- `archiveWithRetry()` 在 quarantine rename 也失败时清空幂等状态并返回成功，导致源文件留在 `results/` 后下一轮 poll 重复 side effects。
+
+修掉这个，并补一条对应测试后，我倾向于 approve。Q2 的 unique archive path、普通 Q3/Q7 retry/quarantine 主路径、L2 undeliverable 方向都基本正确。
+
+=== USAGE ===
+{
+  "prompt_tokens": 12715,
+  "completion_tokens": 6357,
+  "total_tokens": 19072,
+  "prompt_tokens_details": {
+    "cached_tokens": 0,
+    "text_tokens": 0,
+    "audio_tokens": 0,
+    "image_tokens": 0
+  },
+  "completion_tokens_details": {
+    "text_tokens": 0,
+    "audio_tokens": 0,
+    "image_tokens": 0,
+    "reasoning_tokens": 0
+  },
+  "input_tokens": 12715,
+  "output_tokens": 6357,
+  "input_tokens_details": null,
+  "claude_cache_creation_5_m_tokens": 0,
+  "claude_cache_creation_1_h_tokens": 0
+}
