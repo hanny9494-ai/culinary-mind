@@ -1,5 +1,5 @@
-import { watch, readFileSync, writeFileSync, appendFileSync, readdirSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { watch, readFileSync, writeFileSync, appendFileSync, readdirSync, unlinkSync, existsSync, mkdirSync, renameSync } from 'node:fs';
+import { join, dirname, basename } from 'node:path';
 import type { TmuxManager } from './tmux-manager.js';
 import type { StateStore } from './state-store.js';
 import type { TaskEngine } from './task-engine.js';
@@ -185,27 +185,15 @@ export class FileWatcher {
     if (!data) { this.processingResults.delete(filePath); return; }
 
     const from = (data.from || data.dispatched_by || "cc-lead") as string;
-    const taskId = data.task_id as string;
+    const taskId = (data.task_id || data.ref_dispatch || data.ref_task || data.dispatch_id) as string | undefined;
     const status = data.status as string;
     const summary = (data.summary as string) || (data.content as string) || '';
     const outputFiles = data.output_files as string[] || [];
 
-    console.log(`[FileWatcher] result: ${from} completed ${taskId}: ${status}`);
+    console.log(`[FileWatcher] result: ${from} completed ${taskId ?? '(no-task-id)'}: ${status}`);
 
-    // Clear from pending
-    if (taskId) this.pendingResults.delete(taskId);
-
-    // Update task in DB
-    if (taskId) {
-      const task = this.store.getTask(taskId);
-      if (task) {
-        this.store.updateTask(taskId, {
-          status: status === 'done' ? 'done' : 'failed',
-          result: data as Record<string, unknown>,
-          completed_at: Date.now(),
-        });
-      }
-    }
+    // Archive to raw/ for wiki compiler before any result-specific branching.
+    appendRaw('results.jsonl', { from, task_id: taskId, status, summary, output_files: outputFiles });
 
     // Log event
     this.store.createEvent({
@@ -213,50 +201,75 @@ export class FileWatcher {
       payload: { taskId, status, summary, outputFiles },
     });
 
-    // Notify originating agent (from task record)
-    if (taskId) {
-      const task = this.store.getTask(taskId);
-      if (task && task.from_agent) {
-        const originInbox = join(getCeHubDir(), 'inbox', task.from_agent);
-        ensureDir(originInbox);
-        writeFileSync(join(originInbox, `result_${from}_${Date.now()}.json`), JSON.stringify({
-          id: `result_${Date.now()}`, from, type: 'result',
-          content: `[${from} ${status}] ${summary || '(no summary)'}`, task_id: taskId,
-          output_files: outputFiles, created_at: new Date().toISOString(),
-        }, null, 2));
+    if (!taskId) {
+      const orphanDir = join(getCeHubDir(), 'results', '_orphan_no_task_id');
+      ensureDir(orphanDir);
+      const archivedPath = join(orphanDir, basename(filePath));
+      try {
+        renameSync(filePath, archivedPath);
+        console.warn(`[FileWatcher] result file lacks task_id, archived to ${archivedPath}`);
+      } catch (err) {
+        console.error(`[FileWatcher] failed to archive orphan ${filePath}:`, err);
+      }
+      this.processingResults.delete(filePath);
+      return;
+    }
 
-        // Nudge originating agent
-        if (this.tmux.isAlive(task.from_agent)) {
-          this.tmux.sendMessage(task.from_agent, `Task completed by ${from}: ${summary?.slice(0, 200)}`);
-        }
+    // Clear from pending
+    this.pendingResults.delete(taskId);
+
+    // Update task in DB
+    const task = this.store.getTask(taskId);
+    if (task) {
+      this.store.updateTask(taskId, {
+        status: status === 'done' ? 'done' : 'failed',
+        result: data as Record<string, unknown>,
+        completed_at: Date.now(),
+      });
+    }
+
+    let originAgent: string | undefined = task?.from_agent;
+    if (!originAgent && typeof data.to === 'string' && data.to) {
+      originAgent = data.to;
+    }
+
+    // Notify originating agent (from task record or result fallback)
+    if (originAgent) {
+      const originInbox = join(getCeHubDir(), 'inbox', originAgent);
+      ensureDir(originInbox);
+      writeFileSync(join(originInbox, `result_${from}_${Date.now()}.json`), JSON.stringify({
+        id: `result_${Date.now()}`, from, type: 'result',
+        content: `[${from} ${status}] ${summary || '(no summary)'}`, task_id: taskId,
+        output_files: outputFiles, created_at: new Date().toISOString(),
+      }, null, 2));
+
+      // Nudge originating agent
+      if (this.tmux.isAlive(originAgent)) {
+        this.tmux.sendMessage(originAgent, `Task completed by ${from}: ${summary?.slice(0, 200)}`);
       }
     }
 
-    // Archive to raw/ for wiki compiler
-    appendRaw('results.jsonl', { from, task_id: taskId, status, summary, output_files: outputFiles });
-
     // Set attention for originating agent so they see task completion in nav bar
-    if (taskId) {
-      const task = this.store.getTask(taskId);
-      if (task?.from_agent) writeAttention(task.from_agent, true);
-    }
+    if (originAgent) writeAttention(originAgent, true);
 
     // Trigger downstream DAG tasks
-    if (taskId && status === 'done' && this.engine) {
+    if (status === 'done' && this.engine) {
       try { this.engine.triggerDownstream(taskId); } catch (err) {
         console.error(`[FileWatcher] failed to trigger downstream for ${taskId}:`, err);
       }
     }
 
     // Clean up inbox file for this task
-    if (taskId) {
-      const inboxFile = join(getCeHubDir(), 'inbox', from, `${taskId}.json`);
-      try { unlinkSync(inboxFile); } catch {}
-    }
+    const inboxFile = join(getCeHubDir(), 'inbox', from, `${taskId}.json`);
+    try { unlinkSync(inboxFile); } catch {}
 
-    // Delete result file after processing to prevent 30s poll from reprocessing it
-    // (mirrors handleDispatch behavior — symmetric cleanup)
-    try { unlinkSync(filePath); } catch {}
+    // Move result file after processing to prevent 30s poll from reprocessing it.
+    const processedDir = join(getCeHubDir(), 'results', '_processed');
+    ensureDir(processedDir);
+    const processedPath = join(processedDir, basename(filePath));
+    try { renameSync(filePath, processedPath); } catch (err) {
+      console.error(`[FileWatcher] failed to archive processed ${filePath}:`, err);
+    }
 
     // Release dedup lock
     this.processingResults.delete(filePath);
