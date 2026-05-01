@@ -1,12 +1,13 @@
 # code-map.yaml — repo-curator 独占维护
 # 版本: 1.0 (初始盘点)
-# 更新: 2026-04-24
+# 更新: 2026-05-02
 # 维护者: repo-curator agent
 
-version: "1.1"
+version: "1.2"
 status: "draft"  # draft → reviewed → locked
-last_updated: "2026-04-24"
+last_updated: "2026-05-02"
 changelog:
+  - "1.2 (2026-05-02): PR #22/#23 合并，D65-D70 决策，新增 engine/solver/ 模块，raw/code-reviewer/ 档案，wiki/operations/cold-start-runbook.md，OpenClaw 残留文件清理报告"
   - "1.1 (2026-04-24): 根目录杂文件清理完成 — 12个垃圾文件删除，7个OpenClaw残留归档至 _archive/openclaw-legacy/，run_signal_router_batch.sh 移入 scripts/"
 
 # ═══════════════════════════════════════════════════════
@@ -31,14 +32,15 @@ directories:
       _archive/: "已废弃的 pipeline 代码"
 
   engine/:
-    purpose: "核心引擎 — 求解器 + 推理（Phase 1D/4B，待建）"
-    status: planned
+    purpose: "核心引擎 — 求解器 + 推理（Phase 1D/4B）"
+    status: active
     owner: coder
     children:
-      solver/:    "28 MF 数值求解器 + Choi-Okos + Fourier 1D"
-      tools/:     "Task-oriented wrapper（estimate_heating_time 等）"
-      agent/:     "LangGraph Agent（Phase 4B）"
-      retrieval/: "检索策略（Phase 4B）"
+      solver/:    "28 MF 数值求解器（首批 5/28 已实现：T01/T04/M01/K01/R01，PR #20）"
+      tools/:     "Task-oriented wrapper（estimate_heating_time 等，待建）"
+      agent/:     "LangGraph Agent（Phase 4B，待建）"
+      retrieval/: "检索策略（Phase 4B，待建）"
+    note: "D65 决策：不引入 SymPy/SciPy，所有 MF 手写解析解或数值解"
 
   graph/:
     purpose: "Neo4j 图谱构建/查询（Phase 1F/4A，待建）"
@@ -246,3 +248,97 @@ pending_migrations:
     description: "删除空目录 infrastructure/ memory/ logs/"
     status: planned
     risk: none
+
+# ═══════════════════════════════════════════════════════
+# 最近活动 (2026-05-01 ~ 2026-05-02)
+# ═══════════════════════════════════════════════════════
+
+recent_activity:
+  decisions:
+    - id: D65
+      title: "Solver library selection — no SymPy/SciPy, hand-coded analytical solutions"
+      date: "2026-05-01"
+      file: "wiki/decisions/D65-solver-library-selection.md"
+      impact: "engine/solver/ 所有 MF 手写解析解或数值解，不引入重量级依赖"
+
+    - id: D66
+      title: "Neo4j schema v2 locked — 7 node types + 11 edge types"
+      date: "2026-05-01"
+      file: "wiki/decisions/D66-neo4j-schema-v2-locked.md"
+      impact: "graph/ 模块 schema 锁定，可开始实现导入脚本"
+
+    - id: D67
+      title: "Architect dual-model consultation — Sonnet 4.6 draft + GPT-5.5 review"
+      date: "2026-05-01"
+      file: "wiki/decisions/D67-architect-dual-model-consultation.md"
+      impact: "Architect 工作流升级：草稿用 Sonnet 4.6，review 用 GPT-5.5"
+
+    - id: D69
+      title: "Code-reviewer GPT-5.5 review protocol — >20 lines or multi-file triggers GPT-5.5"
+      date: "2026-05-01"
+      file: "wiki/decisions/D69-code-reviewer-gpt55-review.md"
+      impact: "code-reviewer 工作流：小改动 Sonnet，大改动 GPT-5.5 双审"
+
+    - id: D70
+      title: "Lingya API unify — all Gemini calls via Lingya OpenAI-compatible endpoint"
+      date: "2026-05-01"
+      file: "wiki/decisions/D70-lingya-api-unify.md"
+      impact: "config/api.yaml, scripts/, src/ 所有 Gemini 调用改走 Lingya (PR #21)"
+
+  prs:
+    - number: 20
+      title: "feat(P1-17): atomic MF solvers — first batch (MF-T01/T04/M01/K01/R01)"
+      status: "OPEN (awaiting code-reviewer GPT-5.5 review)"
+      branch: "feat/p1-17-mf-tools-batch1"
+      files: "engine/solver/ (5 MF solvers + 32 tests)"
+      impact: "首批 5/28 MF 求解器实现"
+
+    - number: 21
+      title: "feat(D70): unify all Gemini calls to Lingya API"
+      status: "OPEN (coder dispatched to fix embedding — should use local Ollama, not Lingya)"
+      branch: "feat/d70-gemini-lingya-unify"
+      files: "config/api.yaml, scripts/agent_pipeline.py, scripts/y_s1/import_l0_neo4j.py, src/evaluation/run_ragas.py, tests/"
+      issue: "embedding 应该用 Ollama qwen3-embedding:8b（本地免费），不应走 Lingya 付费 API"
+
+    - number: 22
+      title: "fix(P0): file-watcher orphan handling + task_id field fallback"
+      status: "CLOSED (superseded by PR #23)"
+      date_closed: "2026-05-02"
+
+    - number: 23
+      title: "fix(P1): PR #22 revisions — basename uniqueness + rename retry + undeliverable handling"
+      status: "MERGED (commit db730d1, 2026-05-02)"
+      branch: "fix/p1-pr22-revisions"
+      files: "ce-hub/src/file-watcher.ts, ce-hub/test/file-watcher-orphan.test.ts"
+      impact: "ce-hub file-watcher 增强：唯一归档路径、重试机制、undeliverable 分类、8 个测试覆盖"
+
+  new_files:
+    - path: "engine/solver/"
+      type: "module"
+      status: "active (first batch 5/28 MF, PR #20)"
+      note: "28 MF 求解器库，首批 T01/T04/M01/K01/R01 已实现"
+
+    - path: "raw/code-reviewer/"
+      type: "archive"
+      status: "tracked (committed to main 77cf74c)"
+      note: "PR review 报告 + GPT-5.5 consultation 原始记录档案"
+
+    - path: "raw/repo-curator/"
+      type: "reports"
+      status: "gitignored (runtime reports)"
+      files:
+        - "20260502-openclaw-residual-recurrence.md (OpenClaw 残留文件复现根因)"
+        - "20260502-tmux-agent-rename-cleanup.md (tui-layout.sh ops→repo-curator 清理)"
+
+    - path: "wiki/operations/cold-start-runbook.md"
+      type: "wiki"
+      status: "wiki-curator 维护"
+      note: "新对话冷启动流程文档"
+
+  known_issues:
+    - component: "ce-hub TUI"
+      issue: "tui-layout.sh 仍使用 'ops' agent 名（应为 'repo-curator'）"
+      severity: "P2 (cosmetic)"
+      file: "ce-hub/scripts/tui-layout.sh lines 10, 35"
+      fix: "待 PR 修复"
+      report: "raw/repo-curator/20260502-tmux-agent-rename-cleanup.md"
