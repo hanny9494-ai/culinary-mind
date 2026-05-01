@@ -56,12 +56,18 @@ PROCESS_TRIGGER_TERMS: tuple[str, ...] = (
     "加热", "冷却", "冻结", "解冻", "烟熏", "发酵", "腌制", "干燥", "脱水",
     "搅打", "乳化", "加压", "减压", "储藏", "熟成", "煎", "烤", "蒸", "煮",
     "炸", "炖", "焯", "浸泡", "真空", "低温慢煮",
+    # PR-#18 review F3 additions: everyday cooking processes uncovered
+    # by GPT-5.4 review (烘烤/烘焙/油炸/冷藏/冷冻).
+    "烘烤", "烘焙", "油炸", "冷藏", "冷冻",
 )
 MECHANISM_TERMS: tuple[str, ...] = (
     "变性", "凝固", "糊化", "回生", "胶凝", "乳化", "氧化", "还原", "褐变",
     "美拉德", "焦糖化", "挥发", "溶解", "析出", "结晶", "熔融", "渗透", "扩散",
     "水合", "脱水", "明胶化", "嫩化", "硬化", "失活", "抑制", "促进", "降解",
     "杀菌", "灭活", "钝化",
+    # PR-#18 review F3 additions: GPT-5.4 review surfaced these missing
+    # mechanism words (蛋白质变性/凝胶化/析水/酶促褐变).
+    "蛋白质变性", "凝胶化", "析水", "酶促褐变",
 )
 RESULT_TERMS: tuple[str, ...] = (
     "质地", "风味", "香气", "色泽", "口感", "嫩度", "脆度", "保水性", "稳定性",
@@ -74,6 +80,8 @@ EQUIPMENT_TERMS: tuple[str, ...] = (
     "探针", "传感器", "恒温器", "喷嘴", "刀片", "筛网", "密封圈", "风扇",
     "真空泵", "循环泵", "压面机", "脱水机", "封口机",
     "英寸", "厘米", "psi", "bar", "rpm", "kW", "BTU", "功率", "转速", "校准",
+    # F3 additions: pots/pans/steamer
+    "锅", "平底锅", "蒸箱",
 )
 # 'mm' is dangerous to match as a substring in CJK text but architect listed
 # it — keep as a separate word-bounded check.
@@ -84,6 +92,8 @@ STATIC_ATTR_TERMS: tuple[str, ...] = (
     "含量为", "含量约", "脂肪含量", "蛋白质含量", "维生素", "矿物质",
     "品种", "产地", "Brix", "水活度", "灰分",
     "富含", "含有", "主要由", "组成", "典型为", "比例为", "天然含有",
+    # F3 additions: physico-chemical static attributes
+    "酸度", "pH", "糖度", "盐度", "黏度",
 )
 STATIC_ATTR_REGEX = re.compile(r"属于.{0,4}科")   # "属于...科"
 

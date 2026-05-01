@@ -58,9 +58,13 @@ D. 外围知识（_adjacent）
 - 人体医学、生态、法规、公共卫生等非食物加工内容
 - 不直接进入烹饪加工推理链
 
-判定优先级：A > B > C > D
+判定优先级：A > D > B > C
+（与规则预筛层一致：先看是否真 L0；其次外围 D（医学/法规/生态）优先于 B/C，
+ 避免医学/法规等被误判为设备或食材属性。）
 若同时含设备信息和食物变化机制 → A
 若同时含食材属性和加工行为后果 → A
+若同时含设备信息和外围医学/法规 → D（无加工触发）
+若同时含食材属性和外围医学/法规 → D（无加工触发）
 
 示例：
 - "加热使蛋白质变性并凝固。" → A
@@ -81,8 +85,19 @@ LOW_CONFIDENCE_SIGNALS: tuple[str, ...] = (
     "but could be", "ambiguous", "uncertain", "either", "borderline",
 )
 
-LABEL_RE = re.compile(r"\b([ABCD])\b")
-ARROW_LABEL_RE = re.compile(r"→\s*([ABCD])")
+# Strict label patterns. The model is told to emit the label after the
+# explanation, optionally with a marker like "标签：" or an arrow.
+# We never accept a bare A/B/C/D anywhere in the response (too easy to
+# match incidental capitals inside the prose, e.g. "B-vitamin").
+ARROW_LABEL_RE = re.compile(r"→\s*([ABCDabcd])\b")
+# Acceptable fallback patterns:
+#   • marker + label:  "标签: A" / "标签：A" / "答: A" / "Label: A"
+#   • own line at end: "\nA" / "\nA。"
+LABEL_RE = re.compile(
+    r"(?:标签|答案|答|label|answer)\s*[:：]\s*([ABCD])\b"
+    r"|(?:^|\n)\s*([ABCD])\s*[\.。!！?？]?\s*$",
+    flags=re.IGNORECASE | re.MULTILINE,
+)
 LABEL_TO_TRIAGE = {
     "A": "A_l0",
     "B": "B_l1",
@@ -119,17 +134,27 @@ def call_qwen(client: httpx.Client, statement: str,
 # ── Reasoning parser ────────────────────────────────────────────────────────
 
 def parse_label(text: str) -> str | None:
-    """Extract A/B/C/D from the model output. Prefer arrow form (' → A')
-    because the few-shot examples in the prompt use it."""
+    """Extract A/B/C/D from the model output.
+
+    Prefer arrow form (' → A') because the few-shot examples in the
+    prompt use it. Otherwise look for an explicit label marker (`标签:`,
+    `Label:`, `答案:`) or a single A/B/C/D on its own line at the end of
+    the response. We deliberately do NOT match a bare A/B/C/D anywhere
+    in prose to avoid false positives like "B-vitamin" or "Aroma".
+    """
     m = ARROW_LABEL_RE.search(text)
     if m:
-        return m.group(1)
-    # Fall back to any standalone capital letter at end of text
-    m = LABEL_RE.findall(text)
-    if not m:
+        return m.group(1).upper()
+    matches = LABEL_RE.findall(text)
+    if not matches:
         return None
-    # Prefer the LAST occurrence — the prompt says reason first, label last.
-    return m[-1]
+    # Each tuple has two groups (marker form / line-end form); pick first
+    # non-empty in each, then take the LAST overall hit (prompt says label
+    # comes after the reason).
+    last = None
+    for marker_form, line_end_form in matches:
+        last = (marker_form or line_end_form) or last
+    return last.upper() if last else None
 
 
 def is_low_confidence(text: str) -> bool:
@@ -266,7 +291,17 @@ def main() -> int:
             sent += 1
             if (sent % 50) == 0:
                 fout.flush()
+            # When --limit hits, stop sending to LLM but keep emitting the
+            # remaining records so downstream stages still see every input
+            # row (they just retain whatever label the rule layer left).
             if args.limit is not None and sent >= args.limit:
+                idx = records.index(rec)
+                for tail_rec in records[idx + 1:]:
+                    if _record_key(tail_rec) in seen:
+                        continue
+                    fout.write(json.dumps(tail_rec, ensure_ascii=False) + "\n")
+                    counts[tail_rec.get("triage_label", "?")] += 1
+                    passed += 1
                 break
 
     total = sum(counts.values())
