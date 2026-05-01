@@ -256,6 +256,6 @@ payload = {
 | API | Endpoint | 用途 |
 |---|---|---|
 | aigocode | https://api.aigocode.com/v1/messages | Skill A/D (Opus 4.6) |
-| Google | https://generativelanguage.googleapis.com/v1beta | Skill B/C (Flash) |
+| Lingya Gemini | `${L0_API_ENDPOINT}/v1/messages` | Skill B/C (Flash) |
 | PaddleOCR | https://t1m0ybsdk3d2hcyc.aistudio-app.com/layout-parsing | 所有 Skill OCR |
 | 灵雅 (备用) | https://api.lingyaai.cn/v1/messages | 充值后可替代 aigocode |

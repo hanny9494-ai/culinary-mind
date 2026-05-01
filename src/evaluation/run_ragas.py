@@ -1,6 +1,6 @@
 """Y-S1-3: RAGAS evaluation scaffold for the Y-system retrieval API.
 
-Judge model: Gemini 2.0 Flash (avoids self-bias — Y-system answers are Claude).
+Judge model: Lingya Gemini 3.1 Pro (avoids self-bias — Y-system answers are Claude).
 Runs 4 RAGAS metrics: Context Precision, Context Recall, Faithfulness, Answer Relevancy.
 
 Usage:
@@ -30,11 +30,14 @@ os.environ["no_proxy"] = "localhost,127.0.0.1"
 import httpx
 
 RETRIEVAL_API_URL = os.getenv("RETRIEVAL_API_URL", "http://localhost:8760")
+LINGYA_TIMEOUT_SECONDS = 600
+LINGYA_MAX_RETRIES = 3
+LINGYA_BACKOFF_SECONDS = (5, 15, 45)
 
-# ── Judge model: Gemini (avoids self-bias vs Claude-generated answers) ──────
-GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY", "")
-JUDGE_MODEL     = os.getenv("JUDGE_MODEL", "gemini-2.0-flash")
-GEMINI_API_URL  = "https://generativelanguage.googleapis.com/v1beta/models"
+# ── Judge model: Lingya Gemini (avoids self-bias vs Claude-generated answers) ─
+L0_API_KEY     = os.environ.get("L0_API_KEY", "")
+LINGYA_API_URL = f"{os.environ.get('L0_API_ENDPOINT', '').rstrip('/')}/v1"
+JUDGE_MODEL    = os.getenv("JUDGE_MODEL", "gemini-3.1-pro-preview-thinking")
 
 # Configurable via config/evaluation.yaml (loaded at startup if present)
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -83,31 +86,69 @@ def call_retrieve(client: httpx.Client, question: str, top_k: int = 8) -> dict:
         f"{RETRIEVAL_API_URL}/retrieve",
         json={"q": question, "top_k": top_k, "return_contexts": True,
               "generate_answer": True},
-        timeout=120,
+        timeout=LINGYA_TIMEOUT_SECONDS,
     )
     resp.raise_for_status()
     return resp.json()
 
 
-# ── Gemini judge ──────────────────────────────────────────────────────────────
+# ── Lingya Gemini judge ───────────────────────────────────────────────────────
+
+def _lingya_api_key() -> str:
+    api_key = os.environ.get("L0_API_KEY") or L0_API_KEY
+    if not api_key:
+        raise RuntimeError("L0_API_KEY not set - required for RAGAS judge")
+    return api_key
+
+
+def _lingya_api_url() -> str:
+    endpoint = os.environ.get("L0_API_ENDPOINT", "").rstrip("/")
+    if endpoint:
+        return f"{endpoint}/v1"
+    if LINGYA_API_URL and LINGYA_API_URL != "/v1":
+        return LINGYA_API_URL.rstrip("/")
+    raise RuntimeError("L0_API_ENDPOINT not set - required for RAGAS judge")
+
+
+def _should_retry(status_code: int) -> bool:
+    return status_code == 429 or status_code >= 500
+
+
+def _post_lingya_judge(client: httpx.Client, prompt: str) -> httpx.Response:
+    for attempt in range(LINGYA_MAX_RETRIES + 1):
+        resp = client.post(
+            f"{_lingya_api_url()}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {_lingya_api_key()}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": JUDGE_MODEL,
+                "messages": [{
+                    "role": "user",
+                    "content": (
+                        prompt
+                        + "\n\nOnly respond with a number between 0 and 1 "
+                        + "(e.g., 0.75). No explanation."
+                    ),
+                }],
+                "temperature": 0,
+                "max_tokens": 16,
+            },
+            timeout=LINGYA_TIMEOUT_SECONDS,
+        )
+        if _should_retry(resp.status_code) and attempt < LINGYA_MAX_RETRIES:
+            time.sleep(LINGYA_BACKOFF_SECONDS[attempt])
+            continue
+        return resp
+
+    raise RuntimeError("Lingya judge request failed")
 
 def llm_judge(client: httpx.Client, prompt: str) -> float:
-    """Call Gemini to score on 0-1 scale. Returns float."""
-    if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY not set — required for RAGAS judge")
-
-    model_url = f"{GEMINI_API_URL}/{JUDGE_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    payload = {
-        "contents": [{"parts": [{"text": prompt + "\n\nOnly respond with a number between 0 and 1 (e.g., 0.75). No explanation."}]}],
-        "generationConfig": {
-            "temperature": 0.0,
-            "maxOutputTokens": 16,
-            "candidateCount": 1,
-        }
-    }
-    resp = client.post(model_url, json=payload, timeout=60)
+    """Call Lingya Gemini to score on 0-1 scale. Returns float."""
+    resp = _post_lingya_judge(client, prompt)
     resp.raise_for_status()
-    text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    text = resp.json()["choices"][0]["message"]["content"].strip()
     import re
     nums = re.findall(r"0?\.\d+|1\.0|^0$|^1$", text)
     return float(nums[0]) if nums else 0.5
@@ -168,12 +209,12 @@ def run_evaluation(questions: list[dict], output_path: Path | None = None,
     cfg = load_eval_config()
     judge_model_name = cfg.get("judge_model", JUDGE_MODEL)
 
-    client = httpx.Client(trust_env=False, timeout=120)
+    client = httpx.Client(trust_env=False, timeout=LINGYA_TIMEOUT_SECONDS)
     results = []
     t0 = time.time()
 
     if verbose:
-        print(f"Judge model: {judge_model_name} (Gemini — independent of Claude answer gen)")
+        print(f"Judge model: {judge_model_name} (Lingya gemini-3.1-pro — independent of Claude answer gen)")
 
     for i, item in enumerate(questions):
         q = item["question"]

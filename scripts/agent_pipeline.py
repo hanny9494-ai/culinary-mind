@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 import os
+for k in ["http_proxy","https_proxy","HTTP_PROXY","HTTPS_PROXY","all_proxy","ALL_PROXY"]:
+    os.environ.pop(k, None)
+os.environ["no_proxy"] = "localhost,127.0.0.1"
+
 import sys
 import json
 import ast
+import time
+
+import httpx
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Antigravity 专属打造：纯原生 Agent Workflow (Extractor -> Oracle -> Validator)
@@ -17,6 +24,62 @@ class AgentState:
         self.physical_valid = False
         self.errors = []
         self.final_result = None
+
+LINGYA_CHAT_MODEL = "gemini-3.1-pro-preview-thinking"
+LINGYA_TIMEOUT_SECONDS = 600
+LINGYA_MAX_RETRIES = 3
+LINGYA_BACKOFF_SECONDS = (5, 15, 45)
+_API_KEY_FALLBACK = ""
+
+
+def _lingya_api_key() -> str:
+    api_key = os.environ.get("L0_API_KEY") or _API_KEY_FALLBACK
+    if not api_key:
+        raise RuntimeError("L0_API_KEY env var not set")
+    return api_key
+
+
+def _lingya_api_endpoint() -> str:
+    endpoint = os.environ.get("L0_API_ENDPOINT", "").rstrip("/")
+    if not endpoint:
+        raise RuntimeError("L0_API_ENDPOINT env var not set")
+    return endpoint
+
+
+def _should_retry(status_code: int) -> bool:
+    return status_code == 429 or status_code >= 500
+
+
+def _lingya_chat(prompt: str) -> str:
+    """Call Lingya's OpenAI-compatible chat completions endpoint."""
+    url = f"{_lingya_api_endpoint()}/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {_lingya_api_key()}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": LINGYA_CHAT_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0,
+        "max_tokens": 2048,
+    }
+
+    with httpx.Client(trust_env=False, timeout=LINGYA_TIMEOUT_SECONDS) as client:
+        for attempt in range(LINGYA_MAX_RETRIES + 1):
+            resp = client.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=LINGYA_TIMEOUT_SECONDS,
+            )
+            if _should_retry(resp.status_code) and attempt < LINGYA_MAX_RETRIES:
+                time.sleep(LINGYA_BACKOFF_SECONDS[attempt])
+                continue
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"].strip()
+
+    raise RuntimeError("Lingya chat request failed")
+
 
 # ==========================================
 # 🧠 Agent 1: 提取与解构专家 (Extractor)
@@ -34,16 +97,13 @@ def extractor_agent(state: AgentState, api_key: str):
     【文本】：{state.text_chunk}
     """
     
+    global _API_KEY_FALLBACK
+    previous_fallback = _API_KEY_FALLBACK
+    _API_KEY_FALLBACK = api_key or ""
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.5-pro')
-        
-        # 实际调用
-        response = model.generate_content(PROMPT)
+        raw_text = _lingya_chat(PROMPT)
         
         # 强制清理大模型的 markdown 格式
-        raw_text = response.text.strip()
         if raw_text.startswith("```"):
             raw_text = raw_text.split("\n", 1)[1].rsplit("\n", 1)[0]
             
@@ -54,6 +114,8 @@ def extractor_agent(state: AgentState, api_key: str):
     except Exception as e:
         state.errors.append(f"Extractor 返回了非 JSON 格式或调用失败：{str(e)}")
         return state
+    finally:
+        _API_KEY_FALLBACK = previous_fallback
 
 
 # ==========================================
