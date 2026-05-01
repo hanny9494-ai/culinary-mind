@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
 scripts/phn_embedding_router.py
-P1-08 Embedding router — tag each L0 record (stage4_dedup.jsonl) with its
-closest-matching Phenomenon (PHN) ids.
+P1-08 / P1-10 Embedding router — tag each L0 record (stage4_dedup.jsonl)
+with its closest-matching Phenomenon (PHN) ids.
 
 Pipeline:
-  1. Load 71 PHNs from output/phase1/phn_seeds_raw.json
+  1. Load PHNs from output/phase1/phn_seeds_raw.json (count is whatever
+     the file holds — v1 was 71, v2 is 76 with the new long-tail PHNs
+     from architect report 029)
   2. Build an anchor text per PHN: name_en + definition + observable_cues
   3. Embed anchors via Ollama qwen3-embedding:8b → (71, D) matrix
   4. Walk every output/{book}/stage4/stage4_dedup.jsonl:
@@ -56,9 +58,21 @@ OUTPUT_ROOT  = REPO_ROOT / "output"
 PHASE1_DIR   = OUTPUT_ROOT / "phase1"
 
 PHN_FILE      = PHASE1_DIR / "phn_seeds_raw.json"
-OUT_ROUTING   = PHASE1_DIR / "l0_phn_routing.jsonl"
-OUT_STATS     = PHASE1_DIR / "phn_routing_stats.json"
-PROGRESS_FILE = PHASE1_DIR / "_phn_routing_progress.json"
+
+# Default file paths (v1). When --routing-version 2 is passed the router
+# writes to the v2 sibling files instead, never overwriting the v1 set
+# (architect 030 §Step 1 explicit requirement).
+OUT_ROUTING_V1     = PHASE1_DIR / "l0_phn_routing.jsonl"
+OUT_STATS_V1       = PHASE1_DIR / "phn_routing_stats.json"
+PROGRESS_FILE_V1   = PHASE1_DIR / "_phn_routing_progress.json"
+OUT_ROUTING_V2     = PHASE1_DIR / "l0_phn_routing_v2.jsonl"
+OUT_STATS_V2       = PHASE1_DIR / "phn_routing_v2_stats.json"
+PROGRESS_FILE_V2   = PHASE1_DIR / "_phn_routing_v2_progress.json"
+
+# Bound at runtime by main() based on --routing-version.
+OUT_ROUTING:   Path
+OUT_STATS:     Path
+PROGRESS_FILE: Path
 
 OLLAMA_URL   = "http://localhost:11434/api/embed"
 MODEL        = "qwen3-embedding:8b"
@@ -193,6 +207,7 @@ def process_book(
     threshold:  float,
     per_phn_count: dict,
     limit_remaining: int | None,
+    routing_version: int = 1,
 ) -> tuple[int, int]:
     """Process one stage4_dedup.jsonl. Returns (records_processed, records_tagged).
 
@@ -235,6 +250,7 @@ def process_book(
                 out["phn_scores"] = []
                 out["_book_id"] = book_id
                 out["_source_type"] = source_type
+                out["_routing_version"] = routing_version
                 out_fh.write(json.dumps(out, ensure_ascii=False) + "\n")
                 processed += 1
             continue
@@ -259,6 +275,7 @@ def process_book(
             out = dict(r)
             out["_book_id"] = book_id
             out["_source_type"] = source_type
+            out["_routing_version"] = routing_version
             row_sims = sims_by_batch_idx.get(i)
             if row_sims is None:
                 out["phenomenon_tags"] = []
@@ -303,16 +320,32 @@ def parse_args() -> argparse.Namespace:
                    help="Smoke-test cap on total records processed")
     p.add_argument("--only-book", action="append",
                    help="Restrict to one or more book ids (repeatable)")
+    p.add_argument("--routing-version", type=int, default=1, choices=[1, 2],
+                   help="Output bucket selector. v1 → l0_phn_routing.jsonl "
+                        "(legacy 71-PHN run); v2 → l0_phn_routing_v2.jsonl "
+                        "(76-PHN re-run, never overwrites v1).")
     return p.parse_args()
 
 
 def main() -> int:
     args = parse_args()
 
+    # Bind output paths based on routing version (architect 030 §Step 1).
+    global OUT_ROUTING, OUT_STATS, PROGRESS_FILE
+    if args.routing_version == 2:
+        OUT_ROUTING   = OUT_ROUTING_V2
+        OUT_STATS     = OUT_STATS_V2
+        PROGRESS_FILE = PROGRESS_FILE_V2
+    else:
+        OUT_ROUTING   = OUT_ROUTING_V1
+        OUT_STATS     = OUT_STATS_V1
+        PROGRESS_FILE = PROGRESS_FILE_V1
+
     PHASE1_DIR.mkdir(parents=True, exist_ok=True)
     phns, phn_texts = load_phns()
     phn_ids = [p["phn_id"] for p in phns]
-    print(f"[phn-router] loaded {len(phns)} PHN anchors", flush=True)
+    print(f"[phn-router] routing-version={args.routing_version}, "
+          f"loaded {len(phns)} PHN anchors → {OUT_ROUTING.name}", flush=True)
 
     with httpx.Client(trust_env=False) as client:
         print("[phn-router] embedding anchors …", flush=True)
@@ -356,6 +389,7 @@ def main() -> int:
                     args.batch_size, args.top_k, args.threshold,
                     per_phn_count,
                     limit_remaining,
+                    routing_version=args.routing_version,
                 )
                 total_proc += proc
                 total_tag  += tagged
