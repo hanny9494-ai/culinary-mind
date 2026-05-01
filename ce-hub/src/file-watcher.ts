@@ -71,6 +71,10 @@ export class FileWatcher {
   private pendingResults = new Map<string, { agent: string; dispatchedAt: number; nudgeCount: number }>();
   private nudgeTimer: ReturnType<typeof setInterval> | null = null;
   private taskTimeoutTimer: ReturnType<typeof setInterval> | null = null;
+  // 30s poll fallback timer (fs.watch is unreliable on macOS). Stored as a
+  // class field so stop() can clearInterval and avoid leaking the interval
+  // when the daemon shuts down or restarts.
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
   // Dedup: track result files currently being processed to prevent double-handling
   // (watch() event + 30s poll can race on the same file before unlinkSync fires)
   private processingResults = new Set<string>();
@@ -130,8 +134,9 @@ export class FileWatcher {
     // Periodically timeout stuck tasks
     this.taskTimeoutTimer = setInterval(() => this.timeoutStuckTasks(), 300_000); // every 5 min
 
-    // Polling fallback: fs.watch is unreliable on macOS, scan every 30s
-    setInterval(() => {
+    // Polling fallback: fs.watch is unreliable on macOS, scan every 30s.
+    // Stored on `this.pollTimer` so stop() can clearInterval (D69 round 2 — GPT 5.5).
+    this.pollTimer = setInterval(() => {
       this.processExisting(dispatchDir, (f) => this.handleDispatch(f));
       this.processExisting(resultsDir, (f) => this.handleResult(f));
     }, 30_000);
@@ -268,6 +273,14 @@ export class FileWatcher {
         this.processedSideEffects.delete(filePath);
         // Even if quarantine renameSync also failed (truly broken FS), clear
         // the counters and surrender — repeated retries would only spam logs.
+        //
+        // TODO(follow-up): Tier 3 quarantine rename 也失败时当前清空 idempotency state
+        // 并 return true，但源文件仍在 results/ → 30s poll 重新进入 → 重复处理。
+        // 触发条件需 disk full 且 _archive_failed/ 同时不可写（实际触发概率极低）。
+        // 修复方案（reviewer raw/code-reviewer/pr23-review-20260501.md §E）：
+        //   - 保留 sticky guard（不删 failedRenameCount / processedSideEffects）
+        //   - 或写 .surrender.json marker 让 processExisting 跳过
+        // cc-lead 2026-05-02 决策：暂不修，等真触发或 daemon 改造时统一处理
         return true;
       }
       return false;
@@ -431,8 +444,9 @@ export class FileWatcher {
   }
 
   stop(): void {
-    if (this.nudgeTimer) clearInterval(this.nudgeTimer);
-    if (this.taskTimeoutTimer) clearInterval(this.taskTimeoutTimer);
+    if (this.nudgeTimer) { clearInterval(this.nudgeTimer); this.nudgeTimer = null; }
+    if (this.taskTimeoutTimer) { clearInterval(this.taskTimeoutTimer); this.taskTimeoutTimer = null; }
+    if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
     for (const w of this.watchers) w.close();
     this.watchers = [];
   }
