@@ -50,6 +50,15 @@ PHASE1_DIR  = REPO_ROOT / "output" / "phase1"
 
 INPUT_FILE  = PHASE1_DIR / "l0_phn_routing_v3.jsonl"
 
+# Architect's LLM Phase-2 outputs. Each record has _rec_idx (line index
+# into v3) + llm_label ∈ {A_l0, B_l1, C_l2a, D_adjacent, E_noise} +
+# llm_confidence + llm_reason. We merge them into the bucket logic so
+# records that the LLM has already classified don't sit in review_pool.
+LLM_TRIAGE_FILES: tuple[Path, ...] = (
+    PHASE1_DIR / "review_llm_triage.jsonl",
+    PHASE1_DIR / "unclassified_llm_triage.jsonl",
+)
+
 OUT_CLEAN     = PHASE1_DIR / "l0_clean.jsonl"
 OUT_L2A       = PHASE1_DIR / "l0_migrated_to_l2a.jsonl"
 OUT_L1        = PHASE1_DIR / "l0_tagged_l1.jsonl"
@@ -61,29 +70,55 @@ OUT_STATS     = PHASE1_DIR / "l0_cleanup_stats.json"
 # ── Bucket classifier ────────────────────────────────────────────────────────
 
 # Sets used by classify_bucket(); see module docstring for the contract.
-_CLEAN_LABELS    = {"_rescued_l0", "_rescued_l0_weak", "_routed_new"}
+_CLEAN_LABELS    = {"_rescued_l0", "_rescued_l0_weak", "_routed_new", "A_l0"}
 _L2A_LABELS      = {"_l2a_candidate", "C_l2a"}
 _L1_LABELS       = {"_l1_candidate", "B_l1"}
 _ADJACENT_LABELS = {"_adjacent", "D_adjacent"}
 _REVIEW_LABELS   = {"_review", "_unclassified", "_l0_orphan"}
 _NOISE_LABELS    = {"E_noise", "_noise"}   # not output, only counted
 
+# Maps LLM label → bucket name. LLM labels are authoritative when
+# present (architect runs them after the rule layer, with full reason
+# + confidence in the response).
+_LLM_LABEL_TO_BUCKET: dict[str, str] = {
+    "A_l0":       "clean",
+    "B_l1":       "l1",
+    "C_l2a":      "l2a",
+    "D_adjacent": "adjacent",
+    "E_noise":    "noise",
+}
 
-def classify_bucket(rec: dict) -> str:
+
+def classify_bucket(rec: dict, llm_label_by_idx: dict[int, str] | None = None) -> str:
     """Return one of:
         'clean' / 'l2a' / 'l1' / 'adjacent' / 'review' / 'noise'
 
     Decision order (first match wins):
-      1. `phenomenon_tags` non-empty           → clean
-      2. `_triage_label` in clean-positive set → clean
-      3. `_triage_label` in l2a / l1 / adjacent / review / noise sets
-      4. fall-through                          → review
+      1. `phenomenon_tags` non-empty                       → clean
+      2. v3 `_triage_label` already in clean-positive set
+         (rescue / routed_new)                              → clean
+      3. LLM Phase-2 label (architect, via `_rec_idx` lookup)
+                                                            → mapped bucket
+      4. v3 `_triage_label` in l2a / l1 / adjacent / noise / review
+      5. fall-through                                       → review
+
+    The LLM step is checked AFTER step 2 so that already-confirmed L0
+    (PHN-tagged or rescued) is never demoted by a later LLM call.
     """
     if rec.get("phenomenon_tags"):
         return "clean"
     label = rec.get("_triage_label") or rec.get("triage_label") or ""
     if label in _CLEAN_LABELS:
         return "clean"
+
+    # LLM Phase-2 result (authoritative for ambiguous records).
+    if llm_label_by_idx is not None:
+        idx = rec.get("_rec_idx")
+        if isinstance(idx, int):
+            llm_label = llm_label_by_idx.get(idx)
+            if llm_label and llm_label in _LLM_LABEL_TO_BUCKET:
+                return _LLM_LABEL_TO_BUCKET[llm_label]
+
     if label in _L2A_LABELS:
         return "l2a"
     if label in _L1_LABELS:
@@ -95,6 +130,44 @@ def classify_bucket(rec: dict) -> str:
     if label in _REVIEW_LABELS:
         return "review"
     return "review"
+
+
+# ── LLM triage merge ────────────────────────────────────────────────────────
+
+def load_llm_triage(paths: Iterable[Path]) -> tuple[dict[int, str], dict[int, dict]]:
+    """Load architect's Phase-2 LLM triage outputs.
+
+    Returns:
+      (idx → llm_label, idx → full record).
+
+    The full record includes llm_confidence + llm_reason so we can
+    propagate them into the bucket output for downstream review.
+    """
+    label_by_idx: dict[int, str] = {}
+    record_by_idx: dict[int, dict] = {}
+    for p in paths:
+        if not p.exists():
+            continue
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except Exception:
+                    continue
+                idx = d.get("_rec_idx")
+                if not isinstance(idx, int):
+                    continue
+                lab = d.get("llm_label")
+                if not lab:
+                    continue
+                # Earliest seen wins (architect's two files are
+                # non-overlapping by design but defensively guard).
+                label_by_idx.setdefault(idx, lab)
+                record_by_idx.setdefault(idx, d)
+    return label_by_idx, record_by_idx
 
 
 # ── Adjacent subtype helper ──────────────────────────────────────────────────
@@ -138,6 +211,8 @@ def main() -> int:
     parser.add_argument("--input",  type=Path, default=INPUT_FILE)
     parser.add_argument("--limit",  type=int, default=None,
                         help="Smoke-test cap on input lines")
+    parser.add_argument("--no-llm-triage", action="store_true",
+                        help="Skip the LLM Phase-2 merge (debug only).")
     args = parser.parse_args()
 
     if not args.input.exists():
@@ -145,6 +220,20 @@ def main() -> int:
         return 1
 
     PHASE1_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Load architect's LLM Phase-2 outputs once into memory. The maps are
+    # keyed by `_rec_idx`, which is the line index of the v3 file.
+    llm_label_by_idx: dict[int, str] = {}
+    llm_record_by_idx: dict[int, dict] = {}
+    if not args.no_llm_triage:
+        llm_label_by_idx, llm_record_by_idx = load_llm_triage(LLM_TRIAGE_FILES)
+    print(f"[cleanup] LLM triage: {len(llm_label_by_idx)} idx → label "
+          f"({sum(1 for v in llm_label_by_idx.values() if v == 'A_l0')} A_l0, "
+          f"{sum(1 for v in llm_label_by_idx.values() if v == 'B_l1')} B_l1, "
+          f"{sum(1 for v in llm_label_by_idx.values() if v == 'C_l2a')} C_l2a, "
+          f"{sum(1 for v in llm_label_by_idx.values() if v == 'D_adjacent')} D_adjacent, "
+          f"{sum(1 for v in llm_label_by_idx.values() if v == 'E_noise')} E_noise)",
+          flush=True)
 
     # Open writers
     fh = {
@@ -160,11 +249,15 @@ def main() -> int:
     by_book: dict[str, Counter[str]] = defaultdict(Counter)
     adjacent_subtypes: Counter[str] = Counter()
     label_distribution: Counter[str] = Counter()
+    llm_merge_count = 0   # how many records ended up in a non-review
+                          # bucket because of the LLM step (audit trail)
 
     n = 0
+    rec_idx = -1
     try:
         with open(args.input, encoding="utf-8") as fin:
             for line in fin:
+                rec_idx += 1
                 line = line.strip()
                 if not line:
                     continue
@@ -173,7 +266,12 @@ def main() -> int:
                 except Exception:
                     continue
 
-                bucket = classify_bucket(rec)
+                # Stamp the line index so classify_bucket() can look up
+                # the LLM Phase-2 label without recomputing.
+                if "_rec_idx" not in rec:
+                    rec["_rec_idx"] = rec_idx
+
+                bucket = classify_bucket(rec, llm_label_by_idx)
                 counts[bucket] += 1
                 domain = rec.get("domain") or "unclassified"
                 book   = rec.get("_book_id") or "?"
@@ -182,6 +280,17 @@ def main() -> int:
                 label_distribution[
                     rec.get("_triage_label") or rec.get("triage_label") or "(none)"
                 ] += 1
+
+                # Propagate LLM reason / confidence onto the output row
+                # for downstream auditing.
+                idx = rec.get("_rec_idx")
+                if isinstance(idx, int) and idx in llm_record_by_idx:
+                    llm_extra = llm_record_by_idx[idx]
+                    rec.setdefault("llm_label",      llm_extra.get("llm_label"))
+                    rec.setdefault("llm_confidence", llm_extra.get("llm_confidence"))
+                    rec.setdefault("llm_reason",     llm_extra.get("llm_reason"))
+                    if bucket != "review":
+                        llm_merge_count += 1
 
                 if bucket == "noise":
                     # Per dispatch: don't write noise; just count.
@@ -246,11 +355,13 @@ def main() -> int:
 
     stats = {
         "_meta": {
-            "task":       "P1 L0 cleanup",
-            "date":       time.strftime("%Y-%m-%d", time.gmtime()),
-            "input":      str(args.input),
-            "total_in":   n,
-            "limit":      args.limit,
+            "task":              "P1 L0 cleanup",
+            "date":              time.strftime("%Y-%m-%d", time.gmtime()),
+            "input":             str(args.input),
+            "total_in":          n,
+            "limit":             args.limit,
+            "llm_triage_merged": llm_merge_count,
+            "llm_triage_size":   len(llm_label_by_idx),
         },
         "buckets":             bucket_summary,
         "by_domain":           domain_summary,
