@@ -45,27 +45,35 @@ def reload_module(name: str):
 
 
 def test_import_l0_neo4j_embedding_call():
-    with mock.patch.dict(
-        os.environ,
-        {"L0_API_KEY": "test-key", "L0_API_ENDPOINT": "https://api.lingyaai.cn"},
-    ):
-        mod = reload_module("scripts.y_s1.import_l0_neo4j")
+    """L0 import embedder routes through local Ollama qwen3-embedding:8b.
 
-        def fake_post(self, url, headers=None, json=None, timeout=None):
-            assert url.endswith("/v1/embeddings")
-            assert headers["Authorization"].startswith("Bearer ")
-            assert headers["Authorization"] != "test-key"
-            assert json["model"] == "gemini-embedding-001"
-            assert isinstance(json["input"], list)
-            assert all(isinstance(item, str) for item in json["input"])
-            assert timeout >= 600
-            return FakeResponse({"data": [{"embedding": [0.1] * 3072}]})
+    repo-curator 2026-05-02 reverted the embedding path from Lingya/Gemini
+    back to local Ollama (free, on-host). Chat / completion still goes
+    through Lingya in other modules — only embeddings stay local.
+    """
+    mod = reload_module("scripts.y_s1.import_l0_neo4j")
 
-        with mock.patch("httpx.Client.post", new=fake_post):
-            with httpx.Client(trust_env=False, timeout=600) as client:
-                result = mod.get_embeddings_gemini(["hello"], client)
+    def fake_post(self, url, headers=None, json=None, timeout=None):
+        # Ollama runs locally and uses no Authorization header.
+        assert url.endswith("/api/embed"), f"unexpected URL: {url}"
+        assert "127.0.0.1" in url or "localhost" in url, f"non-local URL: {url}"
+        assert headers is None or "Authorization" not in (headers or {})
+        assert json["model"] == "qwen3-embedding:8b"
+        assert isinstance(json["input"], list)
+        assert all(isinstance(item, str) for item in json["input"])
+        assert timeout >= 600
+        return FakeResponse({"embeddings": [[0.1] * 4096]})
 
-        assert result == [[0.1] * 3072]
+    with mock.patch("httpx.Client.post", new=fake_post):
+        with httpx.Client(trust_env=False, timeout=600) as client:
+            result = mod.get_embeddings_gemini(["hello"], client)
+
+    assert result == [[0.1] * 4096]
+    assert mod.EMBED_DIM == 4096
+    assert mod.EMBED_MODEL == "qwen3-embedding:8b"
+    # Legacy aliases still resolve to the new local-Ollama values.
+    assert mod.GEMINI_EMBED_DIM == 4096
+    assert mod.GEMINI_EMBED_MODEL == "qwen3-embedding:8b"
 
 
 def test_run_ragas_judge_call():
