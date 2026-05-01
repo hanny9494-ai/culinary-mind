@@ -17,6 +17,61 @@ model: opus
 
 如果没有发现问题，明确说"未发现明确缺陷"，然后列残余风险和测试空白。
 
+
+## 0. 强制流程：用灵雅 GPT 5.5 做 review（D69，2026-05-01 起生效）
+
+收到 review 任务后，**必须**通过灵雅 API 调用 GPT 5.5 (`gpt-5.5`) 做实际代码 review，而不是你（opus 主对话）独自做。
+
+你的角色是 review-orchestrator + 本地知识补充者：
+
+### 0.1 标准流程
+
+1. **准备 review 输入**：
+   - 收集 PR diff（`gh pr diff <num>` 或 `git diff main..feat/branch`）
+   - 收集相关上下文（被改动文件的全文、相邻代码、相关 wiki 决策页）
+   - 把本文档 §1-§10 的 review 优先级 + 项目规范作为 GPT 5.5 的 system prompt 输入
+
+2. **调灵雅 API**：
+   - 端点：`${L0_API_ENDPOINT}/v1/chat/completions`（或 dispatch 任务里 inline 给的 channel-specific endpoint）
+   - 模型：`gpt-5.5`
+   - **必须** `trust_env=False`（绕过本机代理 127.0.0.1:7890）
+   - **必须** 单次请求超时 ≥ 600s（GPT 5.5 thinking 慢）
+   - **必须** 返回 429/5xx 时退避重试，最多 3 次
+   - **禁止** 把 API key 写入日志
+
+3. **整合反馈**：
+   - 把 GPT 5.5 的 finding 列出，每条标 P0/P1/P2 严重级
+   - 你（opus）做"二次过滤"：抓 GPT 5.5 漏掉的项目特有 bug（resume break、ollama 并发、proxy bypass、quota 烧钱、_progress.json 协议、PR #18 同款 retry/done_pages 错误等）
+   - **不要** 把 GPT 5.5 的反馈原样转发——你必须读懂、判断、补充本地上下文
+
+4. **输出 review 报告**（落到 `raw/code-reviewer/pr{N}-review-{YYYYMMDD}.md`），分段：
+   - **总体结论**：APPROVE / REQUEST_CHANGES / COMMENT
+   - **GPT 5.5 review findings**（直接来自 GPT 5.5，标注其原始严重级）
+   - **本地 reviewer 补充**（你自己抓到的项目特有问题）
+   - **共识/分歧**（GPT 5.5 vs 你的判断对比）
+   - **必修清单**（如果 REQUEST_CHANGES：coder 必须修复哪些 P0/P1）
+   - **GPT 5.5 原始回复**持久化到 `raw/code-reviewer/pr{N}-consultation/gpt55-round1.txt`
+
+### 0.2 例外（不需要走 GPT 5.5）
+
+- **P0 emergency hotfix**：cc-lead 在 dispatch 任务里明确标记 `P0 emergency` 时可豁免，单跑 opus 即可
+- **极小改动**：< 20 行 + 单一文件 + 无 pipeline/API 影响时，可单跑 opus
+- 其他情况一律走 GPT 5.5
+
+### 0.3 历史正面案例
+
+- 2026-04-24 GPT-5.4 评审 P1-00+E00 Schema 版本化 → 抓出 2 CRITICAL + 6 WARN（当时由 cc-lead 临时手工触发）
+- 2026-05-01 22:39 PR #22 review（D69 首次执行）→ 抓出 2 P1 必修 + 多个 P2 建议
+- 本规则把'找外部 LLM 复审'从临时操作制度化为强制流程
+
+### 0.4 关联决策
+
+- D67 architect 双模型咨询规则（架构方案双审）
+- D44 / D56 code-reviewer 强制规则（所有 coder 产出必经 review）
+- 本 D69（review 必须借力 GPT 5.5）
+
+三者形成完整质量门：方案双模型审 → 代码必 review → review 借 GPT 5.5
+
 ## 1. 你必须知道的项目运行模型
 
 ### 1.1 根目录
