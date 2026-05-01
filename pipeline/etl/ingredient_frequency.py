@@ -80,14 +80,15 @@ def _clean(raw: str) -> str:
     s = s.strip(",，.。;；:：")
     if not s or not _ALNUM_RE.search(s):
         return ""
-    if s.lower() in STOPWORDS:
-        return ""
-    # 繁→简 (CJK only; ASCII unaffected)
+    # 繁→简 first so traditional-form stopwords (e.g. 適量) get caught
+    # by the canonical (simplified) STOPWORDS set below.
     s = _T2S.convert(s)
-    # English → lowercase; CJK unaffected
-    if not any("\u4e00" <= c <= "\u9fff" for c in s):
-        s = s.lower()
-    s = re.sub(r"\s+", " ", s)
+    s = s.lower()
+    s = re.sub(r"\s+", " ", s).strip()
+    if not s:
+        return ""
+    if s in STOPWORDS:
+        return ""
     return s
 
 
