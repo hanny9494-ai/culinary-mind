@@ -37,13 +37,13 @@ NEO4J_URI  = os.getenv("NEO4J_URI",  "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASS = os.getenv("NEO4J_PASS", "culinary123")
 
-GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")
+L0_API_KEY         = os.environ.get("L0_API_KEY", "")
+L0_API_ENDPOINT    = os.environ.get("L0_API_ENDPOINT", "").rstrip("/")
 GEMINI_EMBED_MODEL = "gemini-embedding-001"
 GEMINI_EMBED_DIM   = 3072
-GEMINI_EMBED_URL   = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    f"{GEMINI_EMBED_MODEL}:batchEmbedContents"
-)
+LINGYA_TIMEOUT_SECONDS = 600
+LINGYA_MAX_RETRIES = 3
+LINGYA_BACKOFF_SECONDS = (5, 15, 45)
 
 BATCH_SIZE    = 100
 PROGRESS_PATH = REPO_ROOT / "output" / "l0_neo4j_import_progress.json"
@@ -115,25 +115,59 @@ def iter_l0_records() -> Iterator[tuple[str, dict]]:
 
 
 def get_embeddings_gemini(texts: list[str], client: httpx.Client) -> list[list[float]]:
-    """Batch embed via Gemini gemini-embedding-001 (3072-dim)."""
-    if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY env var not set")
-    requests_payload = [
+    """Batch embed via Lingya Gemini gemini-embedding-001 (3072-dim)."""
+    api_key = os.environ.get("L0_API_KEY") or L0_API_KEY
+    endpoint = (os.environ.get("L0_API_ENDPOINT") or L0_API_ENDPOINT).rstrip("/")
+    if not api_key:
+        raise RuntimeError("L0_API_KEY env var not set")
+    if not endpoint:
+        raise RuntimeError("L0_API_ENDPOINT env var not set")
+
+    resp = _post_lingya_embeddings(
+        client,
+        f"{endpoint}/v1/embeddings",
         {
-            "model": f"models/{GEMINI_EMBED_MODEL}",
-            "content": {"parts": [{"text": t[:8000]}]},
-            "task_type": "RETRIEVAL_DOCUMENT",
-        }
-        for t in texts
-    ]
-    resp = client.post(
-        f"{GEMINI_EMBED_URL}?key={GEMINI_API_KEY}",
-        json={"requests": requests_payload},
-        timeout=120,
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        {
+            "model": GEMINI_EMBED_MODEL,
+            "input": [t[:8000] for t in texts],
+        },
     )
     resp.raise_for_status()
     data = resp.json()
-    return [item["values"] for item in data["embeddings"]]
+    return [item["embedding"] for item in data["data"]]
+
+
+def _should_retry(status_code: int) -> bool:
+    return status_code == 429 or status_code >= 500
+
+
+def _post_lingya_embeddings(
+    client: httpx.Client,
+    url: str,
+    headers: dict[str, str],
+    payload: dict,
+) -> httpx.Response:
+    for attempt in range(LINGYA_MAX_RETRIES + 1):
+        resp = client.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=LINGYA_TIMEOUT_SECONDS,
+        )
+        if _should_retry(resp.status_code) and attempt < LINGYA_MAX_RETRIES:
+            time.sleep(LINGYA_BACKOFF_SECONDS[attempt])
+            continue
+        return resp
+
+    raise RuntimeError("Lingya embedding request failed")
+
+
+def gemini_embed_one(text: str) -> list[float]:
+    with httpx.Client(trust_env=False, timeout=LINGYA_TIMEOUT_SECONDS) as c:
+        return get_embeddings_gemini([text], c)[0]
 
 
 def setup_neo4j(driver) -> None:
@@ -198,8 +232,9 @@ def main() -> None:
                         help="Drop+recreate vector index only, then exit")
     args = parser.parse_args()
 
-    if not GEMINI_API_KEY:
-        print("ERROR: GEMINI_API_KEY env var required")
+    missing = [name for name in ("L0_API_KEY", "L0_API_ENDPOINT") if not os.environ.get(name)]
+    if missing:
+        print(f"ERROR: required env vars missing: {', '.join(missing)}")
         sys.exit(1)
 
     print(f"Embedding: Gemini {GEMINI_EMBED_MODEL} ({GEMINI_EMBED_DIM}-dim)")
@@ -229,7 +264,7 @@ def main() -> None:
     total = len(all_records)
     print(f"  Found {total} records")
     # Cost: Gemini embedding-001 is free tier via API v1beta as of 2026-04
-    print(f"  Estimated embedding cost: ~$0.00 (Gemini free tier, {total} records)")
+    print(f"  Estimated embedding cost: ~$0.00 (Lingya {GEMINI_EMBED_MODEL}, {total} records)")
 
     pending = [(book, rec) for book, rec in all_records
                if principle_id(rec, book) not in done_ids]
@@ -245,7 +280,7 @@ def main() -> None:
         driver.close()
         return
 
-    http_client = httpx.Client(trust_env=False, timeout=120)
+    http_client = httpx.Client(trust_env=False, timeout=LINGYA_TIMEOUT_SECONDS)
     total_imported = 0
     t0 = time.time()
 
@@ -259,7 +294,7 @@ def main() -> None:
         try:
             embeddings = get_embeddings_gemini(texts, http_client)
         except Exception as e:
-            print(f"  [warn] Gemini embed failed at {batch_start}: {e} — using zeros")
+            print(f"  [warn] Lingya Gemini embed failed at {batch_start}: {e} — using zeros")
             embeddings = [[0.0] * GEMINI_EMBED_DIM for _ in batch]
 
         rows = []

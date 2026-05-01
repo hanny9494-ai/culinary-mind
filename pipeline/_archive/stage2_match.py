@@ -140,33 +140,30 @@ def save_cache(cache: dict, cache_path: str):
         json.dump(cache, f, ensure_ascii=False)
 
 
-# ── Gemini Embedding API ─────────────────────────────────────────────────────
+# ── Lingya Gemini Embedding API ──────────────────────────────────────────────
 
 def gemini_embed_batch(texts: list[str], api_key: str, model: str) -> list[list[float]]:
-    """调用 Gemini batchEmbedContents，一次最多100条。"""
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/"
-        f"models/{model}:batchEmbedContents?key={api_key}"
-    )
-    requests_body = [
-        {"model": f"models/{model}", "content": {"parts": [{"text": t}]}}
-        for t in texts
-    ]
-    payload = {"requests": requests_body}
+    """调用灵雅 OpenAI-compatible embeddings，一次最多100条。"""
+    endpoint = os.environ.get("L0_API_ENDPOINT", "").rstrip("/")
+    if not endpoint:
+        raise RuntimeError("L0_API_ENDPOINT 未设置")
+    url = f"{endpoint}/v1/embeddings"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {"model": model, "input": [t[:8000] for t in texts]}
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = requests.post(url, json=payload, timeout=60)
+            resp = requests.post(url, headers=headers, json=payload, timeout=600)
             resp.raise_for_status()
-            embeddings = resp.json()["embeddings"]
-            return [e["values"] for e in embeddings]
+            embeddings = resp.json()["data"]
+            return [e["embedding"] for e in embeddings]
         except (requests.RequestException, KeyError) as e:
             if attempt < MAX_RETRIES:
                 wait = RETRY_BACKOFF ** attempt
-                print(f"  Gemini API 重试 {attempt}/{MAX_RETRIES}，等待 {wait:.0f}s: {e}")
+                print(f"  Lingya Gemini API 重试 {attempt}/{MAX_RETRIES}，等待 {wait:.0f}s: {e}")
                 time.sleep(wait)
             else:
-                raise RuntimeError(f"Gemini API 调用失败 ({MAX_RETRIES}次重试后): {e}")
+                raise RuntimeError(f"Lingya Gemini API 调用失败 ({MAX_RETRIES}次重试后): {e}")
 
 
 # ── Ollama Embedding API ─────────────────────────────────────────────────────
@@ -234,13 +231,13 @@ def embed_texts(
                 print(f"    Ollama: {emb_idx}/{len(uncached_texts)}")
         else:
             gemini_cfg = config.get("gemini", {})
-            api_key = os.environ.get("GEMINI_API_KEY") or gemini_cfg.get("api_key", "")
+            api_key = os.environ.get("L0_API_KEY") or gemini_cfg.get("api_key", "")
             if api_key.startswith("${") and api_key.endswith("}"):
                 api_key = os.environ.get(api_key[2:-1], "")
-            model = gemini_cfg.get("model", "gemini-embedding-2-preview")
+            model = gemini_cfg.get("embedding_model") or gemini_cfg.get("model", "gemini-embedding-001")
 
             if not api_key:
-                print("❌ GEMINI_API_KEY 未设置", file=sys.stderr)
+                print("❌ L0_API_KEY 未设置", file=sys.stderr)
                 sys.exit(1)
 
             for start in range(0, len(uncached_texts), GEMINI_BATCH_SIZE):

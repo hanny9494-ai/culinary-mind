@@ -71,8 +71,12 @@ ollama:
 
 # Gemini Embedding（Stage2 主力）
 gemini:
-  api_key: "${GEMINI_API_KEY}"
-  model: "gemini-embedding-2-preview"
+  endpoint: "${L0_API_ENDPOINT}/v1"
+  api_key: "${L0_API_KEY}"
+  model: "gemini-3.1-pro-preview-thinking"
+  embedding_model: "gemini-embedding-001"
+  timeout_sec: 600
+  max_retries: 3
 
 # MinerU（Stage1 Step1）
 mineru:
