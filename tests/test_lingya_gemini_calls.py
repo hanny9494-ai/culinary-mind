@@ -76,6 +76,24 @@ def test_import_l0_neo4j_embedding_call():
     assert mod.GEMINI_EMBED_MODEL == "qwen3-embedding:8b"
 
 
+def test_get_embeddings_ollama_length_mismatch_raises():
+    """P1.3 — wrong-length Ollama response should raise ValueError, not silently truncate."""
+    mod = reload_module("scripts.y_s1.import_l0_neo4j")
+
+    def fake_post_short(self, url, headers=None, json=None, timeout=None):
+        # Return only 1 embedding for 3 inputs — old code would zip() and lose 2.
+        return FakeResponse({"embeddings": [[0.1] * 4096]})
+
+    with mock.patch("httpx.Client.post", new=fake_post_short):
+        with httpx.Client(trust_env=False, timeout=600) as client:
+            try:
+                mod.get_embeddings_ollama(["a", "b", "c"], client)
+            except ValueError as e:
+                assert "1" in str(e) and "3" in str(e)
+                return
+            raise AssertionError("expected ValueError on length mismatch")
+
+
 def test_run_ragas_judge_call():
     with mock.patch.dict(
         os.environ,

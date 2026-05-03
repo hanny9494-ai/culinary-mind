@@ -29,6 +29,12 @@ os.environ["no_proxy"] = "localhost,127.0.0.1"
 
 import httpx
 
+try:
+    from scripts._lingya_chat import post_lingya_chat
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from scripts._lingya_chat import post_lingya_chat
+
 RETRIEVAL_API_URL = os.getenv("RETRIEVAL_API_URL", "http://localhost:8760")
 LINGYA_TIMEOUT_SECONDS = 600
 LINGYA_MAX_RETRIES = 3
@@ -110,39 +116,31 @@ def _lingya_api_url() -> str:
     raise RuntimeError("L0_API_ENDPOINT not set - required for RAGAS judge")
 
 
-def _should_retry(status_code: int) -> bool:
-    return status_code == 429 or status_code >= 500
-
-
 def _post_lingya_judge(client: httpx.Client, prompt: str) -> httpx.Response:
-    for attempt in range(LINGYA_MAX_RETRIES + 1):
-        resp = client.post(
-            f"{_lingya_api_url()}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {_lingya_api_key()}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": JUDGE_MODEL,
-                "messages": [{
-                    "role": "user",
-                    "content": (
-                        prompt
-                        + "\n\nOnly respond with a number between 0 and 1 "
-                        + "(e.g., 0.75). No explanation."
-                    ),
-                }],
-                "temperature": 0,
-                "max_tokens": 16,
-            },
-            timeout=LINGYA_TIMEOUT_SECONDS,
-        )
-        if _should_retry(resp.status_code) and attempt < LINGYA_MAX_RETRIES:
-            time.sleep(LINGYA_BACKOFF_SECONDS[attempt])
-            continue
-        return resp
-
-    raise RuntimeError("Lingya judge request failed")
+    return post_lingya_chat(
+        client,
+        f"{_lingya_api_url()}/chat/completions",
+        {
+            "Authorization": f"Bearer {_lingya_api_key()}",
+            "Content-Type": "application/json",
+        },
+        {
+            "model": JUDGE_MODEL,
+            "messages": [{
+                "role": "user",
+                "content": (
+                    prompt
+                    + "\n\nOnly respond with a number between 0 and 1 "
+                    + "(e.g., 0.75). No explanation."
+                ),
+            }],
+            "temperature": 0,
+            "max_tokens": 16,
+        },
+        max_retries=LINGYA_MAX_RETRIES,
+        timeout=LINGYA_TIMEOUT_SECONDS,
+        backoff=LINGYA_BACKOFF_SECONDS,
+    )
 
 def llm_judge(client: httpx.Client, prompt: str) -> float:
     """Call Lingya Gemini to score on 0-1 scale. Returns float."""

@@ -7,9 +7,13 @@ os.environ["no_proxy"] = "localhost,127.0.0.1"
 import sys
 import json
 import ast
-import time
 
 import httpx
+
+try:
+    from scripts._lingya_chat import post_lingya_chat
+except ModuleNotFoundError:
+    from _lingya_chat import post_lingya_chat
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Antigravity 专属打造：纯原生 Agent Workflow (Extractor -> Oracle -> Validator)
@@ -46,10 +50,6 @@ def _lingya_api_endpoint() -> str:
     return endpoint
 
 
-def _should_retry(status_code: int) -> bool:
-    return status_code == 429 or status_code >= 500
-
-
 def _lingya_chat(prompt: str) -> str:
     """Call Lingya's OpenAI-compatible chat completions endpoint."""
     url = f"{_lingya_api_endpoint()}/v1/chat/completions"
@@ -65,18 +65,17 @@ def _lingya_chat(prompt: str) -> str:
     }
 
     with httpx.Client(trust_env=False, timeout=LINGYA_TIMEOUT_SECONDS) as client:
-        for attempt in range(LINGYA_MAX_RETRIES + 1):
-            resp = client.post(
-                url,
-                headers=headers,
-                json=payload,
-                timeout=LINGYA_TIMEOUT_SECONDS,
-            )
-            if _should_retry(resp.status_code) and attempt < LINGYA_MAX_RETRIES:
-                time.sleep(LINGYA_BACKOFF_SECONDS[attempt])
-                continue
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
+        resp = post_lingya_chat(
+            client,
+            url,
+            headers,
+            payload,
+            max_retries=LINGYA_MAX_RETRIES,
+            timeout=LINGYA_TIMEOUT_SECONDS,
+            backoff=LINGYA_BACKOFF_SECONDS,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
 
     raise RuntimeError("Lingya chat request failed")
 

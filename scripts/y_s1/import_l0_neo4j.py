@@ -177,6 +177,11 @@ def get_embeddings_ollama(texts: list[str], client: httpx.Client) -> list[list[f
     embeddings = data.get("embeddings")
     if not isinstance(embeddings, list):
         raise RuntimeError(f"Ollama response missing 'embeddings' list: {data}")
+    if len(embeddings) != len(texts):
+        raise ValueError(f"Ollama returned {len(embeddings)} embeddings for {len(texts)} inputs")
+    for embedding in embeddings:
+        if len(embedding) != EMBED_DIM:
+            raise ValueError(f"Ollama returned dim={len(embedding)}, expected {EMBED_DIM}")
     return embeddings
 
 
@@ -337,11 +342,7 @@ def main() -> None:
             for _, rec in batch
         ]
 
-        try:
-            embeddings = get_embeddings_ollama(texts, http_client)
-        except Exception as e:
-            print(f"  [warn] Ollama embed failed at {batch_start}: {e} — using zeros")
-            embeddings = [[0.0] * EMBED_DIM for _ in batch]
+        embeddings = get_embeddings_ollama(texts, http_client)
 
         rows = []
         for (book, rec), emb in zip(batch, embeddings):
