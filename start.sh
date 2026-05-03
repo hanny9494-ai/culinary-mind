@@ -7,6 +7,9 @@
 export PATH="/opt/homebrew/opt/node/bin:$PATH"
 
 export CE_HUB_CWD="$HOME/culinary-mind"
+export CE_HUB_D68_SESSIONS=1
+export CE_HUB_D68_QUARANTINE=1
+export CE_HUB_D68_ACKS=1
 
 # Kill old daemon if running
 lsof -t -iTCP:8750 -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null

@@ -2,6 +2,8 @@ import { execSync } from 'node:child_process';
 import { readFileSync, existsSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentDefinition } from './types.js';
+import { D68_CONFIG } from './config.js';
+import { atomicWriteJson } from './quarantine.js';
 
 const SESSION = 'cehub';
 
@@ -170,7 +172,11 @@ export class TmuxManager {
     // Use --agent flag if agent .md file exists (gives agent its tools like web_search)
     const agentFile = join(getAgentsDir(), `${def.name}.md`);
     const agentFlag = existsSync(agentFile) ? `--agent ${def.name}` : '';
-    return `claude --model ${claudeModel} --dangerously-skip-permissions ${agentFlag} --append-system-prompt-file ${promptFile}`;
+    const cmd = `claude --model ${claudeModel} --dangerously-skip-permissions ${agentFlag} --append-system-prompt-file ${promptFile}`;
+    if (def.name === 'cc-lead' && D68_CONFIG.SESSIONS) {
+      return `${getScripts()}/cehub-cc-lead-wrapper.sh -- ${cmd}`;
+    }
+    return cmd;
   }
 
   private validateName(name: string): void {
@@ -261,10 +267,10 @@ export class TmuxManager {
     if (!existsSync(inboxDir)) { exec(`mkdir -p '${inboxDir}'`); }
     const timestamp = Date.now();
     const taskFile = join(inboxDir, `msg_${timestamp}.json`);
-    writeFileSync(taskFile, JSON.stringify({
+    atomicWriteJson(taskFile, {
       from: 'cc-lead', type: 'message', content: message,
       task_id: `msg_${timestamp}`, created_at: new Date().toISOString(),
-    }, null, 2));
+    });
 
     // Step 2: Short one-line tmux notification using load-buffer+paste-buffer (reliable, no escaping issues)
     const target = this.findAgentTarget(agentName);

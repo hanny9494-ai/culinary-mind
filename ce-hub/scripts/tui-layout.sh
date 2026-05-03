@@ -58,6 +58,10 @@ start_agent_pane() {
   local agent_file="$CE_HUB_CWD/.claude/agents/${agent}.md"
   local cmd="cd $CE_HUB_CWD && claude --model $model --dangerously-skip-permissions"
   [ -f "$agent_file" ] && cmd="$cmd --agent $agent"
+  if [ "$agent" = "cc-lead" ]; then
+    cmd="cd $CE_HUB_CWD && $CE_HUB_CWD/ce-hub/scripts/cehub-cc-lead-wrapper.sh -- claude --model $model --dangerously-skip-permissions"
+    [ -f "$agent_file" ] && cmd="$cmd --agent $agent"
+  fi
   tmux send-keys -t "$pane_target" "export no_proxy=localhost,127.0.0.1 CE_HUB_CWD=$CE_HUB_CWD" Enter
   tmux send-keys -t "$pane_target" "$cmd" Enter
 }
