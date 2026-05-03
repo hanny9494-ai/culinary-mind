@@ -163,3 +163,59 @@ def test_trust_env_false():
         source = path.read_text(encoding="utf-8")
         for match in client_pattern.finditer(source):
             assert "trust_env=False" in match.group("args")
+
+
+# ── PR #21 post-merge gap (B1, B2) — repo-curator dispatch_1777814971880 ──
+
+def test_lingya_chat_transport_retry_then_success():
+    """B1 — _post_lingya_chat / post_lingya_chat must retry on httpx.RequestError
+    (not just on 429/5xx). First call raises transport error, second succeeds.
+    """
+    import time as _time
+    mod = reload_module("scripts._lingya_chat")
+
+    call_count = {"n": 0}
+
+    def fake_post(self, url, headers=None, json=None, timeout=None):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise httpx.RequestError("simulated network jitter", request=httpx.Request("POST", url))
+        return FakeResponse({"choices": [{"message": {"content": "ok"}}]})
+
+    # Skip the real backoff sleep so the test stays fast.
+    with mock.patch("httpx.Client.post", new=fake_post), \
+         mock.patch.object(_time, "sleep", lambda _s: None), \
+         mock.patch.object(mod.time, "sleep", lambda _s: None):
+        with httpx.Client(trust_env=False, timeout=600) as client:
+            resp = mod.post_lingya_chat(
+                client,
+                "https://api.lingyaai.cn/v1/chat/completions",
+                {"Authorization": "Bearer x", "Content-Type": "application/json"},
+                {"model": "gemini-3.1-pro-preview-thinking", "messages": []},
+                backoff=(0, 0, 0),
+            )
+
+    assert call_count["n"] == 2, f"expected 2 calls (1 fail + 1 success), got {call_count['n']}"
+    assert resp.json()["choices"][0]["message"]["content"] == "ok"
+
+
+def test_get_embeddings_ollama_dim_mismatch_raises():
+    """B2 — get_embeddings_ollama must raise ValueError when Ollama returns a
+    vector of the wrong dimension (e.g. 512 instead of 4096).
+    """
+    mod = reload_module("scripts.y_s1.import_l0_neo4j")
+
+    def fake_post_wrong_dim(self, url, headers=None, json=None, timeout=None):
+        # Right count (1 vector for 1 input), wrong dim (512 instead of 4096).
+        return FakeResponse({"embeddings": [[0.1] * 512]})
+
+    with mock.patch("httpx.Client.post", new=fake_post_wrong_dim):
+        with httpx.Client(trust_env=False, timeout=600) as client:
+            try:
+                mod.get_embeddings_ollama(["hello"], client)
+            except ValueError as e:
+                msg = str(e)
+                assert "512" in msg, f"expected dim 512 in error, got: {msg}"
+                assert "4096" in msg, f"expected expected-dim 4096 in error, got: {msg}"
+                return
+            raise AssertionError("expected ValueError on dim mismatch")
