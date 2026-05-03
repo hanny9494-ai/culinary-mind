@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """Y-S1-1: Import L0 50K atomic propositions into Neo4j.
 
-Embedding model: Gemini gemini-embedding-001 (3072-dim, commercial).
+Embedding model: local Ollama qwen3-embedding:8b (4096-dim, free, on-host).
+Chat / completion calls elsewhere in the codebase still go through Lingya
+(see config/api.yaml ▸ `gemini:`); only embeddings stay local because the
+L0 ingest issues tens of thousands of vector requests where paid APIs would
+be wasteful (repo-curator decision 2026-05-02).
+
 Schema:
   Node: (p:Principle {id, statement, proposition_type, domain, confidence,
                        causal_chain_text, boundary_conditions, citation_quote,
                        source_book, source_chunk_id, embedding, embed_model})
-  Vector index: principles_embedding on Principle.embedding (dim=3072, cosine)
+  Vector index: principles_embedding on Principle.embedding (dim=4096, cosine)
 
 Usage:
   python scripts/y_s1/import_l0_neo4j.py [--dry-run] [--limit N] [--no-resume]
@@ -37,13 +42,22 @@ NEO4J_URI  = os.getenv("NEO4J_URI",  "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASS = os.getenv("NEO4J_PASS", "culinary123")
 
-GEMINI_API_KEY     = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_EMBED_MODEL = "gemini-embedding-001"
-GEMINI_EMBED_DIM   = 3072
-GEMINI_EMBED_URL   = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    f"{GEMINI_EMBED_MODEL}:batchEmbedContents"
-)
+# ── Embedding: local Ollama qwen3-embedding:8b ────────────────────────────────
+# repo-curator 2026-05-02: embeddings stay on-host (free, fast, already
+# validated by scripts/phn_embedding_router.py). The Lingya/Gemini paid
+# embedding tier from the original PR #21 has been reverted; only chat/
+# completion calls in other files keep using Lingya.
+OLLAMA_URL              = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/api/embed")
+EMBED_MODEL             = "qwen3-embedding:8b"
+EMBED_DIM               = 4096
+OLLAMA_TIMEOUT_SECONDS  = 600
+OLLAMA_MAX_RETRIES      = 3
+OLLAMA_BACKOFF_SECONDS  = (5, 15, 45)
+
+# Legacy aliases — historical callers still import these names. Pointed at
+# the new local-Ollama values so consumers transparently use 4096-dim vectors.
+GEMINI_EMBED_MODEL      = EMBED_MODEL
+GEMINI_EMBED_DIM        = EMBED_DIM
 
 BATCH_SIZE    = 100
 PROGRESS_PATH = REPO_ROOT / "output" / "l0_neo4j_import_progress.json"
@@ -114,26 +128,73 @@ def iter_l0_records() -> Iterator[tuple[str, dict]]:
                 yield book, rec
 
 
-def get_embeddings_gemini(texts: list[str], client: httpx.Client) -> list[list[float]]:
-    """Batch embed via Gemini gemini-embedding-001 (3072-dim)."""
-    if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY env var not set")
-    requests_payload = [
-        {
-            "model": f"models/{GEMINI_EMBED_MODEL}",
-            "content": {"parts": [{"text": t[:8000]}]},
-            "task_type": "RETRIEVAL_DOCUMENT",
-        }
-        for t in texts
-    ]
-    resp = client.post(
-        f"{GEMINI_EMBED_URL}?key={GEMINI_API_KEY}",
-        json={"requests": requests_payload},
-        timeout=120,
-    )
+def _post_ollama_embed(
+    client: httpx.Client,
+    payload: dict,
+) -> httpx.Response:
+    """POST to Ollama /api/embed with retry/backoff on 5xx/transport errors.
+
+    Ollama runs locally; auth is not used. 5xx HTTP responses and transport
+    exceptions are retried up to OLLAMA_MAX_RETRIES with exponential backoff.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(OLLAMA_MAX_RETRIES + 1):
+        try:
+            resp = client.post(
+                OLLAMA_URL,
+                json=payload,
+                timeout=OLLAMA_TIMEOUT_SECONDS,
+            )
+            if resp.status_code >= 500 and attempt < OLLAMA_MAX_RETRIES:
+                time.sleep(OLLAMA_BACKOFF_SECONDS[attempt])
+                continue
+            return resp
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt < OLLAMA_MAX_RETRIES:
+                time.sleep(OLLAMA_BACKOFF_SECONDS[attempt])
+                continue
+            raise
+
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Ollama embedding request failed (unreachable)")
+
+
+def get_embeddings_ollama(texts: list[str], client: httpx.Client) -> list[list[float]]:
+    """Batch embed via local Ollama qwen3-embedding:8b (4096-dim).
+
+    Texts are truncated to 8000 chars (matching the previous Gemini bound).
+    Returns a list of float vectors aligned with `texts`.
+    """
+    payload = {
+        "model": EMBED_MODEL,
+        "input": [t[:8000] for t in texts],
+    }
+    resp = _post_ollama_embed(client, payload)
     resp.raise_for_status()
     data = resp.json()
-    return [item["values"] for item in data["embeddings"]]
+    embeddings = data.get("embeddings")
+    if not isinstance(embeddings, list):
+        raise RuntimeError(f"Ollama response missing 'embeddings' list: {data}")
+    if len(embeddings) != len(texts):
+        raise ValueError(f"Ollama returned {len(embeddings)} embeddings for {len(texts)} inputs")
+    for embedding in embeddings:
+        if len(embedding) != EMBED_DIM:
+            raise ValueError(f"Ollama returned dim={len(embedding)}, expected {EMBED_DIM}")
+    return embeddings
+
+
+# Legacy alias — historical callers and tests still import this name.
+# Implementation moved to local Ollama; see get_embeddings_ollama for details.
+def get_embeddings_gemini(texts: list[str], client: httpx.Client) -> list[list[float]]:
+    return get_embeddings_ollama(texts, client)
+
+
+def gemini_embed_one(text: str) -> list[float]:
+    """Single-text embedding helper (legacy name; routes through Ollama)."""
+    with httpx.Client(trust_env=False, timeout=OLLAMA_TIMEOUT_SECONDS) as c:
+        return get_embeddings_ollama([text], c)[0]
 
 
 def setup_neo4j(driver) -> None:
@@ -151,11 +212,11 @@ def setup_neo4j(driver) -> None:
             CREATE VECTOR INDEX principles_embedding IF NOT EXISTS
             FOR (p:Principle) ON (p.embedding)
             OPTIONS {{indexConfig: {{
-              `vector.dimensions`: {GEMINI_EMBED_DIM},
+              `vector.dimensions`: {EMBED_DIM},
               `vector.similarity_function`: 'cosine'
             }}}}
         """)
-        print(f"  Vector index created (dim={GEMINI_EMBED_DIM}, cosine)")
+        print(f"  Vector index created (dim={EMBED_DIM}, cosine)")
 
 
 def import_batch_fn(tx, batch: list[dict]) -> int:
@@ -189,6 +250,25 @@ def save_progress(done_ids: set[str]) -> None:
     PROGRESS_PATH.write_text(json.dumps(list(done_ids)))
 
 
+def _ollama_health_check() -> tuple[bool, str]:
+    """Smoke-test the embedding endpoint at startup so the run fails fast if
+    Ollama is down (rather than logging zero-vector warnings for thousands of
+    records). Returns (ok, message).
+    """
+    try:
+        with httpx.Client(trust_env=False, timeout=10) as c:
+            resp = c.post(OLLAMA_URL, json={"model": EMBED_MODEL, "input": ["ping"]})
+        if resp.status_code >= 400:
+            return False, f"HTTP {resp.status_code} from {OLLAMA_URL}"
+        embs = resp.json().get("embeddings") or []
+        if not embs or not isinstance(embs[0], list) or len(embs[0]) != EMBED_DIM:
+            actual = len(embs[0]) if embs and isinstance(embs[0], list) else 0
+            return False, f"unexpected embedding shape (got dim={actual}, want {EMBED_DIM})"
+        return True, "ok"
+    except Exception as exc:  # noqa: BLE001
+        return False, f"{type(exc).__name__}: {exc}"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Import L0 principles into Neo4j")
     parser.add_argument("--dry-run",   action="store_true")
@@ -198,11 +278,18 @@ def main() -> None:
                         help="Drop+recreate vector index only, then exit")
     args = parser.parse_args()
 
-    if not GEMINI_API_KEY:
-        print("ERROR: GEMINI_API_KEY env var required")
-        sys.exit(1)
+    # Embedding now runs on local Ollama — verify reachability before doing
+    # heavy work, but only when we actually plan to embed (skip on --dry-run
+    # and --reindex which never call the embedder).
+    if not args.dry_run and not args.reindex:
+        ok, msg = _ollama_health_check()
+        if not ok:
+            print(f"ERROR: Ollama embedding endpoint unreachable: {msg}")
+            print(f"       Tried {OLLAMA_URL} with model {EMBED_MODEL}")
+            print(f"       Start Ollama (`ollama serve`) and ensure {EMBED_MODEL} is pulled.")
+            sys.exit(1)
 
-    print(f"Embedding: Gemini {GEMINI_EMBED_MODEL} ({GEMINI_EMBED_DIM}-dim)")
+    print(f"Embedding: Ollama {EMBED_MODEL} ({EMBED_DIM}-dim, local)")
     print(f"Connecting to Neo4j at {NEO4J_URI}...")
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASS))
     try:
@@ -213,7 +300,7 @@ def main() -> None:
     print("  Connected.")
 
     if not args.dry_run:
-        print("Setting up schema (3072-dim Gemini index)...")
+        print(f"Setting up schema ({EMBED_DIM}-dim Ollama qwen3 index)...")
         setup_neo4j(driver)
 
     if args.reindex:
@@ -228,8 +315,7 @@ def main() -> None:
     all_records = list(iter_l0_records())
     total = len(all_records)
     print(f"  Found {total} records")
-    # Cost: Gemini embedding-001 is free tier via API v1beta as of 2026-04
-    print(f"  Estimated embedding cost: ~$0.00 (Gemini free tier, {total} records)")
+    print(f"  Estimated embedding cost: $0.00 (local Ollama {EMBED_MODEL}, {total} records)")
 
     pending = [(book, rec) for book, rec in all_records
                if principle_id(rec, book) not in done_ids]
@@ -245,7 +331,7 @@ def main() -> None:
         driver.close()
         return
 
-    http_client = httpx.Client(trust_env=False, timeout=120)
+    http_client = httpx.Client(trust_env=False, timeout=OLLAMA_TIMEOUT_SECONDS)
     total_imported = 0
     t0 = time.time()
 
@@ -256,11 +342,7 @@ def main() -> None:
             for _, rec in batch
         ]
 
-        try:
-            embeddings = get_embeddings_gemini(texts, http_client)
-        except Exception as e:
-            print(f"  [warn] Gemini embed failed at {batch_start}: {e} — using zeros")
-            embeddings = [[0.0] * GEMINI_EMBED_DIM for _ in batch]
+        embeddings = get_embeddings_ollama(texts, http_client)
 
         rows = []
         for (book, rec), emb in zip(batch, embeddings):
@@ -279,7 +361,7 @@ def main() -> None:
                 "source_book":         book,
                 "source_chunk_id":     rec.get("source_chunk_id", ""),
                 "embedding":           emb,
-                "embed_model":         GEMINI_EMBED_MODEL,
+                "embed_model":         EMBED_MODEL,
             })
 
         with driver.session() as s:
@@ -301,7 +383,7 @@ def main() -> None:
     driver.close()
     print(f"\nImport complete: {total_imported} new records")
     print(f"Total done: {len(done_ids)}")
-    print(f"Embed model: {GEMINI_EMBED_MODEL} ({GEMINI_EMBED_DIM}-dim)")
+    print(f"Embed model: {EMBED_MODEL} ({EMBED_DIM}-dim, local)")
 
 
 if __name__ == "__main__":
