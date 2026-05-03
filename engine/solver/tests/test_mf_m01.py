@@ -114,3 +114,66 @@ class TestMFM01(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# ── P1.2 thickness boundary tests (PR #20 Round 2 review) ─────────────────
+
+class TestMFM01Thickness(unittest.TestCase):
+    """Mirror the mf_t01 thickness validation — require_positive when supplied."""
+
+    def test_zero_thickness_flagged(self):
+        out = mf_m01.solve({
+            "C_init": 0.0, "C_boundary": 1.0,
+            "time": 100.0, "x_position": 0.001,
+            "thickness": 0.0,
+            "D_eff": 1e-10,
+        })
+        self.assertFalse(out["validity"]["passed"])
+        self.assertTrue(any("thickness" in i and "> 0" in i
+                            for i in out["validity"]["issues"]),
+                        msg=out["validity"]["issues"])
+
+    def test_negative_thickness_flagged(self):
+        out = mf_m01.solve({
+            "C_init": 0.0, "C_boundary": 1.0,
+            "time": 100.0, "x_position": 0.001,
+            "thickness": -0.01,
+            "D_eff": 1e-10,
+        })
+        self.assertFalse(out["validity"]["passed"])
+        self.assertTrue(any("thickness" in i and "> 0" in i
+                            for i in out["validity"]["issues"]),
+                        msg=out["validity"]["issues"])
+
+    def test_nan_thickness_flagged(self):
+        out = mf_m01.solve({
+            "C_init": 0.0, "C_boundary": 1.0,
+            "time": 100.0, "x_position": 0.001,
+            "thickness": float("nan"),
+            "D_eff": 1e-10,
+        })
+        self.assertFalse(out["validity"]["passed"])
+        self.assertTrue(any("thickness" in i and "finite" in i
+                            for i in out["validity"]["issues"]),
+                        msg=out["validity"]["issues"])
+
+    def test_inf_thickness_flagged(self):
+        out = mf_m01.solve({
+            "C_init": 0.0, "C_boundary": 1.0,
+            "time": 100.0, "x_position": 0.001,
+            "thickness": float("inf"),
+            "D_eff": 1e-10,
+        })
+        self.assertFalse(out["validity"]["passed"])
+        self.assertTrue(any("thickness" in i and "finite" in i
+                            for i in out["validity"]["issues"]),
+                        msg=out["validity"]["issues"])
+
+    def test_thickness_omitted_still_passes(self):
+        # Backward compat: thickness optional; existing behavior unchanged when omitted.
+        out = mf_m01.solve({
+            "C_init": 0.0, "C_boundary": 1.0,
+            "time": 100.0, "x_position": 0.001,
+            "D_eff": 1e-10,
+        })
+        self.assertTrue(out["validity"]["passed"])

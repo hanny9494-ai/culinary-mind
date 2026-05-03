@@ -57,6 +57,13 @@ def solve(params: dict) -> dict:
     val.require_positive("x_position", x_pos, allow_zero=True)
     val.require_positive("D_eff", d_eff)
 
+    # P1.2 (PR #20 Round 2 review): mirror mf_t01.py — when `thickness` is
+    # supplied, enforce > 0. thickness=NaN/0/-1/inf previously slipped
+    # through; the semi-infinite assumption needs a positive slab depth.
+    # `thickness` remains optional (None == not provided).
+    if thickness is not None:
+        val.require_positive("thickness", thickness, allow_zero=False)
+
     # Sanity warnings using yaml notes range
     if isinstance(d_eff, (int, float)) and not isinstance(d_eff, bool) and d_eff > 0:
         if d_eff > 1e-7 or d_eff < 1e-13:
@@ -79,9 +86,12 @@ def solve(params: dict) -> dict:
             arg = x_pos / (2.0 * math.sqrt(d_eff * t_time))
             value = float(c_init) + (float(c_boundary) - float(c_init)) * math.erfc(arg)
 
-    # Semi-infinite check (penetration-depth heuristic)
+    # Semi-infinite check (penetration-depth heuristic). Only run when
+    # thickness is a positive finite number — otherwise NaN/inf could
+    # accidentally satisfy `x_pos > thickness` or skew penetration math.
     if (
         isinstance(thickness, (int, float)) and not isinstance(thickness, bool)
+        and math.isfinite(thickness) and thickness > 0
         and isinstance(x_pos, (int, float)) and not isinstance(x_pos, bool)
         and isinstance(t_time, (int, float)) and not isinstance(t_time, bool)
         and isinstance(d_eff, (int, float)) and not isinstance(d_eff, bool)
