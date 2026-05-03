@@ -58,7 +58,7 @@ start_agent_pane() {
   local agent_file="$CE_HUB_CWD/.claude/agents/${agent}.md"
   local cmd="cd $CE_HUB_CWD && claude --model $model --dangerously-skip-permissions"
   [ -f "$agent_file" ] && cmd="$cmd --agent $agent"
-  if [ "$agent" = "cc-lead" ]; then
+  if [ "$agent" = "cc-lead" ] && [ "${CE_HUB_D68_SESSIONS:-0}" = "1" ]; then
     cmd="cd $CE_HUB_CWD && $CE_HUB_CWD/ce-hub/scripts/cehub-cc-lead-wrapper.sh -- claude --model $model --dangerously-skip-permissions"
     [ -f "$agent_file" ] && cmd="$cmd --agent $agent"
   fi

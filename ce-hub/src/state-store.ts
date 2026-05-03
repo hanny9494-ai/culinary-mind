@@ -1,9 +1,10 @@
 import Database from 'better-sqlite3';
 import { readFileSync, existsSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { basename as pathBasename, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { v4 as uuidv4 } from 'uuid';
 import type { Task, Conversation, Message, CeEvent, CreateTaskInput, TaskUpdate, TaskFilter, CreateEventInput } from './types.js';
+import { D68_CONFIG } from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -66,6 +67,7 @@ export interface CreateSessionInput {
 export interface InboxMessage {
   id: string;
   file_path: string;
+  inbox_file_basename: string;
   target_agent: string;
   source_agent: string | null;
   type: string;
@@ -87,6 +89,7 @@ export interface InboxMessage {
 export interface CreateInboxMessageInput {
   id: string;
   file_path: string;
+  inbox_file_basename?: string | null;
   target_agent: string;
   source_agent?: string | null;
   type: string;
@@ -116,9 +119,11 @@ function rowToSession(r: Record<string, unknown>): CcLeadSession {
 }
 
 function rowToInboxMessage(r: Record<string, unknown>): InboxMessage {
+  const filePath = r.file_path as string;
   return {
     id: r.id as string,
-    file_path: r.file_path as string,
+    file_path: filePath,
+    inbox_file_basename: (r.inbox_file_basename as string | null) ?? pathBasename(filePath),
     target_agent: r.target_agent as string,
     source_agent: (r.source_agent as string | null) ?? null,
     type: r.type as string,
@@ -180,6 +185,7 @@ export class StateStore {
       CREATE TABLE IF NOT EXISTS inbox_messages (
         id TEXT PRIMARY KEY,
         file_path TEXT NOT NULL UNIQUE,
+        inbox_file_basename TEXT,
         target_agent TEXT NOT NULL,
         source_agent TEXT,
         type TEXT NOT NULL,
@@ -205,17 +211,27 @@ export class StateStore {
         ON inbox_messages(target_session_id, status);
     `);
 
-    if (!this.hasColumn('tasks', 'result_acknowledged_at')) {
-      this.db.exec('ALTER TABLE tasks ADD COLUMN result_acknowledged_at INTEGER');
+    if (!this.hasColumn('inbox_messages', 'inbox_file_basename')) {
+      this.db.exec('ALTER TABLE inbox_messages ADD COLUMN inbox_file_basename TEXT');
     }
-    if (!this.hasColumn('tasks', 'result_acknowledged_by_session_id')) {
-      this.db.exec('ALTER TABLE tasks ADD COLUMN result_acknowledged_by_session_id TEXT');
+
+    if (D68_CONFIG.SESSIONS) {
+      if (!this.hasColumn('tasks', 'result_acknowledged_at')) {
+        this.db.exec('ALTER TABLE tasks ADD COLUMN result_acknowledged_at INTEGER');
+      }
+      if (!this.hasColumn('tasks', 'result_acknowledged_by_session_id')) {
+        this.db.exec('ALTER TABLE tasks ADD COLUMN result_acknowledged_by_session_id TEXT');
+      }
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_tasks_unacked
+          ON tasks(status, result_acknowledged_at)
+          WHERE status IN ('done','failed');
+      `);
     }
-    this.db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_tasks_unacked
-        ON tasks(status, result_acknowledged_at)
-        WHERE status IN ('done','failed');
-    `);
+  }
+
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
   }
 
   // Tasks
@@ -417,6 +433,7 @@ export class StateStore {
     const row = {
       id: input.id,
       file_path: input.file_path,
+      inbox_file_basename: input.inbox_file_basename ?? pathBasename(input.file_path),
       target_agent: input.target_agent,
       source_agent: input.source_agent ?? null,
       type: input.type,
@@ -432,12 +449,13 @@ export class StateStore {
     this.db.prepare(
       `INSERT INTO inbox_messages
        (id,file_path,target_agent,source_agent,type,source_task_id,target_session_id,created_at,
-        priority,ack_required,ack_deadline_at,status,metadata)
+        inbox_file_basename,priority,ack_required,ack_deadline_at,status,metadata)
        VALUES
        (@id,@file_path,@target_agent,@source_agent,@type,@source_task_id,@target_session_id,@created_at,
-        @priority,@ack_required,@ack_deadline_at,@status,@metadata)
+        @inbox_file_basename,@priority,@ack_required,@ack_deadline_at,@status,@metadata)
        ON CONFLICT(id) DO UPDATE SET
         file_path=excluded.file_path,
+        inbox_file_basename=excluded.inbox_file_basename,
         target_agent=excluded.target_agent,
         source_agent=excluded.source_agent,
         type=excluded.type,
@@ -471,12 +489,17 @@ export class StateStore {
     ).run({ id, archived_at: Date.now(), archive_dir: archiveDir });
   }
 
-  markInboxAcked(id: string, sessionId: string, outcome: string): void {
-    this.db.prepare(
+  markInboxAcked(id: string, sessionId: string, outcome: string): boolean {
+    const result = this.db.prepare(
       `UPDATE inbox_messages
        SET status = 'acked', acked_at = @acked_at, acked_session_id = @acked_session_id, ack_outcome = @ack_outcome
-       WHERE id = @id AND acked_at IS NULL`
+       WHERE id = @id
+         AND status = 'visible'
+         AND ack_required = 1
+         AND acked_at IS NULL
+         AND target_session_id = @acked_session_id`
     ).run({ id, acked_at: Date.now(), acked_session_id: sessionId, ack_outcome: outcome });
+    return result.changes > 0;
   }
 
   listVisibleInbox(agent: string, includeAckRequired = true): InboxMessage[] {
@@ -498,6 +521,7 @@ export class StateStore {
   }
 
   markTaskResultAcknowledged(taskId: string, sessionId: string, ackedAt = Date.now()): void {
+    if (!this.hasColumn('tasks', 'result_acknowledged_at')) return;
     this.db.prepare(
       `UPDATE tasks
        SET result_acknowledged_at = @acked_at,
@@ -507,6 +531,7 @@ export class StateStore {
   }
 
   isTaskResultAcknowledged(taskId: string): boolean {
+    if (!this.hasColumn('tasks', 'result_acknowledged_at')) return false;
     const row = this.db.prepare(
       `SELECT result_acknowledged_at FROM tasks WHERE id = ?`
     ).get(taskId) as { result_acknowledged_at: number | null } | undefined;

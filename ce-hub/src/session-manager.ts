@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { StateStore } from './state-store.js';
@@ -36,6 +37,18 @@ function pidExists(pid: number): boolean {
   }
 }
 
+function processStartTime(pid: number | null | undefined): string | null {
+  if (!pid || !Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+      encoding: 'utf-8',
+      timeout: 1_000,
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 export class SessionManager {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -55,10 +68,11 @@ export class SessionManager {
 
     const now = Date.now();
     const reason = input.reason ?? 'manual';
-    const prev = this.store.getActiveSession();
-    if (prev) this.store.markSessionEnded(prev.id, 'replaced');
-
     const sessionId = `sess_${randomUUID()}`;
+    const pid = input.pid ?? null;
+    const wrapperPid = input.wrapperPid ?? input.pid ?? null;
+    const pidStartTime = processStartTime(pid);
+    const wrapperPidStartTime = processStartTime(wrapperPid);
     let quarantine: QuarantineResult = {
       quarantineDir: null,
       orphanCount: 0,
@@ -67,41 +81,50 @@ export class SessionManager {
       summaryFile: null,
     };
 
-    if (D68_CONFIG.QUARANTINE) {
-      quarantine = quarantineCcLeadInbox(this.store, this.ceHubDir, sessionId, reason, now);
-    }
+    this.store.transaction(() => {
+      const prev = this.store.getActiveSession();
+      if (prev) this.store.markSessionEnded(prev.id, 'replaced');
 
-    this.store.createSession({
-      id: sessionId,
-      state: 'ACTIVE',
-      pid: input.pid ?? null,
-      wrapper_pid: input.wrapperPid ?? input.pid ?? null,
-      started_at: now,
-      metadata: {
-        reason,
-        quarantine_dir: quarantine.quarantineDir,
-        orphan_count: quarantine.orphanCount,
-        summary_message_id: quarantine.summaryMessageId,
-        ...(input.metadata ?? {}),
-      },
+      if (D68_CONFIG.QUARANTINE) {
+        quarantine = quarantineCcLeadInbox(this.store, this.ceHubDir, sessionId, reason, now);
+      }
+
+      this.store.createSession({
+        id: sessionId,
+        state: 'ACTIVE',
+        pid,
+        wrapper_pid: wrapperPid,
+        started_at: now,
+        metadata: {
+          ...(input.metadata ?? {}),
+          reason,
+          quarantine_dir: quarantine.quarantineDir,
+          orphan_count: quarantine.orphanCount,
+          summary_message_id: quarantine.summaryMessageId,
+          pid_start_time: pidStartTime,
+          wrapper_pid_start_time: wrapperPidStartTime,
+        },
+      });
+
+      this.store.createEvent({
+        type: 'cc_lead.session.start',
+        source: 'session-manager',
+        target: 'cc-lead',
+        payload: { sessionId, reason, orphanCount: quarantine.orphanCount },
+      });
     });
 
     this.writeCurrentSession({
       session_id: sessionId,
       started_at_ms: now,
       reason,
-      pid: input.pid ?? null,
-      wrapper_pid: input.wrapperPid ?? input.pid ?? null,
+      pid,
+      wrapper_pid: wrapperPid,
+      pid_start_time: pidStartTime,
+      wrapper_pid_start_time: wrapperPidStartTime,
       quarantine_dir: quarantine.quarantineDir,
       orphan_count: quarantine.orphanCount,
       summary_message_id: quarantine.summaryMessageId,
-    });
-
-    this.store.createEvent({
-      type: 'cc_lead.session.start',
-      source: 'session-manager',
-      target: 'cc-lead',
-      payload: { sessionId, reason, orphanCount: quarantine.orphanCount },
     });
 
     return {
@@ -137,13 +160,19 @@ export class SessionManager {
     const active = this.store.getActiveSession();
     if (!active) return;
     const pid = active.wrapper_pid ?? active.pid;
-    if (pid && !pidExists(pid)) {
+    const startKey = active.wrapper_pid ? 'wrapper_pid_start_time' : 'pid_start_time';
+    const expectedStartTime = typeof active.metadata[startKey] === 'string'
+      ? active.metadata[startKey] as string
+      : null;
+    const currentStartTime = expectedStartTime ? processStartTime(pid) : null;
+    const pidReused = Boolean(expectedStartTime && currentStartTime && currentStartTime !== expectedStartTime);
+    if (pid && (!pidExists(pid) || pidReused)) {
       this.store.markSessionEnded(active.id, 'crashed');
       this.store.createEvent({
         type: 'cc_lead.session.dead',
         source: 'session-manager',
         target: 'cc-lead',
-        payload: { sessionId: active.id, pid },
+        payload: { sessionId: active.id, pid, expectedStartTime, currentStartTime, pidReused },
       });
     }
   }

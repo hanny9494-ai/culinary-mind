@@ -83,34 +83,71 @@ EOF
 ## D68 Ack Protocol
 
 cc-lead runs inside `cehub-cc-lead-wrapper.sh` when launched from the TUI. The
-current session id is in `$CE_HUB_SESSION_ID`.
+current session id is in `$CE_HUB_SESSION_ID`. Only use the D68 ack protocol
+when `$CE_HUB_SESSION_ID` is non-empty.
 
 When you handle any `.ce-hub/inbox/cc-lead/*.json` message that contains
 `ack_required: true`, write an explicit ack file after you have handled it:
 
 ```bash
-msg_id="<id field from the inbox JSON>"
-task_id="<task_id field if present>"
-session_id="${CE_HUB_SESSION_ID:?missing session id}"
+#!/usr/bin/env bash
+set -euo pipefail
+
+msg_file="${1:?usage: ack-inbox.sh .ce-hub/inbox/cc-lead/message.json [outcome]}"
+outcome="${2:-noted}"
+case "$outcome" in
+  noted|actioned|dispatched|deferred) ;;
+  *) echo "invalid outcome: $outcome" >&2; exit 1 ;;
+esac
+
+session_id="${CE_HUB_SESSION_ID:-}"
+if [ -z "$session_id" ]; then
+  echo "CE_HUB_SESSION_ID is missing; cannot write D68 ack" >&2
+  exit 1
+fi
+
+msg_base="$(basename "$msg_file")"
+msg_id="$(python3 - "$msg_file" <<'PY'
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    msg = json.load(f)
+msg_id = msg.get("id") or msg.get("inbox_message_id")
+if not msg_id:
+    raise SystemExit("missing id/inbox_message_id")
+print(msg_id)
+PY
+)"
+
+ack_json="$(MSG_FILE="$msg_file" MSG_BASE="$msg_base" MSG_ID="$msg_id" OUTCOME="$outcome" python3 <<'PY'
+import json, os, time
+with open(os.environ["MSG_FILE"], "r", encoding="utf-8") as f:
+    msg = json.load(f)
+payload = {
+    "ack_id": f"ack_{os.environ['MSG_ID']}_{int(time.time())}",
+    "ack_type": "explicit",
+    "ref_inbox_message_id": os.environ["MSG_ID"],
+    "ref_inbox_file_basename": os.environ["MSG_BASE"],
+    "from_agent": "cc-lead",
+    "session_id": os.environ["CE_HUB_SESSION_ID"],
+    "acked_at_ms": int(time.time() * 1000),
+    "outcome": os.environ["OUTCOME"],
+}
+task_id = msg.get("task_id")
+if task_id:
+    payload["ref_task_id"] = task_id
+print(json.dumps(payload, separators=(",", ":")))
+PY
+)"
+
+mkdir -p .ce-hub/results
 ack_file=".ce-hub/results/ack_${msg_id}.json"
 tmp="${ack_file}.tmp.$$"
-cat > "$tmp" << ACK_EOF
-{
-  "ack_id": "ack_${msg_id}_$(date +%s)",
-  "ack_type": "explicit",
-  "ref_inbox_message_id": "$msg_id",
-  "ref_inbox_file_basename": "<basename of the inbox JSON file>",
-  "ref_task_id": "$task_id",
-  "from_agent": "cc-lead",
-  "session_id": "$session_id",
-  "acked_at_ms": $(($(date +%s%N) / 1000000)),
-  "outcome": "noted"
-}
-ACK_EOF
-mv "$tmp" "$ack_file"
+printf '%s' "$ack_json" > "$tmp" && sync && mv "$tmp" "$ack_file" && sync
 ```
 
 Allowed outcomes are `noted`, `actioned`, `dispatched`, and `deferred`.
+After writing the ack, do not delete the inbox file manually; the daemon archives
+the acked inbox file and the ack file.
 
 Read `msg_recovery_summary_*.json` files before other inbox files. Directories
 named `_session_pre_recovery_*` are archived previous-session messages. They are
