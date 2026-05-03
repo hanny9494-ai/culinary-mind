@@ -7,6 +7,11 @@
 export PATH="/opt/homebrew/opt/node/bin:$PATH"
 
 export CE_HUB_CWD="$HOME/culinary-mind"
+# D68 session/quarantine/ack protocol is opt-in during rollout.
+# Explicitly export these as 1 before running start.sh to enable it.
+export CE_HUB_D68_SESSIONS="${CE_HUB_D68_SESSIONS:-0}"
+export CE_HUB_D68_QUARANTINE="${CE_HUB_D68_QUARANTINE:-0}"
+export CE_HUB_D68_ACKS="${CE_HUB_D68_ACKS:-0}"
 
 # Kill old daemon if running
 lsof -t -iTCP:8750 -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null

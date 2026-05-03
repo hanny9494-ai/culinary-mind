@@ -8,6 +8,8 @@ import type { TmuxManager } from './tmux-manager.js';
 import type { CostTracker } from './cost-tracker.js';
 import type { MemoryManager } from './memory-manager.js';
 import type { Scheduler } from './scheduler.js';
+import { D68_CONFIG } from './config.js';
+import { SessionManager } from './session-manager.js';
 
 function getCwd() { return process.env.CE_HUB_CWD || process.cwd(); }
 function getCeHubDir() { return join(getCwd(), '.ce-hub'); }
@@ -19,6 +21,11 @@ export async function buildApp(
 ) {
   const app = Fastify({ logger: true });
   const startTime = Date.now();
+  const sessionManager = new SessionManager(store, getCeHubDir());
+  if (D68_CONFIG.SESSIONS) sessionManager.startPidPolling();
+  app.addHook('onClose', async () => {
+    sessionManager.stopPidPolling();
+  });
   await app.register(cors, { origin: true });
 
   // Health
@@ -30,6 +37,51 @@ export async function buildApp(
     agents: tmux.listWindows(),
     costs: costTracker.getAgentCosts(),
   }));
+
+  // D68 cc-lead lifecycle hooks. The wrapper calls start before launching
+  // claude, so quarantine happens before cc-lead can read stale inbox files.
+  app.post('/api/cc-lead/session/start', async (req, reply) => {
+    if (!D68_CONFIG.SESSIONS) return { ok: true, disabled: true };
+    try {
+      const body = (req.body ?? {}) as {
+        pid?: number;
+        wrapper_pid?: number;
+        wrapperPid?: number;
+        reason?: string;
+        metadata?: Record<string, unknown>;
+      };
+      const result = sessionManager.startNewSession({
+        pid: Number.isFinite(body.pid) ? Number(body.pid) : null,
+        wrapperPid: Number.isFinite(body.wrapper_pid) ? Number(body.wrapper_pid) :
+          Number.isFinite(body.wrapperPid) ? Number(body.wrapperPid) : null,
+        reason: body.reason ?? 'api',
+        metadata: body.metadata ?? {},
+      });
+      return reply.status(201).send({
+        ok: true,
+        session_id: result.sessionId,
+        quarantine_dir: result.quarantineDir,
+        orphan_count: result.orphanCount,
+        summary_message_id: result.summaryMessageId,
+      });
+    } catch (e) {
+      return reply.status(500).send({ ok: false, error: String(e) });
+    }
+  });
+
+  app.post('/api/cc-lead/session/end', async (req, reply) => {
+    if (!D68_CONFIG.SESSIONS) return { ok: true, disabled: true };
+    try {
+      const body = (req.body ?? {}) as { session_id?: string; sessionId?: string; reason?: string; end_reason?: string };
+      const result = sessionManager.endSession(
+        body.session_id ?? body.sessionId ?? null,
+        body.end_reason ?? body.reason ?? 'graceful',
+      );
+      return { ok: true, session_id: result.sessionId };
+    } catch (e) {
+      return reply.status(500).send({ ok: false, error: String(e) });
+    }
+  });
 
   // Agents
   app.get('/api/agents', async () => tmux.listWindows());

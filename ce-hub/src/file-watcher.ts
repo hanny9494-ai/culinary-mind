@@ -3,6 +3,8 @@ import { join, dirname, basename } from 'node:path';
 import type { TmuxManager } from './tmux-manager.js';
 import type { StateStore } from './state-store.js';
 import type { TaskEngine } from './task-engine.js';
+import { D68_CONFIG, d68PrAEnabled } from './config.js';
+import { atomicWriteJson } from './quarantine.js';
 
 // Lazy: read at call time, not module load time (avoids ESM import hoisting issue)
 function getCwd() { return process.env.CE_HUB_CWD || process.cwd(); }
@@ -54,7 +56,7 @@ function firstNonEmptyString(...vals: unknown[]): string | undefined {
 // Q2 — Build an archive filename that won't collide with previous archives of
 // the same source basename. Suffix combines wall-clock ms + pid + small random
 // string for collision resistance even within the same millisecond.
-function uniqueArchivePath(dir: string, sourceName: string): string {
+export function uniqueArchivePath(dir: string, sourceName: string): string {
   const dotIdx = sourceName.lastIndexOf('.');
   const stem = dotIdx > 0 ? sourceName.slice(0, dotIdx) : sourceName;
   const ext = dotIdx > 0 ? sourceName.slice(dotIdx) : '';
@@ -77,7 +79,9 @@ export class FileWatcher {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   // Dedup: track result files currently being processed to prevent double-handling
   // (watch() event + 30s poll can race on the same file before unlinkSync fires)
+  private processingDispatch = new Set<string>();
   private processingResults = new Set<string>();
+  private processingAcks = new Set<string>();
   // Q3+Q7 — cross-call idempotency: side effects already executed for this file.
   // Set after first successful pass through the side-effect block; cleared once
   // the file is finally archived or quarantined. Prevents duplicate appendRaw /
@@ -120,13 +124,12 @@ export class FileWatcher {
       if ((event === 'rename' || event === 'change') && filename?.endsWith('.json')) {
         const filePath = join(resultsDir, filename);
         if (!existsSync(filePath)) return;
-        setTimeout(() => this.handleResult(filePath), 200);
+        setTimeout(() => this.handleResultsFile(filePath), 200);
       }
     }));
 
     // Process any existing dispatch/results files on startup
-    this.processExisting(dispatchDir, (f) => this.handleDispatch(f));
-    this.processExisting(resultsDir, (f) => this.handleResult(f));
+    this.scanOnce();
 
     // Periodically nudge agents that haven't reported results
     this.nudgeTimer = setInterval(() => this.nudgePending(), 120_000); // every 2 min
@@ -137,11 +140,17 @@ export class FileWatcher {
     // Polling fallback: fs.watch is unreliable on macOS, scan every 30s.
     // Stored on `this.pollTimer` so stop() can clearInterval (D69 round 2 — GPT 5.5).
     this.pollTimer = setInterval(() => {
-      this.processExisting(dispatchDir, (f) => this.handleDispatch(f));
-      this.processExisting(resultsDir, (f) => this.handleResult(f));
+      this.scanOnce();
     }, 30_000);
 
-    console.log(`[FileWatcher] watching ${dispatchDir} and ${resultsDir} (+ 30s poll fallback)`);
+    console.log(`[FileWatcher] watching ${dispatchDir} and ${resultsDir} (+ 30s poll fallback${D68_CONFIG.ACKS ? ', D68 acks' : ''})`);
+  }
+
+  scanOnce(): void {
+    const dispatchDir = join(getCeHubDir(), 'dispatch');
+    const resultsDir = join(getCeHubDir(), 'results');
+    this.processExisting(dispatchDir, (f) => this.handleDispatch(f));
+    this.processExisting(resultsDir, (f) => this.handleResultsFile(f));
   }
 
   private processExisting(dir: string, handler: (path: string) => void): void {
@@ -152,72 +161,248 @@ export class FileWatcher {
     } catch {}
   }
 
-  private handleDispatch(filePath: string): void {
-    const data = readJson(filePath);
-    if (!data) return;
-
-    const from = (data.from || data.dispatched_by || "cc-lead") as string;
-    const to = (data.to || data.dispatched_to) as string;
-    const task = data.task as string;
-    const taskId = data.id as string || `dispatch_${Date.now()}`;
-    const priority = (data.priority as number) || 1;
-
-    console.log(`[FileWatcher] dispatch: ${from} → ${to}: ${task?.slice(0, 60)}`);
-
-    // Create task in DB
-    this.store.createTask({
-      id: taskId,
-      title: task || 'Dispatched task', from_agent: from, to_agent: to,
-      priority, payload: data as Record<string, unknown>,
-    });
-
-    // Log event
-    this.store.createEvent({ type: 'dispatch', source: from, target: to, payload: { task, taskId } });
-
-    // Ensure target agent inbox exists
-    const inboxDir = join(getCeHubDir(), 'inbox', to);
-    ensureDir(inboxDir);
-
-    // Write task to target agent's inbox — include full dispatch payload so agent sees all fields
-    const inboxFile = join(inboxDir, `${taskId}.json`);
-    writeFileSync(inboxFile, JSON.stringify({
-      id: taskId, from, type: 'task', content: task,
-      context: data.context || '',
-      objective: data.objective || '',
-      priority: data.priority || 1,
-      expected_output: data.expected_output || '',
-      success_criteria: data.success_criteria || '',
-      payload: data,
-      created_at: new Date().toISOString(),
-    }, null, 2));
-
-    // Start target agent if not running
-    this.tmux.startAgent(to);
-
-    // If agent is already running, notify it to check inbox
-    if (this.tmux.isAlive(to)) {
-      // Give it a moment to start, then send a nudge
-      setTimeout(() => {
-        this.tmux.sendMessage(to, `You have a new task in .ce-hub/inbox/${to}/. Read the JSON file and execute it.`);
-      }, 3000);
+  private handleResultsFile(filePath: string): void {
+    if (D68_CONFIG.ACKS && basename(filePath).startsWith('ack_')) {
+      this.handleAck(filePath);
+      return;
     }
+    this.handleResult(filePath);
+  }
 
-    // Archive to raw/ for wiki compiler
-    appendRaw('dispatches.jsonl', { id: taskId, from, to, task, priority });
+  private handleDispatch(filePath: string): void {
+    if (this.processingDispatch.has(filePath)) return;
+    this.processingDispatch.add(filePath);
 
-    // Set attention flag for the target agent (triggers nav bar highlight in TUI v2)
-    writeAttention(to, true);
+    try {
+      const data = readJson(filePath);
+      if (!data) return;
 
-    // Track pending result
-    this.pendingResults.set(taskId, { agent: to, dispatchedAt: Date.now(), nudgeCount: 0 });
+      const from = (data.from || data.dispatched_by || "cc-lead") as string;
+      const to = (data.to || data.dispatched_to) as string;
+      const task = data.task as string;
+      const taskId = data.id as string || `dispatch_${Date.now()}`;
+      const priority = (data.priority as number) || 1;
+      const d68Tracked = d68PrAEnabled();
 
-    // Move dispatch file to processed (or delete)
-    try { unlinkSync(filePath); } catch {}
+      if (!this.processedSideEffects.has(filePath)) {
+        console.log(`[FileWatcher] dispatch: ${from} → ${to}: ${task?.slice(0, 60)}`);
+
+        // Create task in DB
+        this.store.createTask({
+          id: taskId,
+          title: task || 'Dispatched task', from_agent: from, to_agent: to,
+          priority, payload: data as Record<string, unknown>,
+        });
+
+        // Log event
+        this.store.createEvent({ type: 'dispatch', source: from, target: to, payload: { task, taskId } });
+
+        // Ensure target agent inbox exists
+        const inboxDir = join(getCeHubDir(), 'inbox', to);
+        ensureDir(inboxDir);
+
+        // Write task to target agent's inbox — include full dispatch payload so agent sees all fields
+        const inboxFile = join(inboxDir, `${taskId}.json`);
+        const inboxMessageId = `inbox_msg_${taskId}_${Date.now()}`;
+        const messageId = d68Tracked && to === 'cc-lead' ? inboxMessageId : taskId;
+        const inboxPayload = {
+          id: messageId, inbox_message_id: inboxMessageId, task_id: taskId,
+          from, to, type: 'task', content: task,
+          context: data.context || '',
+          objective: data.objective || '',
+          priority: data.priority || 1,
+          expected_output: data.expected_output || '',
+          success_criteria: data.success_criteria || '',
+          payload: data,
+          created_at: new Date().toISOString(),
+          ack_required: d68Tracked && to === 'cc-lead',
+        };
+        atomicWriteJson(inboxFile, inboxPayload);
+
+        if (d68Tracked) {
+          const ackRequired = to === 'cc-lead' ? 1 : 0;
+          const createdAt = Date.now();
+          this.store.createInboxMessage({
+            id: inboxMessageId,
+            file_path: `inbox/${to}/${taskId}.json`,
+            target_agent: to,
+            source_agent: from,
+            type: 'task',
+            source_task_id: taskId,
+            target_session_id: to === 'cc-lead' ? this.store.getActiveSession()?.id ?? null : null,
+            created_at: createdAt,
+            priority: priority <= 0 ? 'p0' : priority === 1 ? 'high' : 'normal',
+            ack_required: ackRequired,
+            ack_deadline_at: ackRequired ? createdAt + 15 * 60_000 : null,
+            status: 'visible',
+            metadata: { dispatch_file: basename(filePath) },
+          });
+        }
+
+        // Start target agent if not running
+        this.tmux.startAgent(to);
+
+        // If agent is already running, notify it to check inbox
+        if (this.tmux.isAlive(to)) {
+          // Give it a moment to start, then send a nudge
+          setTimeout(() => {
+            this.tmux.sendMessage(to, `You have a new task in .ce-hub/inbox/${to}/. Read the JSON file and execute it.`);
+          }, 3000);
+        }
+
+        // Archive to raw/ for wiki compiler
+        appendRaw('dispatches.jsonl', { id: taskId, from, to, task, priority });
+
+        // Set attention flag for the target agent (triggers nav bar highlight in TUI v2)
+        writeAttention(to, true);
+
+        // Track pending result
+        this.pendingResults.set(taskId, { agent: to, dispatchedAt: Date.now(), nudgeCount: 0 });
+        this.processedSideEffects.add(filePath);
+      }
+
+      // Move dispatch file to processed when D68 is enabled; legacy flag-off path deletes.
+      if (d68Tracked) {
+        this.archiveWithRetry(filePath, join(getCeHubDir(), 'dispatch', '_processed', this.dateStamp()), taskId);
+      } else {
+        try { unlinkSync(filePath); } catch {}
+        this.processedSideEffects.delete(filePath);
+      }
+    } finally {
+      this.processingDispatch.delete(filePath);
+    }
   }
 
   // Test seam: rename wrapper. Override on instance for tests.
   protected safeRenameSync(src: string, dst: string): void {
     renameSync(src, dst);
+  }
+
+  private dateStamp(): string {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  private archiveDirect(filePath: string, targetDir: string): boolean {
+    ensureDir(targetDir);
+    const dst = uniqueArchivePath(targetDir, basename(filePath));
+    try {
+      this.safeRenameSync(filePath, dst);
+      return true;
+    } catch (err) {
+      console.error(`[FileWatcher] failed to move ${filePath} -> ${targetDir}:`, err);
+      return false;
+    }
+  }
+
+  private handleAck(filePath: string): void {
+    if (!D68_CONFIG.ACKS) return;
+    if (this.processingAcks.has(filePath)) return;
+    this.processingAcks.add(filePath);
+
+    try {
+      const ack = readJson(filePath);
+      if (!ack) {
+        this.archiveDirect(filePath, join(getCeHubDir(), 'results', '_invalid'));
+        return;
+      }
+
+      const invalidReason = this.validateAck(ack);
+      if (invalidReason) {
+        console.warn(`[FileWatcher] invalid ack ${basename(filePath)}: ${invalidReason}`);
+        this.store.createEvent({
+          type: 'ack.invalid',
+          source: 'file-watcher',
+          payload: { file: basename(filePath), reason: invalidReason },
+        });
+        this.archiveDirect(filePath, join(getCeHubDir(), 'results', '_invalid'));
+        return;
+      }
+
+      const refInboxMessageId = firstNonEmptyString(ack.ref_inbox_message_id);
+      // `ref_task_id` names the original dispatch task this ack refers to; it is
+      // not a result-file id.
+      const refTaskId = firstNonEmptyString(ack.ref_task_id, ack.ref_dispatch);
+      const sessionId = firstNonEmptyString(ack.session_id) as string;
+      const outcome = firstNonEmptyString(ack.outcome) as string;
+      const ackedAt = typeof ack.acked_at_ms === 'number' ? ack.acked_at_ms : Date.now();
+      const inboxMessage = refInboxMessageId ? this.store.getInboxMessage(refInboxMessageId) : null;
+
+      if (refInboxMessageId && !this.store.markInboxAcked(refInboxMessageId, sessionId, outcome)) {
+        console.warn(`[FileWatcher] rejected ack ${basename(filePath)}: inbox message is no longer ackable`);
+        this.store.createEvent({
+          type: 'ack.rejected',
+          source: 'file-watcher',
+          payload: { file: basename(filePath), ref_inbox_message_id: refInboxMessageId, session_id: sessionId },
+        });
+        this.archiveDirect(filePath, join(getCeHubDir(), 'results', '_invalid'));
+        return;
+      }
+      if (refTaskId) {
+        this.store.markTaskResultAcknowledged(refTaskId, sessionId, ackedAt);
+        this.pendingResults.delete(refTaskId);
+      }
+
+      const refBasename = inboxMessage
+        ? (inboxMessage.inbox_file_basename || basename(inboxMessage.file_path))
+        : firstNonEmptyString(ack.ref_inbox_file_basename);
+      if (refBasename) {
+        const inboxFile = join(getCeHubDir(), 'inbox', 'cc-lead', refBasename);
+        if (existsSync(inboxFile)) {
+          this.archiveDirect(inboxFile, join(getCeHubDir(), 'inbox', 'cc-lead', '_processed', this.dateStamp()));
+        }
+      }
+
+      this.archiveDirect(filePath, join(getCeHubDir(), 'results', '_processed', this.dateStamp()));
+      this.store.createEvent({
+        type: 'ack.processed',
+        source: 'file-watcher',
+        target: 'cc-lead',
+        payload: {
+          ack_id: firstNonEmptyString(ack.ack_id),
+          ref_inbox_message_id: refInboxMessageId,
+          ref_task_id: refTaskId,
+          session_id: sessionId,
+          outcome,
+        },
+      });
+    } finally {
+      this.processingAcks.delete(filePath);
+    }
+  }
+
+  private validateAck(ack: Record<string, unknown>): string | null {
+    const ackId = firstNonEmptyString(ack.ack_id);
+    const sessionId = firstNonEmptyString(ack.session_id);
+    const outcome = firstNonEmptyString(ack.outcome);
+    const refInboxMessageId = firstNonEmptyString(ack.ref_inbox_message_id);
+    const refTaskId = firstNonEmptyString(ack.ref_task_id, ack.ref_dispatch);
+    const fromAgent = firstNonEmptyString(ack.from_agent);
+    const allowedOutcomes = new Set(['noted', 'actioned', 'dispatched', 'deferred']);
+
+    if (!ackId) return 'missing ack_id';
+    if (!sessionId) return 'missing session_id';
+    if (!outcome || !allowedOutcomes.has(outcome)) return 'invalid outcome';
+    if (fromAgent && fromAgent !== 'cc-lead') return 'from_agent must be cc-lead';
+    if (!refInboxMessageId && !refTaskId) return 'missing ref';
+    if (!this.store.getSession(sessionId)) return 'unknown session_id';
+    const inboxMessage = refInboxMessageId ? this.store.getInboxMessage(refInboxMessageId) : null;
+    if (refInboxMessageId && !inboxMessage) return 'unknown inbox message';
+    if (refTaskId && !this.store.getTask(refTaskId)) return 'unknown task';
+
+    const refBasename = firstNonEmptyString(ack.ref_inbox_file_basename);
+    if (refBasename) {
+      if (refBasename !== basename(refBasename)) return 'unsafe inbox basename';
+      if (refBasename.includes('..') || refBasename.includes('/') || refBasename.includes('\\')) return 'unsafe inbox basename';
+    }
+    if (inboxMessage) {
+      if (inboxMessage.status !== 'visible') return 'inbox message is not visible';
+      if (inboxMessage.ack_required !== 1) return 'inbox message does not require ack';
+      if (inboxMessage.target_session_id !== sessionId) return 'session_id does not match inbox message';
+      const expectedBasename = inboxMessage.inbox_file_basename || basename(inboxMessage.file_path);
+      if (refBasename && refBasename !== expectedBasename) return 'inbox basename mismatch';
+    }
+
+    return null;
   }
 
   /**
@@ -338,11 +523,37 @@ export class FileWatcher {
             // Forward result to originator's inbox + nudge + attention
             const originInbox = join(getCeHubDir(), 'inbox', originAgent);
             ensureDir(originInbox);
-            writeFileSync(join(originInbox, `result_${from}_${Date.now()}.json`), JSON.stringify({
-              id: `result_${Date.now()}`, from, type: 'result',
+            const now = Date.now();
+            const resultMessageId = `inbox_msg_result_${from}_${now}`;
+            const resultFile = `result_${from}_${now}.json`;
+            const resultPayload = {
+              id: d68PrAEnabled() && originAgent === 'cc-lead' ? resultMessageId : `result_${now}`,
+              inbox_message_id: resultMessageId,
+              from, to: originAgent, type: 'result',
               content: `[${from} ${status}] ${summary || '(no summary)'}`, task_id: taskId,
-              output_files: outputFiles, created_at: new Date().toISOString(),
-            }, null, 2));
+              output_files: outputFiles, created_at: new Date(now).toISOString(),
+              ack_required: d68PrAEnabled() && originAgent === 'cc-lead',
+            };
+            atomicWriteJson(join(originInbox, resultFile), resultPayload);
+
+            if (d68PrAEnabled()) {
+              const ackRequired = originAgent === 'cc-lead' ? 1 : 0;
+              this.store.createInboxMessage({
+                id: resultMessageId,
+                file_path: `inbox/${originAgent}/${resultFile}`,
+                target_agent: originAgent,
+                source_agent: from,
+                type: 'result',
+                source_task_id: taskId,
+                target_session_id: originAgent === 'cc-lead' ? this.store.getActiveSession()?.id ?? null : null,
+                created_at: now,
+                priority: 'normal',
+                ack_required: ackRequired,
+                ack_deadline_at: ackRequired ? now + 15 * 60_000 : null,
+                status: 'visible',
+                metadata: { result_file: basename(filePath), status },
+              });
+            }
 
             if (this.tmux.isAlive(originAgent)) {
               this.tmux.sendMessage(originAgent, `Task completed by ${from}: ${summary?.slice(0, 200)}`);
@@ -372,7 +583,11 @@ export class FileWatcher {
 
           // Clean up the dispatch inbox file we received from `from`
           const inboxFile = join(getCeHubDir(), 'inbox', from, `${taskId}.json`);
-          try { unlinkSync(inboxFile); } catch {}
+          if (existsSync(inboxFile) && d68PrAEnabled()) {
+            this.archiveDirect(inboxFile, join(getCeHubDir(), 'inbox', from, '_processed', this.dateStamp()));
+          } else {
+            try { unlinkSync(inboxFile); } catch {}
+          }
         }
 
         this.processedSideEffects.add(filePath);
@@ -410,6 +625,10 @@ export class FileWatcher {
   private nudgePending(): void {
     const now = Date.now();
     for (const [taskId, info] of this.pendingResults) {
+      if (D68_CONFIG.ACKS && this.store.isTaskResultAcknowledged(taskId)) {
+        this.pendingResults.delete(taskId);
+        continue;
+      }
       const ageMin = (now - info.dispatchedAt) / 60_000;
       // Only nudge if >2 min old and max 3 nudges
       if (ageMin < 2 || info.nudgeCount >= 3) continue;
