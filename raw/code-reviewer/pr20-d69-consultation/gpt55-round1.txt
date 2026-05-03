@@ -1,0 +1,409 @@
+## 6 个 focus area 逐项回答
+
+### 1. 公式正确性
+
+- **T01 / M01：PDE → 半无限解析解**
+  - 这是合理的，但前提是 solver 明确声明自己实现的是该 PDE 在特定初始/边界条件下的解析解，而不是通用 PDE solver。
+  - 当前 docstring 和 assumptions 已经说明了：半无限、初始均匀、表面阶跃边界、常物性、1D，因此方向基本正确。
+  - 不再适用的场景包括：
+    - 有限厚度板/圆柱/球，背面边界影响显著；
+    - 非阶跃边界条件，例如边界温度/浓度随时间变化；
+    - 初始场非均匀；
+    - `alpha` / `D_eff` 随温度、浓度或位置变化；
+    - 多维传热/传质；
+    - 有内热源、反应项、蒸发边界、对流边界等。
+- **T04 / K01 / R01**
+  - 与 yaml 中 `sympy_expression` / equation 定义一致。
+
+### 2. 单位一致性
+
+整体良好。
+
+- **T01** 使用 °C 输入/输出是合规的，因为公式只涉及温差与热扩散，不涉及热力学绝对温度项。Arrhenius 才必须用 K。
+- **T04** `Nu/Re/Pr` dimensionless，`h` extras 单位 `W/(m²·K)` 正确。
+- **M01** `D_eff` 为 `m²/s`，浓度单位跟随输入，返回 `"kg/m³ or mol/m³ (matches input)"` 合理。
+- **K01** `S/Km` 单位一致，`Vmax/v` 单位一致。
+- **R01** `K` 为 `Pa·sⁿ`，`gamma_dot` 为 `1/s`，输出 `Pa` 正确。
+
+### 3. 物理合理性 / 边界条件
+
+- T01/M01 的 erfc 半无限解物理上合理。
+- `2·sqrt(alpha*t)` 或 `2·sqrt(D_eff*t)` 作为 penetration depth heuristic 可以接受，但阈值 `>= thickness/2` 是经验性、保守性检查，不是严格数学边界。建议在 assumption/issue 文案里说明是 heuristic。
+- 当前更大的问题是：`thickness` 没有被显式要求为正数/有限数；且 yaml 把 `thickness` 列为 runtime variable，但 solver 把它当 optional。若它是判断半无限假设的重要变量，至少应在缺失时给出“无法验证半无限假设”的 validity issue 或 assumption。
+- M01 目前允许负浓度，这不符合物理浓度约束，应修复。
+
+### 4. 测试覆盖
+
+32 个测试能覆盖主要 happy path、基本物理违规和部分假设破坏，质量尚可。
+
+建议补充：
+
+- M01：负 `C_init` / `C_boundary` 应失败。
+- T01/M01：`thickness <= 0`、`thickness` 缺失时行为。
+- 全部 solver：`NaN` / `inf` 输入。
+- `_common.Validator`：`bool` 输入是否应拒绝。
+- T04：`k_fluid <= 0`、`L_characteristic <= 0` 时 extras 不应生成且 validity failed。
+- T01/M01：`t=0, x=0` 的边界初始瞬间约定。
+- R01：`n=0` 且 `gamma_dot=0` 的物理/数学约定。
+
+另：用户描述中 T01 写“10 个测试”，实际代码里是 9 个；总数 32 是对的。
+
+### 5. Validator 使用
+
+整体模式统一，适合 atomic solver：不抛异常、累积 issues、返回 `{passed, issues}`。
+
+但有两个改进点：
+
+- `require_finite` 建议使用 `math.isfinite()`，更 idiomatic。
+- Python 中 `bool` 是 `int` 子类，因此 `True` / `False` 会通过当前 numeric 检查，可能导致 API 接收布尔值作为物理量。建议显式拒绝 `bool`。
+
+### 6. 返回格式统一性
+
+5 个 solver 都使用 `build_result`，核心字段：
+
+- `result`
+- `assumptions`
+- `validity`
+- `inputs_used`
+
+均完整。
+
+T04 的 `extras` 通过后置 mutation 加入 `out["result"]["extras"]`，当前不会破坏兼容性，但建议让 `build_result` 支持可选 `extras` 参数，避免之后每个 solver 自行扩展 schema。
+
+---
+
+# Findings
+
+## P1
+
+### P1 — `engine/solver/mf_m01.py:45-46`
+
+**问题陈述**
+
+`C_init` 和 `C_boundary` 只做了 `require_finite` 检查，没有检查非负。浓度作为 `kg/m³ or mol/m³` 的物理量，不应允许负值。当前传入负浓度时 solver 仍可能计算出数值并返回 `validity.passed == True`，这属于物理违规未拦截。
+
+**建议修复**
+
+将：
+
+```python
+val.require_finite("C_init", c_init)
+val.require_finite("C_boundary", c_boundary)
+```
+
+改为：
+
+```python
+val.require_positive("C_init", c_init, allow_zero=True)
+val.require_positive("C_boundary", c_boundary, allow_zero=True)
+```
+
+并新增测试：
+
+```python
+def test_negative_concentration_flagged(self):
+    out = mf_m01.solve({
+        "C_init": -1.0,
+        "C_boundary": 0.0,
+        "time": 100.0,
+        "x_position": 0.001,
+        "D_eff": 1e-10,
+    })
+    self.assertFalse(out["validity"]["passed"])
+```
+
+---
+
+### P1 — `engine/solver/mf_t01.py:119-138`, `engine/solver/mf_m01.py:80-98`
+
+**问题陈述**
+
+`thickness` 用于验证半无限假设，但没有显式检查其有限性和正值。对于 `thickness <= 0`、`NaN`、`inf` 等输入，当前行为不够可靠。例如：
+
+- `thickness = 0` 且 `x_position = 0` 时，可能不会产生明确的 thickness 错误；
+- `thickness < 0` 会通过 `x_position > thickness` 间接报错，但错误语义不是“厚度非法”；
+- `thickness` 是 yaml runtime variable，但 solver 实际上把它当 optional，缺失时无法验证半无限假设。
+
+这会削弱 focus area 3 中对半无限假设有效性的判断。
+
+**建议修复**
+
+如果 `thickness` 是必需 runtime variable，则直接要求：
+
+```python
+val.require_positive("thickness", thickness)
+```
+
+如果为了 atomic analytical solver 允许省略，则建议：
+
+```python
+if thickness is None:
+    val.issues.append(
+        "thickness not provided; cannot validate semi-infinite slab assumption"
+    )
+else:
+    val.require_positive("thickness", thickness)
+```
+
+或者至少把缺失作为 assumption：
+
+```python
+assumptions.append(
+    "thickness not provided → semi-infinite assumption not independently validated"
+)
+```
+
+但从 yaml 一致性角度，建议把 `thickness` 作为 required runtime variable 处理。
+
+同时补充测试：
+
+- `thickness = 0`
+- `thickness < 0`
+- `thickness = inf`
+- `thickness` missing 的期望行为
+
+---
+
+## P2
+
+### P2 — `engine/solver/_common.py:34-37`
+
+**问题陈述**
+
+`Validator.require_finite` 手写了 NaN/Inf 检查：
+
+```python
+if not isinstance(value, (int, float)) or value != value or value in (float("inf"), float("-inf")):
+```
+
+功能上大体可用，但不够 idiomatic，并且 `bool` 是 `int` 子类，因此 `True` / `False` 会被当作数值接受。例如：
+
+```python
+Re=True
+S=False
+gamma_dot=True
+```
+
+这些输入会通过部分检查，导致物理量类型污染。
+
+**建议修复**
+
+使用 `math.isfinite` 并显式拒绝 bool：
+
+```python
+import math
+
+def require_finite(self, name: str, value: Any) -> "Validator":
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        self.issues.append(f"{name} must be finite, got {value!r}")
+    return self
+```
+
+并增加 `_common` 或 solver 层测试覆盖 bool、NaN、inf。
+
+---
+
+### P2 — `engine/solver/mf_t04.py:65-78`
+
+**问题陈述**
+
+T04 的 `extras` 是通过：
+
+```python
+out["result"]["extras"] = extras
+```
+
+后置 mutation 加入，而不是通过 `build_result` 统一构造。当前不破坏返回格式，但后续如果其他 solver 也需要 extras，容易出现 schema 分叉。
+
+**建议修复**
+
+扩展 `build_result`：
+
+```python
+def build_result(..., extras: dict | None = None) -> dict:
+    result = {"value": value, "unit": unit, "symbol": symbol}
+    if extras:
+        result["extras"] = extras
+    return {
+        "result": result,
+        ...
+    }
+```
+
+然后 T04 使用：
+
+```python
+return build_result(
+    value=nu,
+    unit="dimensionless",
+    symbol="Nu",
+    assumptions=assumptions,
+    validity=val.result(),
+    inputs_used=inputs_used,
+    extras=extras or None,
+)
+```
+
+---
+
+### P2 — `engine/solver/mf_t01.py:98-108`, `engine/solver/mf_m01.py:60-70`
+
+**问题陈述**
+
+T01/M01 在 `t == 0` 时统一返回初始值：
+
+```python
+value = float(t_init)
+```
+
+或：
+
+```python
+value = float(c_init)
+```
+
+这对 `x > 0` 是合理的，但在 `x_position == 0` 且 `time == 0` 的瞬间，阶跃边界条件存在数学上的不连续点。当前 solver 默认返回初始值，没有在 assumptions 中说明该约定。
+
+**建议修复**
+
+增加显式约定，例如：
+
+```python
+if t_time == 0:
+    value = float(t_init)
+    assumptions.append(
+        "t = 0 convention → returns initial value, including at boundary discontinuity"
+    )
+```
+
+或者对 `t == 0 and x == 0` 给出 validity issue，要求调用方选择 `t > 0` 或初始状态。
+
+---
+
+### P2 — `engine/solver/tests/test_mf_m01.py`
+
+**问题陈述**
+
+M01 测试没有覆盖负浓度输入。由于当前实现确实允许负 `C_init` / `C_boundary` 通过，这个测试缺口掩盖了 P1 问题。
+
+**建议修复**
+
+新增负浓度测试，至少覆盖：
+
+- `C_init < 0`
+- `C_boundary < 0`
+
+---
+
+### P2 — `engine/solver/tests/test_mf_t01.py`, `engine/solver/tests/test_mf_m01.py`
+
+**问题陈述**
+
+T01/M01 测试覆盖了 `x_position > thickness` 和长时间 penetration 破坏，但没有覆盖非法 thickness：
+
+- `thickness = 0`
+- `thickness < 0`
+- `thickness = inf`
+- 缺失 thickness 时是否应 failed 或仅记录 assumption
+
+这部分是半无限假设验证的关键输入。
+
+**建议修复**
+
+补充对应测试，并明确期望语义。若 yaml runtime variable 视为 required，则缺失 thickness 应导致 `validity.passed == False`。
+
+---
+
+## Info
+
+### Info — `engine/solver/mf_t01.py`, `engine/solver/mf_m01.py`
+
+**问题陈述**
+
+T01/M01 使用 PDE 的半无限 erfc 解析解，而不是离散 PDE 的通用求解。这是可接受的 atomic solver 设计，但需要在 module name、docstring 或 assumptions 中持续保持清晰，避免调用方误以为这是任意边界条件的一般 Fourier/Fick solver。
+
+**建议修复**
+
+当前 docstring 已基本说明。建议在返回 assumptions 中增加更明确的适用边界：
+
+```python
+"analytical erfc solution for semi-infinite medium only"
+```
+
+---
+
+### Info — `engine/solver/mf_t01.py:126-134`, `engine/solver/mf_m01.py:88-96`
+
+**问题陈述**
+
+半无限假设检查：
+
+```python
+penetration = 2.0 * math.sqrt(alpha * t_time)
+if penetration >= thickness / 2.0:
+```
+
+是合理的经验 heuristic，但不是严格适用边界。当前文案“violated”略显绝对。
+
+**建议修复**
+
+可以把 issue 文案改为：
+
+```python
+"semi-infinite assumption may be invalid: estimated penetration depth ..."
+```
+
+或在 assumptions 中注明：
+
+```python
+"semi-infinite validity checked using penetration-depth heuristic"
+```
+
+---
+
+### Info — `engine/solver/mf_t01.py`, `engine/solver/mf_m01.py`
+
+**问题陈述**
+
+`dx` 在 yaml 中作为 constants 出现，但解析解模式下未使用。当前 docstring 已说明 “accepted but unused”，这可以接受。
+
+**建议修复**
+
+无需阻塞。若未来需要与 yaml 更严格对齐，可以把 `dx` echo 到 `inputs_used` 或在 assumptions 中说明 “dx ignored in analytical mode”。
+
+---
+
+# 总体结论
+
+**REQUEST_CHANGES**
+
+主要阻塞点是：
+
+1. **M01 允许负浓度通过**，违反物理约束。
+2. **T01/M01 的 thickness 没有正数/有限性校验**，且与 yaml runtime variable 语义不完全一致，会影响半无限假设验证可靠性。
+
+其余问题多为 P2/Info，可在本 PR 或后续 cleanup 中处理。
+
+=== USAGE ===
+{
+  "prompt_tokens": 11666,
+  "completion_tokens": 4333,
+  "total_tokens": 15999,
+  "prompt_tokens_details": {
+    "cached_tokens": 0,
+    "text_tokens": 0,
+    "audio_tokens": 0,
+    "image_tokens": 0
+  },
+  "completion_tokens_details": {
+    "text_tokens": 0,
+    "audio_tokens": 0,
+    "image_tokens": 0,
+    "reasoning_tokens": 0
+  },
+  "input_tokens": 11666,
+  "output_tokens": 4333,
+  "input_tokens_details": null,
+  "claude_cache_creation_5_m_tokens": 0,
+  "claude_cache_creation_1_h_tokens": 0
+}
