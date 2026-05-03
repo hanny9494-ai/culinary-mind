@@ -48,14 +48,17 @@ def solve(params: dict) -> dict:
     thickness   = params.get("thickness")
     d_eff       = params.get("D_eff")
 
-    val.require_finite("C_init", c_init)
-    val.require_finite("C_boundary", c_boundary)
+    # P1.1 (PR #20 D69 review): C_init / C_boundary are concentrations in
+    # mol/m³ or kg/m³ — they must be ≥ 0. require_finite alone let negative
+    # values through, violating unit semantics.
+    val.require_positive("C_init", c_init, allow_zero=True)
+    val.require_positive("C_boundary", c_boundary, allow_zero=True)
     val.require_positive("time", t_time, allow_zero=True)
     val.require_positive("x_position", x_pos, allow_zero=True)
     val.require_positive("D_eff", d_eff)
 
     # Sanity warnings using yaml notes range
-    if isinstance(d_eff, (int, float)) and d_eff > 0:
+    if isinstance(d_eff, (int, float)) and not isinstance(d_eff, bool) and d_eff > 0:
         if d_eff > 1e-7 or d_eff < 1e-13:
             val.issues.append(
                 f"D_eff={d_eff} m²/s outside typical food range "
@@ -64,8 +67,10 @@ def solve(params: dict) -> dict:
 
     value: float | None = None
     if (
-        all(isinstance(p, (int, float)) for p in (c_init, c_boundary, t_time, x_pos, d_eff))
+        all(isinstance(p, (int, float)) and not isinstance(p, bool)
+            for p in (c_init, c_boundary, t_time, x_pos, d_eff))
         and t_time >= 0 and x_pos >= 0 and d_eff > 0
+        and c_init >= 0 and c_boundary >= 0
     ):
         if t_time == 0:
             value = float(c_init)
@@ -76,8 +81,10 @@ def solve(params: dict) -> dict:
 
     # Semi-infinite check (penetration-depth heuristic)
     if (
-        isinstance(thickness, (int, float)) and isinstance(x_pos, (int, float))
-        and isinstance(t_time, (int, float)) and isinstance(d_eff, (int, float))
+        isinstance(thickness, (int, float)) and not isinstance(thickness, bool)
+        and isinstance(x_pos, (int, float)) and not isinstance(x_pos, bool)
+        and isinstance(t_time, (int, float)) and not isinstance(t_time, bool)
+        and isinstance(d_eff, (int, float)) and not isinstance(d_eff, bool)
     ):
         if x_pos > thickness:
             val.issues.append(

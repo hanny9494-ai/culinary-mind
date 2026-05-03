@@ -19,6 +19,7 @@ range / sign checks read consistently.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Iterable
 
 ABSOLUTE_ZERO_C = -273.15
@@ -39,14 +40,21 @@ class Validator:
         self.issues: list[str] = []
 
     def require_finite(self, name: str, value: Any) -> "Validator":
-        if not isinstance(value, (int, float)) or value != value or value in (float("inf"), float("-inf")):
+        # P2.1 (PR #20 D69 review): reject bool explicitly. `True`/`False` are
+        # subclasses of `int`, so the previous isinstance(value, (int, float))
+        # check let `True`/`False` pass as numeric. Use math.isfinite for the
+        # NaN/inf case — clearer than `value != value or value in (inf, -inf)`.
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not math.isfinite(value):
             self.issues.append(f"{name} must be finite, got {value!r}")
         return self
 
     def require_positive(self, name: str, value: Any, *,
                          allow_zero: bool = False) -> "Validator":
         self.require_finite(name, value)
-        if isinstance(value, (int, float)) and value == value:
+        # Mirror the bool/finite guard so we don't run comparisons on dud values.
+        if isinstance(value, (int, float)) and not isinstance(value, bool) \
+                and math.isfinite(value):
             if allow_zero and value < 0:
                 self.issues.append(f"{name} must be ≥ 0 (got {value})")
             elif not allow_zero and value <= 0:
@@ -57,7 +65,8 @@ class Validator:
                          lo: float, hi: float, *,
                          hint: str = "") -> "Validator":
         self.require_finite(name, value)
-        if isinstance(value, (int, float)) and value == value:
+        if isinstance(value, (int, float)) and not isinstance(value, bool) \
+                and math.isfinite(value):
             if value < lo or value > hi:
                 tail = f" — {hint}" if hint else ""
                 self.issues.append(
@@ -67,7 +76,8 @@ class Validator:
 
     def require_temperature_celsius(self, name: str, value: Any) -> "Validator":
         self.require_finite(name, value)
-        if isinstance(value, (int, float)) and value == value:
+        if isinstance(value, (int, float)) and not isinstance(value, bool) \
+                and math.isfinite(value):
             if value < ABSOLUTE_ZERO_C:
                 self.issues.append(
                     f"{name}={value}°C below absolute zero "

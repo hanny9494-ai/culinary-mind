@@ -110,6 +110,64 @@ class TestMFT01(unittest.TestCase):
         self.assertTrue(any("semi-infinite assumption violated" in i
                             for i in out["validity"]["issues"]))
 
+    # ── P1.2 thickness boundary-condition tests (PR #20 D69 review) ───────
+
+    def test_zero_thickness_flagged(self):
+        # thickness=0 collapses the semi-infinite assumption.
+        out = mf_t01.solve({
+            "T_init": 20.0, "T_boundary": 100.0,
+            "time": 60.0, "x_position": 0.0, "thickness": 0.0,
+            "alpha": 1.4e-7,
+        })
+        self.assertFalse(out["validity"]["passed"])
+        self.assertTrue(any("thickness" in i and "> 0" in i
+                            for i in out["validity"]["issues"]),
+                        msg=out["validity"]["issues"])
+
+    def test_negative_thickness_flagged(self):
+        out = mf_t01.solve({
+            "T_init": 20.0, "T_boundary": 100.0,
+            "time": 60.0, "x_position": 0.005, "thickness": -0.01,
+            "alpha": 1.4e-7,
+        })
+        self.assertFalse(out["validity"]["passed"])
+        self.assertTrue(any("thickness" in i and "> 0" in i
+                            for i in out["validity"]["issues"]),
+                        msg=out["validity"]["issues"])
+
+    def test_nan_thickness_flagged(self):
+        out = mf_t01.solve({
+            "T_init": 20.0, "T_boundary": 100.0,
+            "time": 60.0, "x_position": 0.005,
+            "thickness": float("nan"),
+            "alpha": 1.4e-7,
+        })
+        self.assertFalse(out["validity"]["passed"])
+        self.assertTrue(any("thickness" in i and "finite" in i
+                            for i in out["validity"]["issues"]),
+                        msg=out["validity"]["issues"])
+
+    def test_inf_thickness_flagged(self):
+        out = mf_t01.solve({
+            "T_init": 20.0, "T_boundary": 100.0,
+            "time": 60.0, "x_position": 0.005,
+            "thickness": float("inf"),
+            "alpha": 1.4e-7,
+        })
+        self.assertFalse(out["validity"]["passed"])
+        self.assertTrue(any("thickness" in i and "finite" in i
+                            for i in out["validity"]["issues"]),
+                        msg=out["validity"]["issues"])
+
+    def test_thickness_omitted_still_passes(self):
+        # Backward-compat: thickness is optional; omitting it must still pass.
+        out = mf_t01.solve({
+            "T_init": 20.0, "T_boundary": 100.0,
+            "time": 60.0, "x_position": 0.005,
+            "alpha": 1.4e-7,
+        })
+        self.assertTrue(out["validity"]["passed"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

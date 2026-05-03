@@ -43,7 +43,8 @@ def _resolve_alpha(params: dict, val: Validator,
         k, rho, cp = params["k"], params["rho"], params["Cp"]
         for n, v in (("k", k), ("rho", rho), ("Cp", cp)):
             val.require_positive(n, v)
-        if all(isinstance(x, (int, float)) and x > 0 for x in (k, rho, cp)):
+        if all(isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0
+               for x in (k, rho, cp)):
             a = k / (rho * cp)
             assumptions.append(
                 f"computed thermal diffusivity α = k/(ρ·Cp) = "
@@ -68,7 +69,9 @@ def solve(params: dict) -> dict:
         x_position    m    depth from the surface (≥ 0)
     Optional:
         thickness     m    slab thickness (for semi-infinite check only;
-                           solver warns if x_position > thickness)
+                           solver warns if x_position > thickness).
+                           Must be > 0 when provided — the semi-infinite
+                           assumption is meaningless for thickness ≤ 0.
         dx            m    accepted but unused — analytical mode skips
                            finite-difference discretisation.
     Plus one of:
@@ -91,9 +94,16 @@ def solve(params: dict) -> dict:
     val.require_positive("time", t_time, allow_zero=True)
     val.require_positive("x_position", x_pos, allow_zero=True)
 
+    # P1.2 (PR #20 D69 review): if thickness is supplied, enforce > 0.
+    # Previously thickness=NaN/0/-1/inf all silently passed validation —
+    # but the semi-infinite assumption requires a positive slab depth.
+    # `thickness` remains optional (None == not provided).
+    if thickness is not None:
+        val.require_positive("thickness", thickness, allow_zero=False)
+
     # Applicable_range from yaml: T ∈ [-40, 300] °C
     for name, v in (("T_init", t_init), ("T_boundary", t_boundary)):
-        if isinstance(v, (int, float)):
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
             val.require_in_range(name, v, -40, 300,
                                  hint="MF-T01 applicable_range")
 
@@ -104,7 +114,8 @@ def solve(params: dict) -> dict:
     value: float | None = None
     if (
         alpha is not None
-        and all(isinstance(p, (int, float)) for p in (t_init, t_boundary, t_time, x_pos))
+        and all(isinstance(p, (int, float)) and not isinstance(p, bool)
+                for p in (t_init, t_boundary, t_time, x_pos))
         and t_time >= 0 and x_pos >= 0 and alpha > 0
     ):
         if t_time == 0:
@@ -114,15 +125,19 @@ def solve(params: dict) -> dict:
             arg = x_pos / (2.0 * math.sqrt(alpha * t_time))
             value = float(t_init) + (float(t_boundary) - float(t_init)) * math.erfc(arg)
 
-    # Semi-infinite check
-    if isinstance(thickness, (int, float)) and isinstance(x_pos, (int, float)):
+    # Semi-infinite check (only when thickness is a positive finite number)
+    if (
+        isinstance(thickness, (int, float)) and not isinstance(thickness, bool)
+        and isinstance(x_pos, (int, float)) and not isinstance(x_pos, bool)
+        and math.isfinite(thickness) and thickness > 0
+    ):
         if x_pos > thickness:
             val.issues.append(
                 f"x_position={x_pos} m exceeds slab thickness={thickness} m"
             )
         elif (
             alpha is not None and isinstance(t_time, (int, float))
-            and t_time > 0 and thickness > 0
+            and not isinstance(t_time, bool) and t_time > 0
         ):
             # Conservative: if penetration depth ~2·sqrt(α·t) ≥ thickness/2,
             # the semi-infinite assumption breaks down.

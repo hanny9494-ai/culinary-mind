@@ -64,6 +64,53 @@ class TestMFM01(unittest.TestCase):
         self.assertTrue(any("exceeds slab thickness" in i
                             for i in out["validity"]["issues"]))
 
+    # ── P1.1 boundary-condition tests (PR #20 D69 review) ─────────────────
+
+    def test_negative_c_init_flagged(self):
+        # Concentrations are mol/m³ or kg/m³ — negative values are non-physical.
+        out = mf_m01.solve({
+            "C_init": -1.0, "C_boundary": 1.0,
+            "time": 100.0, "x_position": 0.001,
+            "D_eff": 1e-10,
+        })
+        self.assertFalse(out["validity"]["passed"])
+        self.assertTrue(any("C_init" in i and "≥ 0" in i
+                            for i in out["validity"]["issues"]),
+                        msg=out["validity"]["issues"])
+
+    def test_negative_c_boundary_flagged(self):
+        out = mf_m01.solve({
+            "C_init": 0.0, "C_boundary": -2.5,
+            "time": 100.0, "x_position": 0.001,
+            "D_eff": 1e-10,
+        })
+        self.assertFalse(out["validity"]["passed"])
+        self.assertTrue(any("C_boundary" in i and "≥ 0" in i
+                            for i in out["validity"]["issues"]),
+                        msg=out["validity"]["issues"])
+
+    def test_zero_concentrations_still_valid(self):
+        # allow_zero=True means C_init=0 / C_boundary=0 must keep passing
+        # (e.g. starting from pure solvent and diffusing in).
+        out = mf_m01.solve({
+            "C_init": 0.0, "C_boundary": 0.0,
+            "time": 100.0, "x_position": 0.001,
+            "D_eff": 1e-10,
+        })
+        self.assertTrue(out["validity"]["passed"])
+        self.assertAlmostEqual(out["result"]["value"], 0.0)
+
+    def test_nan_c_init_flagged(self):
+        out = mf_m01.solve({
+            "C_init": float("nan"), "C_boundary": 1.0,
+            "time": 100.0, "x_position": 0.001,
+            "D_eff": 1e-10,
+        })
+        self.assertFalse(out["validity"]["passed"])
+        self.assertTrue(any("C_init" in i and "finite" in i
+                            for i in out["validity"]["issues"]),
+                        msg=out["validity"]["issues"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
