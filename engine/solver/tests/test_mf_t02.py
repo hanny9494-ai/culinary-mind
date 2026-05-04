@@ -31,6 +31,18 @@ class TestMFT02(unittest.TestCase):
         self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
         self.assertGreater(out["result"]["value"]["rho"], 0.0)
 
+    def test_pure_fat_thermal_conductivity_matches_handbook(self):
+        """P0-1: fat coefficient regression, 100% fat at 25 C gives k near 0.17."""
+        out = mf_t02.solve({
+            "composition": {
+                "fat": 1.0, "water": 0.0, "protein": 0.0,
+                "carb": 0.0, "fiber": 0.0, "ash": 0.0,
+            },
+            "T_C": 25.0,
+        })
+        self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
+        self.assertAlmostEqual(out["result"]["value"]["k"], 0.17, delta=0.02)
+
     def test_negative_composition_rejected(self):
         out = mf_t02.solve({"composition": {"water": 1.1, "fat": -0.1}, "T_c": 25.0})
         self.assertFalse(out["validity"]["passed"])
