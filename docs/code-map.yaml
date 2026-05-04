@@ -3,10 +3,11 @@
 # 更新: 2026-05-02
 # 维护者: repo-curator agent
 
-version: "1.3"
+version: "1.4"
 status: "draft"  # draft → reviewed → locked
-last_updated: "2026-05-03"
+last_updated: "2026-05-01"
 changelog:
+  - "1.4 (2026-05-01): PR #25 合并 — P1-17 28/28 MF solvers 全部实现，batch 2-end (23 solvers + 27 tests)，211 tests passing，引擎层里程碑达成"
   - "1.3 (2026-05-03): PR #24 合并 (D68 PR A - quarantine/ack/session lifecycle)，ce-hub 新增 session-manager.ts/quarantine.ts/config.ts，SQLite 新表 inbox_messages/cc_lead_sessions，PR #20/#21 测试提交闭环"
   - "1.2 (2026-05-02): PR #22/#23 合并，D65-D70 决策，新增 engine/solver/ 模块，raw/code-reviewer/ 档案，wiki/operations/cold-start-runbook.md，OpenClaw 残留文件清理报告"
   - "1.1 (2026-04-24): 根目录杂文件清理完成 — 12个垃圾文件删除，7个OpenClaw残留归档至 _archive/openclaw-legacy/，run_signal_router_batch.sh 移入 scripts/"
@@ -37,11 +38,11 @@ directories:
     status: active
     owner: coder
     children:
-      solver/:    "28 MF 数值求解器（首批 5/28 已实现：T01/T04/M01/K01/R01，PR #20）"
-      tools/:     "Task-oriented wrapper（estimate_heating_time 等，待建）"
+      solver/:    "28 MF 数值求解器（28/28 已完成，PR #20/25，211 tests passing）— T01-05 (5), K01-05 (5), M01-06 (6), R01-07 (7), C01-05 (5)"
+      tools/:     "Task-oriented wrapper（estimate_heating_time 等，待建 P1-20）"
       agent/:     "LangGraph Agent（Phase 4B，待建）"
       retrieval/: "检索策略（Phase 4B，待建）"
-    note: "D65 决策：不引入 SymPy/SciPy，所有 MF 手写解析解或数值解"
+    note: "D65 决策：不引入 SymPy/SciPy，所有 MF 手写解析解或数值解；依赖 CoolProp/fluids/ht/pint/scipy"
 
   graph/:
     purpose: "Neo4j 图谱构建/查询（Phase 1F/4A，待建）"
@@ -301,9 +302,18 @@ recent_activity:
       impact: "ce-hub 新增 session-manager/quarantine/config 模块，SQLite 新表，PR #24 已合并"
 
   prs:
+    - number: 25
+      title: "feat(P1-17): atomic MF solvers batch 2-end (28/28 complete)"
+      status: "MERGED (commit dd581d7, 2026-05-01)"
+      branch: "feat/p1-17-mf-tools-batch2-end"
+      files: "engine/solver/ (23 new MF solvers: T02-T05/K02-K05/M02-M06/R02-R07/C01-C05 + 27 tests, 211 total passing)"
+      impact: "P1-17 里程碑达成：28/28 MF solvers 全部实现，解锁 P1-20/21/22, P4-08, P4-14"
+      review: "R1: 4 P0 + 8 P1 必修 + 6 P2 defer → R2: 全部闭环 ✅ APPROVE"
+      test_status: "211 passed in 1.11s, 4 硬指标全过 (Choi-Okos/Antoine/WLF/Laplace)"
+
     - number: 20
       title: "feat(P1-17): atomic MF solvers — first batch (MF-T01/T04/M01/K01/R01)"
-      status: "OPEN (awaiting code-reviewer GPT-5.5 review, test commit 9679814)"
+      status: "SUPERSEDED by PR #25"
       branch: "feat/p1-17-mf-tools-batch1"
       files: "engine/solver/ (5 MF solvers + 32 tests)"
       impact: "首批 5/28 MF 求解器实现"
@@ -311,7 +321,7 @@ recent_activity:
 
     - number: 21
       title: "feat(D70): unify all Gemini calls to Lingya API"
-      status: "OPEN (coder dispatched to fix embedding — should use local Ollama, not Lingya, test commit d35e270)"
+      status: "SUPERSEDED or PENDING (embedding 应该用 Ollama qwen3-embedding:8b，不应走 Lingya 付费 API)"
       branch: "feat/d70-gemini-lingya-unify"
       files: "config/api.yaml, scripts/agent_pipeline.py, scripts/y_s1/import_l0_neo4j.py, src/evaluation/run_ragas.py, tests/"
       issue: "embedding 应该用 Ollama qwen3-embedding:8b（本地免费），不应走 Lingya 付费 API"
@@ -340,8 +350,14 @@ recent_activity:
   new_files:
     - path: "engine/solver/"
       type: "module"
-      status: "active (first batch 5/28 MF, PR #20)"
-      note: "28 MF 求解器库，首批 T01/T04/M01/K01/R01 已实现"
+      status: "active (28/28 MF complete, PR #25)"
+      note: "28 MF 求解器库全部实现，分5类：Thermal (5), Kinetic (5), Mass (6), Rheology (7), Colloidal (5)"
+      files:
+        thermal: "mf_t01.py, mf_t02_k.py, mf_t02_cp.py, mf_t02_rho.py, mf_t03.py, mf_t04.py, mf_t05.py"
+        kinetic: "mf_k01.py, mf_k02.py, mf_k03.py, mf_k04.py, mf_k05.py"
+        mass: "mf_m01.py, mf_m02.py, mf_m03.py, mf_m04.py, mf_m05.py, mf_m06.py"
+        rheology: "mf_r01.py, mf_r02.py, mf_r03.py, mf_r04.py, mf_r05.py, mf_r06.py, mf_r07.py"
+        colloidal: "mf_c01.py, mf_c02.py, mf_c03.py, mf_c04.py, mf_c05.py"
 
     - path: "raw/code-reviewer/"
       type: "archive"
