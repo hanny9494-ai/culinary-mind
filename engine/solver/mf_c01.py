@@ -62,10 +62,11 @@ def solve(params: dict) -> dict:
                 value = float(_fluids_v_terminal(D=2.0 * float(radius),
                                                  rhop=float(rho_p),
                                                  rho=float(rho_f),
-                                                 mu=float(eta)))
-                assumptions.append("fluids.v_terminal used for downward settling")
+                                                 mu=float(eta),
+                                                 Method="Stokes"))
+                assumptions.append("using fluids.v_terminal Method='Stokes' (Re<<1 assumed)")
             except Exception as exc:
-                assumptions.append(f"fluids.v_terminal unavailable: {exc}; used Stokes formula")
+                assumptions.append(f"fluids unavailable ({exc}), using analytical Stokes formula")
         if value is None:
             value = 2.0 * float(radius) ** 2 * (float(rho_p) - float(rho_f)) * float(g) / (9.0 * float(eta))
             if rho_p < rho_f:

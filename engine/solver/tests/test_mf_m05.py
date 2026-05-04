@@ -39,6 +39,12 @@ class TestMFM05(unittest.TestCase):
         self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
         self.assertTrue(any("ideal gas" in a for a in out["assumptions"]))
 
+    def test_dimensionless_invalid_temperature_rejected(self):
+        """P1-7: T_C is finite-guarded before ideal-gas concentration is computed."""
+        out = mf_m05.solve({"H": 0.1, "p_gas": 101325.0, "T_C": math.inf, "H_form": "dimensionless"})
+        self.assertFalse(out["validity"]["passed"])
+        self.assertTrue(any("T_C must be finite" in i for i in out["validity"]["issues"]))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

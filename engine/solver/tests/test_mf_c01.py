@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import unittest
+from unittest.mock import patch
 
 from engine.solver import mf_c01
 
@@ -21,6 +22,14 @@ class TestMFC01(unittest.TestCase):
         self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
         self.assertGreater(out["result"]["value"], 0.0)
         self.assertTrue(any("fluids.v_terminal" in a or "Stokes" in a for a in out["assumptions"]))
+
+    def test_downward_settling_requests_stokes_method(self):
+        """P1-6: fluids.v_terminal is called with Method='Stokes'."""
+        with patch("engine.solver.mf_c01._fluids_v_terminal", return_value=1.0e-6) as mocked:
+            out = mf_c01.solve({"r": 1.0e-6, "rho_p": 1050.0, "rho_f": 1000.0, "eta": 0.001})
+        self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
+        self.assertEqual(mocked.call_args.kwargs["Method"], "Stokes")
+        self.assertTrue(any("Method='Stokes'" in a for a in out["assumptions"]))
 
     def test_negative_radius_rejected(self):
         out = mf_c01.solve({"r": -1.0e-6, "rho_p": 930.0, "rho_f": 1000.0, "eta": 0.001})

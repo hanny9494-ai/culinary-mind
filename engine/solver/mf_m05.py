@@ -28,6 +28,10 @@ from ._common import Validator, build_result
 _R_GAS = 8.31446261815324
 
 
+def _is_finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
 def solve(params: dict) -> dict:
     """Compute dissolved concentration from Henry's law."""
     val = Validator()
@@ -56,39 +60,31 @@ def solve(params: dict) -> dict:
         val.require_positive("c_gas", c_gas, allow_zero=True)
 
     value: float | None = None
-    if (
-        isinstance(h_const, (int, float)) and not isinstance(h_const, bool)
-        and math.isfinite(h_const) and h_const > 0.0
-    ):
+    if _is_finite_number(h_const) and h_const > 0.0:
         if h_form_normalized in ("solubility", "hcp", "c_over_p"):
             if p_gas is None:
                 val.issues.append("p_gas is required for solubility-form Henry law")
-            elif isinstance(p_gas, (int, float)) and not isinstance(p_gas, bool) \
-                    and math.isfinite(p_gas) and p_gas >= 0.0:
+            elif _is_finite_number(p_gas) and p_gas >= 0.0:
                 value = float(h_const) * float(p_gas)
                 assumptions.append("H interpreted as Hcp in mol/(m³ Pa)")
 
         elif h_form_normalized in ("pressure", "hpc", "p_over_c"):
             if p_gas is None:
                 val.issues.append("p_gas is required for pressure-form Henry law")
-            elif isinstance(p_gas, (int, float)) and not isinstance(p_gas, bool) \
-                    and math.isfinite(p_gas) and p_gas >= 0.0:
+            elif _is_finite_number(p_gas) and p_gas >= 0.0:
                 value = float(p_gas) / float(h_const)
                 assumptions.append("H interpreted as Hpc in Pa·m³/mol")
 
         elif h_form_normalized in ("dimensionless", "hcc"):
             gas_conc = c_gas
             if gas_conc is None and p_gas is not None:
-                if isinstance(t_c, (int, float)) and not isinstance(t_c, bool) \
-                        and math.isfinite(t_c) and t_c > -273.15 \
-                        and isinstance(p_gas, (int, float)) and not isinstance(p_gas, bool) \
-                        and math.isfinite(p_gas) and p_gas >= 0.0:
+                if _is_finite_number(t_c) and t_c > -273.15 \
+                        and _is_finite_number(p_gas) and p_gas >= 0.0:
                     gas_conc = float(p_gas) / (_R_GAS * (float(t_c) + 273.15))
                     assumptions.append("c_gas estimated from ideal gas law")
             if gas_conc is None:
                 val.issues.append("c_gas or p_gas + T_C is required for dimensionless Henry law")
-            elif isinstance(gas_conc, (int, float)) and not isinstance(gas_conc, bool) \
-                    and math.isfinite(gas_conc) and gas_conc >= 0.0:
+            elif _is_finite_number(gas_conc) and gas_conc >= 0.0:
                 value = float(h_const) * float(gas_conc)
                 assumptions.append("H interpreted as dimensionless concentration ratio")
         else:

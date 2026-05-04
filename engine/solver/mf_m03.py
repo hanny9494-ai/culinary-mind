@@ -50,6 +50,15 @@ def solve(params: dict) -> dict:
     if not isinstance(substance, str) or not substance:
         val.issues.append("substance must be a non-empty string")
     val.require_temperature_celsius("T_C", t_c)
+    if (
+        isinstance(substance, str) and substance.lower() == "water"
+        and isinstance(t_c, (int, float)) and not isinstance(t_c, bool)
+        and math.isfinite(t_c) and (t_c < 0.0 or t_c > 100.0)
+    ):
+        assumptions.append(
+            f"T_C={t_c} C outside Antoine water validity 0-100 C; "
+            "result extrapolated if Antoine fallback is used, accuracy degraded"
+        )
 
     value: float | None = None
     if isinstance(t_c, (int, float)) and not isinstance(t_c, bool) and math.isfinite(t_c):

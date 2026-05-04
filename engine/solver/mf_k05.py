@@ -24,6 +24,10 @@ from typing import Any
 from ._common import Validator, build_result
 
 
+def _is_finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
 def solve(params: dict) -> dict:
     """Evaluate the modified Gompertz growth curve."""
     val = Validator()
@@ -37,19 +41,23 @@ def solve(params: dict) -> dict:
     mu_max = params.get("mu_max", params.get("μmax", params.get("mu")))
     lag = params.get("lambda", params.get("lag", params.get("lambda_h")))
 
-    val.require_positive("t", t_h, allow_zero=True)
+    val.require_finite("t", t_h)
     val.require_positive("A", a_asym)
     val.require_positive("mu_max", mu_max, allow_zero=True)
     val.require_positive("lambda", lag, allow_zero=True)
 
     value: float | None = None
     if (
-        all(isinstance(x, (int, float)) and not isinstance(x, bool)
-            for x in (t_h, a_asym, mu_max, lag))
-        and t_h >= 0.0 and a_asym > 0.0 and mu_max >= 0.0 and lag >= 0.0
+        all(_is_finite_number(x) for x in (t_h, a_asym, mu_max, lag))
+        and a_asym > 0.0 and mu_max >= 0.0 and lag >= 0.0
     ):
-        exponent = float(mu_max) * math.e / float(a_asym) * (float(lag) - float(t_h)) + 1.0
-        value = float(a_asym) * math.exp(-math.exp(exponent))
+        inner = float(mu_max) * math.e / float(a_asym) * (float(lag) - float(t_h)) + 1.0
+        inner = max(min(inner, 700.0), -700.0)
+        outer = math.exp(inner)
+        outer = max(min(outer, 700.0), -700.0)
+        value = float(a_asym) * math.exp(-outer)
+        if t_h < 0.0:
+            assumptions.append("t < 0 → Gompertz curve evaluated by extrapolation")
         if t_h <= lag:
             assumptions.append("t within lag region → growth remains near baseline")
         elif value >= 0.95 * float(a_asym):

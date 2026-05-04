@@ -27,9 +27,11 @@ class TestMFK05(unittest.TestCase):
         self.assertAlmostEqual(out["result"]["value"], 5.0, places=6)
         self.assertTrue(any("asymptote" in a for a in out["assumptions"]))
 
-    def test_negative_time_rejected(self):
+    def test_negative_time_extrapolates_without_overflow(self):
         out = mf_k05.solve({"t": -1.0, "A": 5.0, "mu_max": 1.0, "lambda": 2.0})
-        self.assertFalse(out["validity"]["passed"])
+        self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
+        self.assertTrue(math.isfinite(out["result"]["value"]))
+        self.assertTrue(any("extrapolation" in a for a in out["assumptions"]))
 
     def test_nan_inf_inputs_rejected(self):
         out = mf_k05.solve({"t": 1.0, "A": math.inf, "mu_max": math.nan, "lambda": 2.0})
@@ -40,6 +42,18 @@ class TestMFK05(unittest.TestCase):
         out = mf_k05.solve({"t": 1.0, "A": 0.0, "mu_max": 1.0, "lambda": 2.0})
         self.assertFalse(out["validity"]["passed"])
         self.assertTrue(any("A" in i for i in out["validity"]["issues"]))
+
+    def test_extreme_t_does_not_overflow(self):
+        """P1-3: large positive t is clipped through nested exp without OverflowError."""
+        out = mf_k05.solve({"t": 1.0e10, "A": 5.0, "mu_max": 0.5, "lambda": 1.0})
+        self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
+        self.assertTrue(math.isfinite(out["result"]["value"]))
+
+    def test_extreme_negative_t_does_not_overflow(self):
+        """P1-3: large negative t is clipped through nested exp without OverflowError."""
+        out = mf_k05.solve({"t": -1.0e10, "A": 5.0, "mu_max": 0.5, "lambda": 1.0})
+        self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
+        self.assertTrue(math.isfinite(out["result"]["value"]))
 
 
 if __name__ == "__main__":

@@ -38,6 +38,12 @@ class TestMFM03(unittest.TestCase):
         out = mf_m03.solve({"substance": "Water", "T_C": 25.0})
         self.assertTrue(any("CoolProp" in a or "Antoine fallback" in a for a in out["assumptions"]))
 
+    def test_water_T_above_100_emits_extrapolation_warning(self):
+        """P1-4: water outside Antoine 0-100 C range reports extrapolation assumption."""
+        out = mf_m03.solve({"substance": "water", "T_C": 150.0})
+        self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
+        self.assertTrue(any("extrapolat" in a.lower() for a in out["assumptions"]))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

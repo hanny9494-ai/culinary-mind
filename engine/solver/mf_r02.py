@@ -41,7 +41,11 @@ def solve(params: dict) -> dict:
     val.require_positive("n", n)
     val.require_positive("gamma_dot", gamma_dot, allow_zero=True)
     if isinstance(n, (int, float)) and not isinstance(n, bool) and math.isfinite(n):
-        val.require_in_range("n", n, 0.0, 2.0, hint="typical food rheology range")
+        if n > 2.0:
+            assumptions.append(
+                f"n={n} unusually high (>2); typical range 0.1-2.0 for foods. "
+                "Verify against rheometer data"
+            )
 
     value: float | None = None
     if (

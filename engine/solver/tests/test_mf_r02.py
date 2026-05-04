@@ -33,6 +33,12 @@ class TestMFR02(unittest.TestCase):
         out = mf_r02.solve({"tau_0": 0.0, "K": 1.0, "n": 0.0, "gamma_dot": 10.0})
         self.assertFalse(out["validity"]["passed"])
 
+    def test_n_above_two_warns_but_remains_valid(self):
+        """P1-5: n>2 is unusual but not a hard Herschel-Bulkley failure."""
+        out = mf_r02.solve({"tau_0": 1.0, "K": 0.5, "n": 2.5, "gamma_dot": 4.0})
+        self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
+        self.assertTrue(any("unusually high" in a for a in out["assumptions"]))
+
     def test_newtonian_assumption(self):
         out = mf_r02.solve({"tau_0": 0.0, "K": 0.001, "n": 1.0, "gamma_dot": 100.0})
         self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
