@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import unittest
+from unittest.mock import patch
 
 from engine.solver import mf_m06
 
@@ -37,6 +38,14 @@ class TestMFM06(unittest.TestCase):
     def test_assumption_records_coolprop_or_fallback(self):
         out = mf_m06.solve({"substance": "Water", "T_C": 100.0})
         self.assertTrue(any("CoolProp" in a or "Watson" in a for a in out["assumptions"]))
+
+    def test_non_water_without_coolprop_fails_validity(self):
+        """P0-3: non-water without CoolProp must fail validity instead of NaN-pass."""
+        with patch("engine.solver.mf_m06.PropsSI", None):
+            out = mf_m06.solve({"substance": "ethanol", "T_C": 25.0})
+        self.assertFalse(out["validity"]["passed"])
+        self.assertTrue(any("CoolProp required" in i for i in out["validity"]["issues"]))
+        self.assertTrue(any("ethanol" in i.lower() for i in out["validity"]["issues"]))
 
 
 if __name__ == "__main__":

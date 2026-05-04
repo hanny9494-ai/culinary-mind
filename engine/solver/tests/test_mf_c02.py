@@ -19,6 +19,7 @@ class TestMFC02(unittest.TestCase):
         self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
         self.assertAlmostEqual(out["result"]["value"], 8.0)
         self.assertTrue(any("computed M_l" in a for a in out["assumptions"]))
+        self.assertEqual(out["inputs_used"]["M"], 10.0)
 
     def test_negative_mass_rejected(self):
         out = mf_c02.solve({"M_h": -1.0, "M_l": 5.0})
@@ -37,6 +38,21 @@ class TestMFC02(unittest.TestCase):
     def test_assumption_for_equal_masses(self):
         out = mf_c02.solve({"M_h": 5.0, "M_l": 5.0})
         self.assertTrue(any("HLB = 10" in a for a in out["assumptions"]))
+
+    def test_M_string_input_returns_validity_failure_not_typeerror(self):
+        """P0-4: non-numeric M alias yields a validity issue, not TypeError."""
+        out = mf_c02.solve({"M_h": 4.0, "M": "10"})
+        self.assertFalse(out["validity"]["passed"])
+        self.assertTrue(any("M must be finite numeric" in i for i in out["validity"]["issues"]))
+
+    def test_M_None_or_NaN_handled(self):
+        """P0-4: None/NaN M aliases report validity failures without raising."""
+        out_none = mf_c02.solve({"M_h": 4.0, "M": None})
+        self.assertFalse(out_none["validity"]["passed"])
+        self.assertTrue(any("M must be finite numeric" in i for i in out_none["validity"]["issues"]))
+        out_nan = mf_c02.solve({"M_h": 4.0, "M": float("nan")})
+        self.assertFalse(out_nan["validity"]["passed"])
+        self.assertTrue(any("M must be finite numeric" in i for i in out_nan["validity"]["issues"]))
 
 
 if __name__ == "__main__":

@@ -65,6 +65,12 @@ def solve(params: dict) -> dict:
             else:
                 value = _water_watson(float(t_c))
                 assumptions.append("Watson water fallback correlation")
+        if value is None and isinstance(substance, str) and substance \
+                and substance.lower() != "water":
+            val.issues.append(
+                f"latent heat unavailable for substance={substance!r}: "
+                "CoolProp required for non-water substances; install CoolProp or restrict to water"
+            )
 
     return build_result(
         value=value if value is not None else float("nan"),
