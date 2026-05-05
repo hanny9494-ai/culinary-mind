@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result, llm_summary_for, provenance_for
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
 
 
 TOOL_ID = 'MF-R07'
@@ -30,6 +30,7 @@ CITATIONS = [
 
 
 
+@validate_bounds("MF-R07")
 def solve(params: dict) -> dict:
     """Compute Griffith fracture stress in Pa."""
     val = Validator()

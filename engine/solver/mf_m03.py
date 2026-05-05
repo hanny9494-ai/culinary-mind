@@ -20,7 +20,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result, llm_summary_for, provenance_for
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
 
 
 TOOL_ID = 'MF-M03'
@@ -45,6 +45,7 @@ def _antoine_pressure_pa(t_c: float, a: float, b: float, c: float) -> float:
     return (10.0 ** (a - b / (t_c + c))) * _MMHG_TO_PA
 
 
+@validate_bounds("MF-M03")
 def solve(params: dict) -> dict:
     """Compute saturation vapor pressure in Pa."""
     val = Validator()

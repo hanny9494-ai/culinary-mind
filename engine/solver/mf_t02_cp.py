@@ -23,7 +23,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result, llm_summary_for, provenance_for
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
 
 
 TOOL_ID = 'MF-T02'
@@ -116,6 +116,7 @@ def _pure_water_coolprop(t_c: float) -> float | None:
         return None
 
 
+@validate_bounds("MF-T02", output_variant="mf_t02_cp")
 def solve(params: dict) -> dict:
     """Predict specific heat Cp for a food composition at T_C."""
     val = Validator()

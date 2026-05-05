@@ -23,7 +23,7 @@ from typing import Any
 
 from scipy import integrate as _integrate
 
-from ._common import Validator, build_result, llm_summary_for, provenance_for
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
 
 
 TOOL_ID = 'MF-K04'
@@ -40,6 +40,7 @@ def _lethality_factor(t_c: float, t_ref: float, z_value: float) -> float:
     return 10.0 ** ((t_c - t_ref) / z_value)
 
 
+@validate_bounds("MF-K04")
 def solve(params: dict) -> dict:
     """Compute equivalent lethality F in minutes."""
     val = Validator()

@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result, llm_summary_for, provenance_for
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
 
 
 TOOL_ID = 'MF-T03'
@@ -35,6 +35,7 @@ CITATIONS = [
 _R_GAS = 8.31446261815324
 
 
+@validate_bounds("MF-T03")
 def solve(params: dict) -> dict:
     """Compute Arrhenius rate constant k."""
     val = Validator()

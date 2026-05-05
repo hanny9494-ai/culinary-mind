@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import Validator, build_result, llm_summary_for, provenance_for
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
 
 
 TOOL_ID = 'MF-K01'
@@ -29,6 +29,7 @@ CITATIONS = [
 
 
 
+@validate_bounds("MF-K01")
 def solve(params: dict) -> dict:
     val = Validator()
     assumptions = ["steady state", "single substrate", "no inhibition"]
