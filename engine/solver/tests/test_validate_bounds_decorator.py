@@ -223,6 +223,37 @@ class TestValidateBoundsDecorator(unittest.TestCase):
         })
         self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
 
+    def test_scalar_percent_composition_aliases_are_normalized_for_bounds(self):
+        @validate_bounds("MF-T02")
+        def solve(p):
+            v = Validator()
+            return build_result(
+                value=0.6, unit="W/(m·K)", symbol="k",
+                assumptions=[], validity=v.result(), inputs_used=p,
+            )
+
+        out = solve({
+            "Xw": 70,
+            "Xp": 10,
+            "Xf": 10,
+            "Xc": 8,
+            "Xa": 2,
+            "T_C": 25,
+        })
+        self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
+
+    def test_ratio_weights_are_normalized_for_bounds(self):
+        @validate_bounds("MF-R04")
+        def solve(p):
+            v = Validator()
+            return build_result(
+                value=40.0, unit="°C", symbol="Tg_mix",
+                assumptions=[], validity=v.result(), inputs_used=p,
+            )
+
+        out = solve({"w1": 2, "w2": 3, "Tg1": 0, "Tg2": 100, "k": 1})
+        self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
+
     def test_soft_bound_emits_warn_prefix(self):
         @validate_bounds("MF-R05")
         def solve(p):

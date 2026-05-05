@@ -205,6 +205,7 @@ except ImportError:  # pragma: no cover - exercised only without dependency
 _BOUNDS_CACHE: dict = {}
 _BOUNDS_PATH = Path(__file__).resolve().parents[2] / "config" / "solver_bounds.yaml"
 _MISSING_BOUNDS_WARNED: set[str] = set()
+_COMPOSITION_ALIAS_BOUND_NAMES = {"Xw", "Xp", "Xf", "Xc", "Xfiber", "Xa"}
 
 
 def _load_bounds() -> dict:
@@ -319,7 +320,26 @@ def _ratio_value_for_bounds(params: dict, name: str, value: Any) -> Any:
     ):
         return value
     total = float(value) + float(other_value)
-    if total >= 10.0 and value >= 0.0 and other_value >= 0.0:
+    if total > 0.0 and value >= 0.0 and other_value >= 0.0:
+        return float(value) / total
+    return value
+
+
+def _scalar_composition_alias_value_for_bounds(params: dict, name: str,
+                                               value: Any) -> Any:
+    """Normalize T02 scalar composition aliases that are supplied as percents."""
+    if name not in _COMPOSITION_ALIAS_BOUND_NAMES:
+        return value
+    numbers = [
+        float(params[alias])
+        for alias in _COMPOSITION_ALIAS_BOUND_NAMES
+        if alias in params
+        and isinstance(params[alias], (int, float))
+        and not isinstance(params[alias], bool)
+        and math.isfinite(params[alias])
+    ]
+    total = sum(numbers)
+    if total > 10.0 and isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value) / total
     return value
 
@@ -339,7 +359,9 @@ def _resolve_param_value(params: dict, name: str) -> Any:
     if "." in name:
         value = _resolve_dotted(params, name)
         return _composition_value_for_bounds(params, name, value)
-    return _ratio_value_for_bounds(params, name, params.get(name))
+    value = params.get(name)
+    value = _scalar_composition_alias_value_for_bounds(params, name, value)
+    return _ratio_value_for_bounds(params, name, value)
 
 
 def _warn_missing_bounds_once(mf_id: str) -> None:

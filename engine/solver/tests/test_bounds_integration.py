@@ -72,6 +72,22 @@ class TestBoundsIntegration(unittest.TestCase):
         self.assertFalse(out["validity"]["passed"])
         self.assertTrue(any("M_h" in i and "outside bounds" in i for i in out["validity"]["issues"]))
 
+    def test_actual_t02_scalar_percent_aliases_pass(self):
+        out = mf_t02_k.solve({
+            "Xw": 70,
+            "Xp": 10,
+            "Xf": 10,
+            "Xc": 8,
+            "Xa": 2,
+            "T_C": 25,
+        })
+        self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
+
+    def test_actual_r04_scaled_ratio_weights_pass(self):
+        out = mf_r04.solve({"w1": 2, "w2": 3, "Tg1": 0, "Tg2": 100, "k": 1})
+        self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
+        self.assertTrue(any("scale-invariant" in a for a in out["assumptions"]))
+
     def test_actual_wlf_soft_warn_does_not_fail(self):
         out = mf_r05.solve({"T": 200.0, "Tg": 0.0, "C1": 17.44, "C2": 51.6})
         self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
