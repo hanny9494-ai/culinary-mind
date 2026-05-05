@@ -23,7 +23,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-T04'
+TOOL_CANONICAL_NAME = 'Nusselt_Correlation'
+CITATIONS = [
+    'Singh & Heldman, Introduction to Food Engineering Ch.4',
+    'Toledo, Fundamentals of Food Process Engineering Ch.7',
+]
+
 
 
 def solve(params: dict) -> dict:
@@ -75,6 +84,18 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used=inputs_used,
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=nu,
+            unit="dimensionless",
+            symbol="Nu",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )
     if extras:
         out["result"]["extras"] = extras

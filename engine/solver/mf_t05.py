@@ -22,7 +22,16 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-T05'
+TOOL_CANONICAL_NAME = 'Plank_Freezing'
+CITATIONS = [
+    'Singh & Heldman, Introduction to Food Engineering Ch.7',
+    'Handbook of Food Engineering Ch.7',
+]
+
 
 
 GEOMETRY_FACTORS = {
@@ -105,4 +114,16 @@ def solve(params: dict) -> dict:
             "rho": rho, "L": latent, "d": d, "T_f": t_f, "T_inf": t_inf,
             "h": h, "k": k, "geometry": geometry_raw, "P": p_factor, "R": r_factor,
         },
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="s",
+            symbol="t_f",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )

@@ -19,7 +19,17 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-T03'
+TOOL_CANONICAL_NAME = 'Arrhenius'
+CITATIONS = [
+    'van Boekel, Kinetic Modeling of Reactions in Foods Ch.5',
+    'Toledo, Fundamentals of Food Process Engineering Ch.8',
+    'Handbook of Food Engineering Ch.3',
+]
+
 
 
 _R_GAS = 8.31446261815324
@@ -60,4 +70,16 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used={"A": a_factor, "Ea": ea, "T_K": t_k, "R": r_gas},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=k_value if k_value is not None else float("nan"),
+            unit="same as A",
+            symbol="k",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )
