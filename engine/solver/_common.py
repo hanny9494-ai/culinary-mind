@@ -7,6 +7,8 @@ Each solver returns a dict shaped like:
         "assumptions":   ["<plain-text assumption 1>", ...],
         "validity":      {"passed": <bool>, "issues": [<str>, ...]},
         "inputs_used":   {<echo of params actually consumed>},
+        "provenance":    {<optional tool/source metadata>},
+        "llm_summary":   {<optional compact summary for agent/tool wrappers>},
     }
 
 `validity.passed` is True when no `issues` were appended. `assumptions`
@@ -102,10 +104,88 @@ def build_result(*,
                  symbol: str,
                  assumptions: Iterable[str],
                  validity: dict,
-                 inputs_used: dict) -> dict:
-    return {
+                 inputs_used: dict,
+                 provenance: dict | None = None,
+                 llm_summary: dict | None = None) -> dict:
+    out = {
         "result":      {"value": value, "unit": unit, "symbol": symbol},
         "assumptions": list(assumptions),
         "validity":    validity,
         "inputs_used": dict(inputs_used),
+    }
+    if provenance is not None:
+        out["provenance"] = dict(provenance)
+    if llm_summary is not None:
+        out["llm_summary"] = dict(llm_summary)
+    return out
+
+
+def provenance_for(*,
+                   tool_id: str,
+                   tool_canonical_name: str,
+                   tool_version: str = "1.0",
+                   citations: list[str] | None = None,
+                   ckg_node_refs: list[dict] | None = None) -> dict:
+    """Build standard provenance dict for an MF solver response.
+
+    By default, the solver references its D66 v2 MF node using the lowercase
+    namespace form, e.g. `MF-T01` → `{"label": "CKG_MF", "mf_id": "mf_t01"}`.
+    """
+    if ckg_node_refs is None:
+        mf_id_lower = tool_id.lower().replace("-", "_")
+        ckg_node_refs = [{"label": "CKG_MF", "mf_id": mf_id_lower}]
+
+    return {
+        "tool_id": tool_id,
+        "tool_canonical_name": tool_canonical_name,
+        "tool_version": tool_version,
+        "citations": list(citations or []),
+        "ckg_node_refs": list(ckg_node_refs),
+    }
+
+
+def llm_summary_for(*,
+                    value: float,
+                    unit: str,
+                    symbol: str,
+                    tool_canonical_name: str,
+                    tool_id: str,
+                    summary_zh: str | None = None,
+                    summary_en: str | None = None,
+                    confidence: float | None = None,
+                    extra_outputs: dict | None = None) -> dict:
+    """Build a compact LLM-facing summary for a solver response.
+
+    If caller-provided summaries are omitted, the default templates are:
+    zh: "{tool_canonical_name} 计算 {symbol} = {value:.4g} {unit}"
+    en: "{tool_canonical_name} computed {symbol} = {value:.4g} {unit}"
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if math.isfinite(value):
+            value_str = f"{value:.4g}"
+        elif math.isnan(value):
+            value_str = "NaN"
+        else:
+            value_str = "Inf" if value > 0 else "-Inf"
+    else:
+        value_str = repr(value)
+
+    if summary_zh is None:
+        summary_zh = (
+            f"{tool_canonical_name} 计算 {symbol} = {value_str} {unit}"
+        ).strip()
+    if summary_en is None:
+        summary_en = (
+            f"{tool_canonical_name} computed {symbol} = {value_str} {unit}"
+        ).strip()
+
+    key_outputs = {"value": value, "unit": unit, "symbol": symbol}
+    if extra_outputs:
+        key_outputs.update(extra_outputs)
+
+    return {
+        "summary_zh": summary_zh,
+        "summary_en": summary_en,
+        "key_outputs": key_outputs,
+        "confidence": confidence,
     }

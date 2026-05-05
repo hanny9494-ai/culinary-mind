@@ -23,7 +23,17 @@ from typing import Any
 
 from scipy import integrate as _integrate
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-K04'
+TOOL_CANONICAL_NAME = 'F_Value'
+CITATIONS = [
+    'Toledo, Fundamentals of Food Process Engineering Ch.9',
+    'Jay, Modern Food Microbiology Ch.17',
+    'Handbook of Food Engineering Ch.12',
+]
+
 
 
 def _lethality_factor(t_c: float, t_ref: float, z_value: float) -> float:
@@ -132,4 +142,16 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used=inputs_used,
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="min",
+            symbol="F",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )

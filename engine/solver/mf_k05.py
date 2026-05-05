@@ -21,7 +21,16 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-K05'
+TOOL_CANONICAL_NAME = 'Gompertz_Microbial'
+CITATIONS = [
+    'van Boekel, Kinetic Modeling of Reactions in Foods Ch.12',
+    'Jay, Modern Food Microbiology Ch.3',
+]
+
 
 
 def _is_finite_number(value: Any) -> bool:
@@ -70,4 +79,16 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used={"t": t_h, "A": a_asym, "mu_max": mu_max, "lambda": lag},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="log10(N/N0)",
+            symbol="log10(N/N0)",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )

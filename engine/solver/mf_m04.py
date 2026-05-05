@@ -19,7 +19,16 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-M04'
+TOOL_CANONICAL_NAME = 'Henderson_Hasselbalch'
+CITATIONS = [
+    'Fennema, Food Chemistry Ch.2',
+    'Belitz et al., Food Chemistry',
+]
+
 
 
 def solve(params: dict) -> dict:
@@ -59,4 +68,16 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used={"pKa": pka, "A_minus_conc": a_minus, "HA_conc": ha},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="pH",
+            symbol="pH",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )

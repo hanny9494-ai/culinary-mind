@@ -16,7 +16,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-K01'
+TOOL_CANONICAL_NAME = 'Michaelis_Menten'
+CITATIONS = [
+    'van Boekel, Kinetic Modeling of Reactions in Foods Ch.9',
+    'Belitz et al., Food Chemistry Ch.2',
+    'Fennema, Food Chemistry Ch.6',
+]
+
 
 
 def solve(params: dict) -> dict:
@@ -53,4 +63,16 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used={"S": s, "Vmax": vmax, "Km": km},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=v if v is not None else float("nan"),
+            unit="mol/(L·s)",
+            symbol="v",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )

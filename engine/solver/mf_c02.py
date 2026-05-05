@@ -20,7 +20,16 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-C02'
+TOOL_CANONICAL_NAME = 'HLB_Griffin'
+CITATIONS = [
+    'Belitz et al., Food Chemistry Ch.8',
+    'Fennema, Food Chemistry Ch.13',
+]
+
 
 
 def solve(params: dict) -> dict:
@@ -86,4 +95,16 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used=inputs_used,
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="dimensionless",
+            symbol="HLB",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )

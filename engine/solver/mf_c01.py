@@ -21,7 +21,16 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-C01'
+TOOL_CANONICAL_NAME = 'Stokes_Sedimentation'
+CITATIONS = [
+    'Sahin & Sumnu, Physical Properties of Foods Ch.6',
+    'Fennema, Food Chemistry Ch.13',
+]
+
 
 try:
     from fluids import v_terminal as _fluids_v_terminal
@@ -85,4 +94,16 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used={"r": radius, "rho_p": rho_p, "rho_f": rho_f, "eta": eta, "g": g},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="m/s",
+            symbol="v",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )

@@ -25,7 +25,16 @@ from typing import Any
 
 from scipy import constants as _constants
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-C03'
+TOOL_CANONICAL_NAME = 'DLVO_Theory'
+CITATIONS = [
+    'Sahin & Sumnu, Physical Properties of Foods Ch.6',
+    'Fennema, Food Chemistry Ch.13',
+]
+
 
 
 def solve(params: dict) -> dict:
@@ -85,4 +94,16 @@ def solve(params: dict) -> dict:
             "A_H": hamaker, "kappa": kappa, "zeta": zeta, "epsilon": epsilon_r,
             "T": temp_k, "D": distance, "r": radius,
         },
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="J",
+            symbol="V_T",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )

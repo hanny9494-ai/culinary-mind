@@ -19,7 +19,16 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-C05'
+TOOL_CANONICAL_NAME = 'Q10_Rule'
+CITATIONS = [
+    'Toledo, Fundamentals of Food Process Engineering Ch.8',
+    'van Boekel, Kinetic Modeling of Reactions in Foods Ch.5',
+]
+
 
 
 def solve(params: dict) -> dict:
@@ -62,4 +71,16 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used={"k1": k1, "k2": k2, "T1": t1, "T2": t2},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="dimensionless",
+            symbol="Q10",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )

@@ -19,7 +19,15 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-R06'
+TOOL_CANONICAL_NAME = 'Stevens_Power_Law'
+CITATIONS = [
+    'Bourne, Food Texture and Viscosity Ch.8',
+]
+
 
 
 def solve(params: dict) -> dict:
@@ -58,4 +66,16 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used={"k": k_coeff, "I": intensity, "n": n},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="perceived intensity units",
+            symbol="S",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )

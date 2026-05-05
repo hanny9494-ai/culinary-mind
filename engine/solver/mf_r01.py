@@ -19,7 +19,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-R01'
+TOOL_CANONICAL_NAME = 'Power_Law'
+CITATIONS = [
+    'Rao, Engineering Properties of Foods Ch.2',
+    'Bourne, Food Texture and Viscosity Ch.3',
+    'Handbook of Food Engineering Ch.1',
+]
+
 
 
 def solve(params: dict) -> dict:
@@ -58,4 +68,16 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used={"gamma_dot": gamma_dot, "K": k, "n": n},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=tau if tau is not None else float("nan"),
+            unit="Pa",
+            symbol="tau",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )

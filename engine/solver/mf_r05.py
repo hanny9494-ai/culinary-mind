@@ -19,7 +19,17 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-R05'
+TOOL_CANONICAL_NAME = 'WLF_Equation'
+CITATIONS = [
+    'Rao, Engineering Properties of Foods Ch.3',
+    'Handbook of Food Engineering Ch.4',
+    'Belitz et al., Food Chemistry',
+]
+
 
 
 def solve(params: dict) -> dict:
@@ -66,4 +76,16 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used={"T": temp, "Tg": tg, "C1": c1, "C2": c2},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="dimensionless",
+            symbol="aT",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )
