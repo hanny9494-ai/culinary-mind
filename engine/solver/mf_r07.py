@@ -19,7 +19,15 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-R07'
+TOOL_CANONICAL_NAME = 'Griffith_Fracture'
+CITATIONS = [
+    'Bourne, Food Texture and Viscosity Ch.3',
+]
+
 
 
 def solve(params: dict) -> dict:
@@ -56,4 +64,16 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used={"E": young, "gamma_s": gamma_s, "a": crack},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="Pa",
+            symbol="sigma_f",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )

@@ -22,7 +22,16 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-M05'
+TOOL_CANONICAL_NAME = 'Henry_Law_Aroma'
+CITATIONS = [
+    'Rao, Engineering Properties of Foods Ch.8',
+    'Belitz et al., Food Chemistry Ch.5',
+]
+
 
 
 _R_GAS = 8.31446261815324
@@ -103,4 +112,16 @@ def solve(params: dict) -> dict:
             "substance": substance, "H": h_const, "p_gas": p_gas,
             "c_gas": c_gas, "H_form": h_form, "T_C": t_c,
         },
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="mol/m³",
+            symbol="c_aq",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )

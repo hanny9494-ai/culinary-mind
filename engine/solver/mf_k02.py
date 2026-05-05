@@ -20,7 +20,17 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-K02'
+TOOL_CANONICAL_NAME = 'D_Value'
+CITATIONS = [
+    'Jay, Modern Food Microbiology Ch.17',
+    'Toledo, Fundamentals of Food Process Engineering Ch.9',
+    'van Boekel, Kinetic Modeling of Reactions in Foods Ch.13',
+]
+
 
 
 def solve(params: dict) -> dict:
@@ -60,4 +70,16 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used={"t": time_s, "N0": n0, "N": n},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="s",
+            symbol="D",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )

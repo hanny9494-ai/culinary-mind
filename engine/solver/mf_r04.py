@@ -19,7 +19,17 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-R04'
+TOOL_CANONICAL_NAME = 'Gordon_Taylor'
+CITATIONS = [
+    'Rao, Engineering Properties of Foods Ch.3',
+    'Handbook of Food Engineering Ch.4',
+    'Belitz et al., Food Chemistry',
+]
+
 
 
 def solve(params: dict) -> dict:
@@ -68,4 +78,16 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used={"w1": w1, "w2": w2, "Tg1": tg1, "Tg2": tg2, "k": k_gt},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="same as Tg inputs",
+            symbol="Tg_mix",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )

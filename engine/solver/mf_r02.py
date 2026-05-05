@@ -20,7 +20,17 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-R02'
+TOOL_CANONICAL_NAME = 'Herschel_Bulkley'
+CITATIONS = [
+    'Rao, Engineering Properties of Foods Ch.2',
+    'Bourne, Food Texture and Viscosity Ch.3',
+    'Sahin & Sumnu, Physical Properties of Foods Ch.2',
+]
+
 
 
 def solve(params: dict) -> dict:
@@ -67,4 +77,16 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used={"tau_0": tau_0, "K": k_consistency, "n": n, "gamma_dot": gamma_dot},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="Pa",
+            symbol="tau",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )

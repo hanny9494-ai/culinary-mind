@@ -19,7 +19,18 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-M02'
+TOOL_CANONICAL_NAME = 'GAB_Isotherm'
+CITATIONS = [
+    'Rao, Engineering Properties of Foods Ch.7',
+    'Toledo, Fundamentals of Food Process Engineering Ch.12',
+    'Handbook of Food Engineering Ch.11',
+    'Sahin & Sumnu, Physical Properties of Foods Ch.5',
+]
+
 
 
 def solve(params: dict) -> dict:
@@ -70,4 +81,16 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used={"a_w": aw, "W_m": w_m, "C": c, "K": k},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="kg water/kg dry solid",
+            symbol="W",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )

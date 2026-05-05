@@ -20,7 +20,16 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-M03'
+TOOL_CANONICAL_NAME = 'Antoine_Equation'
+CITATIONS = [
+    'Sahin & Sumnu, Physical Properties of Foods Ch.5',
+    'Toledo, Fundamentals of Food Process Engineering Ch.4',
+]
+
 
 try:
     from CoolProp.CoolProp import PropsSI
@@ -92,4 +101,16 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used={"substance": substance, "T_C": t_c, "A": a, "B": b, "C": c},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="Pa",
+            symbol="P_sat",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )

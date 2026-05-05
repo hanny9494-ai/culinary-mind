@@ -29,7 +29,17 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result
+from ._common import Validator, build_result, llm_summary_for, provenance_for
+
+
+TOOL_ID = 'MF-M01'
+TOOL_CANONICAL_NAME = 'Fick_2nd_Law'
+CITATIONS = [
+    'Rao, Engineering Properties of Foods Ch.8',
+    'van Boekel, Kinetic Modeling of Reactions in Foods Ch.11',
+    'Handbook of Food Engineering Ch.8',
+]
+
 
 
 def solve(params: dict) -> dict:
@@ -120,4 +130,16 @@ def solve(params: dict) -> dict:
         assumptions=assumptions,
         validity=val.result(),
         inputs_used=inputs_used,
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="kg/m³ or mol/m³ (matches input)",
+            symbol="C(x,t)",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
     )
