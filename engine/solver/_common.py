@@ -189,3 +189,236 @@ def llm_summary_for(*,
         "key_outputs": key_outputs,
         "confidence": confidence,
     }
+
+
+# ── Bounds Validator ────────────────────────────────────────────────────────
+import functools
+import warnings
+from pathlib import Path
+from typing import Callable
+
+try:
+    import yaml as _yaml
+except ImportError:  # pragma: no cover - exercised only without dependency
+    _yaml = None
+
+_BOUNDS_CACHE: dict = {}
+_BOUNDS_PATH = Path(__file__).resolve().parents[2] / "config" / "solver_bounds.yaml"
+_MISSING_BOUNDS_WARNED: set[str] = set()
+
+
+def _load_bounds() -> dict:
+    """Load solver_bounds.yaml lazily. Returns {mf_id: solver_spec}."""
+    global _BOUNDS_CACHE
+    if _BOUNDS_CACHE:
+        return _BOUNDS_CACHE
+    if _yaml is None:
+        warnings.warn(
+            "PyYAML not installed; @validate_bounds is a no-op",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        _BOUNDS_CACHE = {"_disabled": True}
+        return _BOUNDS_CACHE
+    if not _BOUNDS_PATH.exists():
+        warnings.warn(
+            f"solver_bounds.yaml missing at {_BOUNDS_PATH}; "
+            "@validate_bounds is a no-op",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        _BOUNDS_CACHE = {"_disabled": True}
+        return _BOUNDS_CACHE
+    try:
+        data = _yaml.safe_load(_BOUNDS_PATH.read_text(encoding="utf-8"))
+        _BOUNDS_CACHE = data.get("solvers", {})
+    except Exception as exc:
+        warnings.warn(
+            f"Failed to load solver_bounds.yaml: {exc}; "
+            "@validate_bounds is a no-op",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        _BOUNDS_CACHE = {"_disabled": True}
+    return _BOUNDS_CACHE
+
+
+def _check_param_bound(value: Any, spec: dict, val: Validator, name: str, *,
+                       require_finite: bool = False) -> None:
+    """Append issue if value violates spec.min/max.
+
+    Soft bounds emit a WARN-prefixed issue, which does not fail validity.
+    """
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+    ):
+        if require_finite:
+            val.issues.append(f"{name} must be finite, got {value!r}")
+        return
+
+    lo = spec.get("min")
+    hi = spec.get("max")
+    soft = spec.get("soft", False)
+    out_of_range = False
+    if lo is not None and value < lo:
+        out_of_range = True
+    if hi is not None and value > hi:
+        out_of_range = True
+    if out_of_range:
+        msg = f"{name}={value} outside bounds [{lo}, {hi}] {spec.get('unit', '')}"
+        if soft:
+            val.issues.append(
+                f"WARN: {msg} (soft bound; result may be extrapolated)"
+            )
+        else:
+            val.issues.append(msg)
+
+
+def _resolve_dotted(params: dict, dotted: str) -> Any:
+    """Resolve 'composition.water' -> params['composition']['water']."""
+    cur = params
+    for part in dotted.split("."):
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return None
+    return cur
+
+
+def _composition_value_for_bounds(params: dict, dotted: str, value: Any) -> Any:
+    """Normalize obvious 0-100 composition percentages for bounds checks."""
+    if not dotted.startswith("composition."):
+        return value
+    comp = params.get("composition")
+    if not isinstance(comp, dict):
+        return value
+    numbers = [
+        float(v)
+        for v in comp.values()
+        if isinstance(v, (int, float)) and not isinstance(v, bool)
+        and math.isfinite(v)
+    ]
+    total = sum(numbers)
+    if total > 10.0 and isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) / total
+    return value
+
+
+def _ratio_value_for_bounds(params: dict, name: str, value: Any) -> Any:
+    """Normalize obvious non-fraction two-part weights for bounds checks."""
+    if name not in {"w1", "w2"}:
+        return value
+    other = "w2" if name == "w1" else "w1"
+    other_value = params.get(other)
+    if not (
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        and isinstance(other_value, (int, float)) and not isinstance(other_value, bool)
+        and math.isfinite(value) and math.isfinite(other_value)
+    ):
+        return value
+    total = float(value) + float(other_value)
+    if total >= 10.0 and value >= 0.0 and other_value >= 0.0:
+        return float(value) / total
+    return value
+
+
+def _resolve_param_value(params: dict, name: str) -> Any:
+    """Resolve direct, dotted, and derived bound parameters."""
+    if name == "T_minus_Tg" and name not in params:
+        temp = params.get("T")
+        tg = params.get("Tg")
+        if (
+            isinstance(temp, (int, float)) and not isinstance(temp, bool)
+            and isinstance(tg, (int, float)) and not isinstance(tg, bool)
+            and math.isfinite(temp) and math.isfinite(tg)
+        ):
+            return float(temp) - float(tg)
+        return None
+    if "." in name:
+        value = _resolve_dotted(params, name)
+        return _composition_value_for_bounds(params, name, value)
+    return _ratio_value_for_bounds(params, name, params.get(name))
+
+
+def _warn_missing_bounds_once(mf_id: str) -> None:
+    if mf_id in _MISSING_BOUNDS_WARNED:
+        return
+    _MISSING_BOUNDS_WARNED.add(mf_id)
+    warnings.warn(
+        f"bounds metadata missing for {mf_id}; @validate_bounds is a no-op",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
+
+def validate_bounds(mf_id: str, *, output_variant: str | None = None):
+    """Decorator wrapping solver.solve(params) with automatic bounds checks.
+
+    Usage:
+        @validate_bounds("MF-T01")
+        def solve(params: dict) -> dict: ...
+
+    For multi-output T02 split:
+        @validate_bounds("MF-T02", output_variant="mf_t02_k")
+        def solve(params: dict) -> dict: ...
+
+    Behavior:
+        - Pre-call: load bounds.yaml[mf_id]; for each input spec, check params
+          value against [min, max]. Soft bounds emit "WARN:" issues.
+        - Post-call: check returned result.value against output bounds.
+        - Failure mode: append val.issues, never raise.
+        - Soft fallback: missing yaml / missing mf_id / yaml-load error
+          becomes no-op + RuntimeWarning.
+    """
+    def deco(fn: Callable) -> Callable:
+        @functools.wraps(fn)
+        def wrapper(params: dict) -> dict:
+            bounds = _load_bounds()
+            spec = bounds.get(mf_id, {}) if not bounds.get("_disabled") else {}
+            if not spec and not bounds.get("_disabled"):
+                _warn_missing_bounds_once(mf_id)
+
+            pre_issues: list[str] = []
+            for inp in spec.get("inputs", []) or []:
+                name = inp["name"]
+                value = _resolve_param_value(params, name)
+                if value is None:
+                    continue
+                tmp_val = Validator()
+                _check_param_bound(value, inp, tmp_val, name)
+                pre_issues.extend(tmp_val.issues)
+
+            result = fn(params)
+
+            if "validity" in result and isinstance(result["validity"], dict):
+                existing = list(result["validity"].get("issues", []))
+                existing.extend(pre_issues)
+
+                out_spec = None
+                if output_variant and "outputs_by_variant" in spec:
+                    out_spec = spec["outputs_by_variant"].get(output_variant)
+                else:
+                    out_spec = spec.get("output")
+
+                if out_spec and "result" in result and "value" in result["result"]:
+                    val_check = result["result"]["value"]
+                    tmp = Validator()
+                    _check_param_bound(
+                        val_check,
+                        out_spec,
+                        tmp,
+                        out_spec.get("symbol", "result.value"),
+                        require_finite=True,
+                    )
+                    existing.extend(tmp.issues)
+
+                result["validity"]["issues"] = existing
+                result["validity"]["passed"] = not any(
+                    not issue.startswith("WARN:") for issue in existing
+                )
+
+            return result
+        return wrapper
+    return deco
