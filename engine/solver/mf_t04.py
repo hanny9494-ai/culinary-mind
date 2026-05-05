@@ -95,6 +95,7 @@ def solve(params: dict) -> dict:
             symbol="Nu",
             tool_canonical_name=TOOL_CANONICAL_NAME,
             tool_id=TOOL_ID,
+            extra_outputs=extras,
         ),
     )
     if extras:

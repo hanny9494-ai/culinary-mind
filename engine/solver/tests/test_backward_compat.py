@@ -4,9 +4,31 @@ from __future__ import annotations
 import unittest
 
 from engine.solver import mf_t01
+from engine.solver.tests.test_provenance_consistency import ALL_SOLVERS, SAMPLE_PARAMS
 
 
 class TestBackwardCompat(unittest.TestCase):
+
+    def test_all_solvers_legacy_keys_still_present(self):
+        for tool_key, solve in ALL_SOLVERS:
+            with self.subTest(tool_key=tool_key):
+                out = solve(SAMPLE_PARAMS[tool_key])
+                self.assertIn("result", out)
+                self.assertIn("value", out["result"])
+                self.assertIn("unit", out["result"])
+                self.assertIn("symbol", out["result"])
+                self.assertIn("assumptions", out)
+                self.assertIn("validity", out)
+                self.assertIn("passed", out["validity"])
+                self.assertIn("issues", out["validity"])
+                self.assertIn("inputs_used", out)
+
+    def test_all_solvers_result_value_stays_atomic_numeric(self):
+        for tool_key, solve in ALL_SOLVERS:
+            with self.subTest(tool_key=tool_key):
+                out = solve(SAMPLE_PARAMS[tool_key])
+                self.assertIsInstance(out["result"]["value"], (int, float))
+                self.assertNotIsInstance(out["result"]["value"], bool)
 
     def test_mf_t01_legacy_keys_still_present(self):
         out = mf_t01.solve({

@@ -5,7 +5,7 @@ import math
 import unittest
 from unittest.mock import patch
 
-from engine.solver import mf_m06
+from engine.solver import mf_m06, mf_t04
 from engine.solver.tests.test_provenance_consistency import ALL_SOLVERS, SAMPLE_PARAMS
 
 
@@ -71,6 +71,15 @@ class TestLlmSummary(unittest.TestCase):
                     self.assertEqual(ko.get("value"), value)
                     self.assertEqual(ko.get("unit"), out["result"]["unit"])
                     self.assertEqual(ko.get("symbol"), out["result"]["symbol"])
+
+    def test_llm_summary_key_outputs_include_t04_extras(self):
+        out = mf_t04.solve({
+            "Re": 10000.0, "Pr": 0.7, "C": 0.023, "m": 0.8, "n": 0.4,
+            "k_fluid": 0.6, "L_characteristic": 0.02,
+        })
+        self.assertIn("extras", out["result"])
+        self.assertEqual(out["llm_summary"]["key_outputs"]["h"], out["result"]["extras"]["h"])
+        self.assertEqual(out["llm_summary"]["key_outputs"]["h_unit"], out["result"]["extras"]["h_unit"])
 
     def test_llm_summary_handles_nan_value(self):
         with patch("engine.solver.mf_m06.PropsSI", None):
