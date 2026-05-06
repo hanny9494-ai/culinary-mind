@@ -34,6 +34,35 @@ DEFAULT_RETRY_BACKOFF_SECONDS = (5, 10, 20)
 DEFAULT_SEMAPHORE_LIMIT = 5
 
 
+def load_prompt_template(path: Path = PROMPT_PATH) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def render_prompt(
+    template: str,
+    *,
+    raw_atom_json: dict[str, Any],
+    siblings: list[dict[str, Any]],
+    gemini_target_node: dict[str, Any],
+    gemini_issues: list[str],
+    gemini_conf: float,
+) -> list[dict[str, str]]:
+    rendered = (
+        template.replace("{raw_atom_json}", json.dumps(raw_atom_json, ensure_ascii=False, sort_keys=True))
+        .replace("{siblings}", json.dumps(siblings, ensure_ascii=False, sort_keys=True))
+        .replace("{gemini_target_node}", json.dumps(gemini_target_node, ensure_ascii=False, sort_keys=True))
+        .replace("{gemini_issues}", json.dumps(gemini_issues, ensure_ascii=False, sort_keys=True))
+        .replace("{gemini_conf}", str(gemini_conf))
+    )
+    if rendered.startswith("SYSTEM:") and "\nUSER:\n" in rendered:
+        system_part, user_part = rendered.split("\nUSER:\n", 1)
+        return [
+            {"role": "system", "content": system_part.removeprefix("SYSTEM:\n").strip()},
+            {"role": "user", "content": user_part.strip()},
+        ]
+    return [{"role": "user", "content": rendered}]
+
+
 def needs_peer_review(gemini_output: dict[str, Any]) -> bool:
     if float(gemini_output.get("confidence_overall") or 0.0) < 0.85:
         return True
@@ -107,6 +136,33 @@ def post_with_thread_timeout(
     if status == "error":
         raise payload
     return payload
+
+
+async def call_lingya_with_retries(
+    *,
+    messages: list[dict[str, str]],
+    semaphore: asyncio.Semaphore,
+    model: str,
+    endpoint: str,
+    api_key: str,
+    retry_backoff_seconds: tuple[int, ...] = DEFAULT_RETRY_BACKOFF_SECONDS,
+) -> dict[str, Any]:
+    async with semaphore:
+        attempts = len(retry_backoff_seconds) + 1
+        for attempt in range(attempts):
+            try:
+                return await asyncio.to_thread(
+                    post_with_thread_timeout,
+                    endpoint=endpoint,
+                    api_key=api_key,
+                    model=model,
+                    messages=messages,
+                )
+            except Exception:
+                if attempt >= attempts - 1:
+                    raise
+                await asyncio.sleep(retry_backoff_seconds[attempt])
+    raise RuntimeError("unreachable Lingya retry state")
 
 
 async def run_peer_review(
