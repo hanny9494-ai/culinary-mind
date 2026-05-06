@@ -3,10 +3,11 @@
 # 更新: 2026-05-02
 # 维护者: repo-curator agent
 
-version: "1.7"
+version: "1.8"
 status: "draft"  # draft → reviewed → locked
 last_updated: "2026-05-01"
 changelog:
+  - "1.8 (2026-05-01): PR #29 合并 — P1-17.1 config sync，mother_formulas.yaml + mf_fingerprints.json 同步 mf_t02 → mf_t02_k/cp/rho 原子拆分（3 条目替换），新增 test_mf_t02_split_consistency.py (16 schema validation tests)，331 tests + 1159 subtests passing. Follow-up: P1-17.1.1 TOOL_ID/canonical_name 修复（pre-LangGraph 阻塞项）"
   - "1.7 (2026-05-01): PR #28 合并 — P1-21b Hypothesis property-based tests，新增 _hypothesis_helpers.py + 46 Hypothesis tests (15 MF solvers: T/M/R/C/K 家族)，315 tests + 1159 subtests passing in 5.03s"
   - "1.6 (2026-05-01): PR #27 合并 — P1-21a bounds validator，新增 config/solver_bounds.yaml (28 MF 范围定义) + @validate_bounds 装饰器，36 files 改动，269 tests + 1159 subtests passing，无回归"
   - "1.5 (2026-05-01): PR #26 合并 — P1-22 统一 MF solver 返回格式，30 solvers 全部含 provenance + llm_summary，新增 26 单元测试，265 tests + 1159 subtests passing"
