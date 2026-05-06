@@ -19,15 +19,15 @@ SAMPLE_PARAMS = {
         "T_init": 20.0, "T_boundary": 100.0, "time": 60.0,
         "x_position": 0.005, "alpha": 1.4e-7,
     },
-    "MF-T02-k": {
+    "MF-T02-K": {
         "composition": {"water": 0.7, "protein": 0.2, "fat": 0.1},
         "T_C": 25.0,
     },
-    "MF-T02-Cp": {
+    "MF-T02-CP": {
         "composition": {"water": 0.7, "protein": 0.2, "fat": 0.1},
         "T_C": 25.0,
     },
-    "MF-T02-rho": {
+    "MF-T02-RHO": {
         "composition": {"water": 0.7, "protein": 0.2, "fat": 0.1},
         "T_C": 25.0,
     },
@@ -72,9 +72,9 @@ SAMPLE_PARAMS = {
 
 ALL_SOLVERS: list[tuple[str, Callable[[dict], dict]]] = [
     ("MF-T01", mf_t01.solve),
-    ("MF-T02-k", mf_t02_k.solve),
-    ("MF-T02-Cp", mf_t02_cp.solve),
-    ("MF-T02-rho", mf_t02_rho.solve),
+    ("MF-T02-K", mf_t02_k.solve),
+    ("MF-T02-CP", mf_t02_cp.solve),
+    ("MF-T02-RHO", mf_t02_rho.solve),
     ("MF-T03", mf_t03.solve),
     ("MF-T04", mf_t04.solve),
     ("MF-T05", mf_t05.solve),
@@ -106,9 +106,9 @@ ALL_SOLVERS: list[tuple[str, Callable[[dict], dict]]] = [
 
 EXPECTED_CANONICAL_NAMES = {
     "MF-T01": "Fourier_1D",
-    "MF-T02-k": "Choi_Okos_k",
-    "MF-T02-Cp": "Choi_Okos_Cp",
-    "MF-T02-rho": "Choi_Okos_rho",
+    "MF-T02-K": "Choi_Okos_thermal_conductivity",
+    "MF-T02-CP": "Choi_Okos_specific_heat",
+    "MF-T02-RHO": "Choi_Okos_density",
     "MF-T03": "Arrhenius",
     "MF-T04": "Nusselt_Correlation",
     "MF-T05": "Plank_Freezing",
@@ -163,7 +163,8 @@ class TestProvenanceConsistency(unittest.TestCase):
                 self.assertTrue(required <= set(out["provenance"].keys()))
 
     def test_provenance_tool_id_format_valid(self):
-        pattern = re.compile(r"^MF-[TKMRC]\d{2}$")
+        # Allow the MF-T02 split suffixes: -K / -CP / -RHO
+        pattern = re.compile(r"^MF-[TKMRC]\d{2}(-[A-Z]+)?$")
         for tool_key, solve in ALL_SOLVERS:
             with self.subTest(tool_key=tool_key):
                 out = _out(tool_key, solve)
@@ -173,8 +174,7 @@ class TestProvenanceConsistency(unittest.TestCase):
         for tool_key, solve in ALL_SOLVERS:
             with self.subTest(tool_key=tool_key):
                 out = _out(tool_key, solve)
-                expected_tool_id = "MF-T02" if tool_key.startswith("MF-T02") else tool_key
-                self.assertEqual(out["provenance"]["tool_id"], expected_tool_id)
+                self.assertEqual(out["provenance"]["tool_id"], tool_key)
                 self.assertEqual(
                     out["provenance"]["tool_canonical_name"],
                     EXPECTED_CANONICAL_NAMES[tool_key],
@@ -201,13 +201,15 @@ class TestProvenanceConsistency(unittest.TestCase):
                     self.assertIn("mf_id", ref)
 
     def test_ckg_mf_id_lowercase_namespaced(self):
-        pattern = re.compile(r"^mf_[tkmrc]\d{2}$")
+        # Pattern allows the MF-T02 split: mf_t02_k / mf_t02_cp / mf_t02_rho
+        pattern = re.compile(r"^mf_[tkmrc]\d{2}(_[a-z]+)?$")
         for tool_key, solve in ALL_SOLVERS:
             with self.subTest(tool_key=tool_key):
                 out = _out(tool_key, solve)
                 ref = out["provenance"]["ckg_node_refs"][0]
-                expected_tool_id = "MF-T02" if tool_key.startswith("MF-T02") else tool_key
-                self.assertEqual(ref, {"label": "CKG_MF", "mf_id": expected_tool_id.lower().replace("-", "_")})
+                # Each tool_key now has its own ckg mf_id (no parent collapse)
+                expected_mf_id = tool_key.lower().replace("-", "_")
+                self.assertEqual(ref, {"label": "CKG_MF", "mf_id": expected_mf_id})
                 self.assertTrue(pattern.match(ref["mf_id"]))
 
     def test_provenance_tool_version_is_string(self):

@@ -26,8 +26,8 @@ from typing import Any
 from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
 
 
-TOOL_ID = 'MF-T02'
-TOOL_CANONICAL_NAME = 'Choi_Okos_k'
+TOOL_ID = 'MF-T02-K'
+TOOL_CANONICAL_NAME = 'Choi_Okos_thermal_conductivity'
 CITATIONS = [
     'Singh & Heldman, Introduction to Food Engineering Ch.4',
     'Rao, Engineering Properties of Foods Ch.4',
