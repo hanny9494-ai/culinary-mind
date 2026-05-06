@@ -21,7 +21,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ._common import Validator, build_result, llm_summary_for, provenance_for
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
 
 
 TOOL_ID = 'MF-C01'
@@ -38,6 +38,7 @@ except ImportError:  # pragma: no cover
     _fluids_v_terminal = None
 
 
+@validate_bounds("MF-C01")
 def solve(params: dict) -> dict:
     """Compute signed terminal velocity in m/s."""
     val = Validator()

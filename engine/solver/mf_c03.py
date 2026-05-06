@@ -25,7 +25,7 @@ from typing import Any
 
 from scipy import constants as _constants
 
-from ._common import Validator, build_result, llm_summary_for, provenance_for
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
 
 
 TOOL_ID = 'MF-C03'
@@ -37,6 +37,7 @@ CITATIONS = [
 
 
 
+@validate_bounds("MF-C03")
 def solve(params: dict) -> dict:
     """Compute simplified DLVO interaction energy in J."""
     val = Validator()

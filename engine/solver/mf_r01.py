@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._common import Validator, build_result, llm_summary_for, provenance_for
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
 
 
 TOOL_ID = 'MF-R01'
@@ -32,6 +32,7 @@ CITATIONS = [
 
 
 
+@validate_bounds("MF-R01")
 def solve(params: dict) -> dict:
     val = Validator()
     assumptions = ["isothermal", "steady simple-shear flow"]

@@ -1,0 +1,428 @@
+# P1-21a: 28 MF physical range metadata for @validate_bounds decorator
+# Bounds: input parameter ranges + output value ranges
+# Source: researcher P1-21 §6 + fingerprints.json + textbooks
+version: 1.0
+schema:
+  bounds_per_solver:
+    inputs:
+      - name: <param_name>
+        min: <float|null>
+        max: <float|null>
+        unit: <str>
+        source: <str>
+    output:
+      symbol: <str>
+      min: <float|null>
+      max: <float|null>
+      unit: <str>
+
+solvers:
+  MF-T01:
+    canonical_name: Fourier_1D
+    inputs:
+      - {name: T_init, min: -40, max: 300, unit: "°C", source: "applicable_range fingerprints"}
+      - {name: T_boundary, min: -40, max: 300, unit: "°C"}
+      - {name: time, min: 0, max: 86400, unit: "s", source: "1 day max"}
+      - {name: x_position, min: 0, max: 1.0, unit: "m"}
+      - {name: alpha, min: 1.0e-9, max: 1.0e-5, unit: "m²/s", source: "Singh_Heldman_Ch4"}
+      - {name: thickness, min: 1.0e-4, max: 1.0, unit: "m"}
+      - {name: k, min: 0.05, max: 5.0, unit: "W/(m·K)"}
+      - {name: rho, min: 100, max: 2500, unit: "kg/m³"}
+      - {name: Cp, min: 500, max: 5000, unit: "J/(kg·K)"}
+    output:
+      symbol: T(x,t)
+      min: -273.15
+      max: 5000
+      unit: "°C"
+
+  MF-T02:
+    canonical_name: Choi_Okos
+    inputs:
+      - {name: T_C, min: -40, max: 150, unit: "°C", source: "Choi-Okos 1986"}
+      - {name: T_c, min: -40, max: 150, unit: "°C", source: "Choi-Okos 1986 alias"}
+      - {name: composition.water, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: composition.protein, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: composition.fat, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: composition.carb, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: composition.fiber, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: composition.ash, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: Xw, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: Xp, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: Xf, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: Xc, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: Xfiber, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: Xa, min: 0, max: 1.0, unit: "mass fraction"}
+    outputs_by_variant:
+      mf_t02_k: {symbol: k, min: 0.05, max: 5.0, unit: "W/(m·K)"}
+      mf_t02_cp: {symbol: Cp, min: 500, max: 5000, unit: "J/(kg·K)"}
+      mf_t02_rho: {symbol: rho, min: 100, max: 2500, unit: "kg/m³"}
+
+  MF-T03:
+    canonical_name: Arrhenius
+    inputs:
+      - {name: A, min: 1.0e-30, max: 1.0e+30, unit: "rate", source: "wide range pre-exponential"}
+      - {name: Ea, min: 0, max: 500000, unit: "J/mol"}
+      - {name: T_K, min: 1, max: 5000, unit: "K"}
+      - {name: T, min: 1, max: 5000, unit: "K"}
+    output:
+      symbol: k
+      min: 0
+      max: 1.0e+30
+      unit: "rate"
+
+  MF-T04:
+    canonical_name: Nusselt_Correlation
+    inputs:
+      - {name: Re, min: 0.001, max: 1.0e+7, unit: "dimensionless"}
+      - {name: Pr, min: 0.001, max: 1.0e+4, unit: "dimensionless"}
+      - {name: C, min: 1.0e-12, max: 1.0e+6, unit: "dimensionless"}
+      - {name: m, min: -10, max: 10, unit: "dimensionless"}
+      - {name: n, min: -10, max: 10, unit: "dimensionless"}
+    output:
+      symbol: Nu
+      min: 0
+      max: 1.0e+6
+      unit: "dimensionless"
+
+  MF-T05:
+    canonical_name: Plank_Freezing
+    inputs:
+      - {name: rho, min: 100, max: 2500, unit: "kg/m³"}
+      - {name: L, min: 100000, max: 500000, unit: "J/kg", source: "freezing latent heat"}
+      - {name: L_f, min: 100000, max: 500000, unit: "J/kg", source: "freezing latent heat alias"}
+      - {name: d, min: 1.0e-3, max: 1.0, unit: "m"}
+      - {name: a, min: 1.0e-3, max: 1.0, unit: "m"}
+      - {name: T_f, min: -50, max: 0, unit: "°C", source: "freezing point food"}
+      - {name: T_inf, min: -100, max: 0, unit: "°C"}
+      - {name: T_m, min: -100, max: 0, unit: "°C"}
+      - {name: h, min: 1, max: 1000, unit: "W/(m²·K)"}
+      - {name: k, min: 0.05, max: 5.0, unit: "W/(m·K)"}
+    output:
+      symbol: t_freeze
+      min: 0
+      max: 1.0e+6
+      unit: "s"
+
+  MF-K01:
+    canonical_name: Michaelis_Menten
+    inputs:
+      - {name: Vmax, min: 1.0e-9, max: 1.0e+9, unit: "rate"}
+      - {name: Km, min: 1.0e-9, max: 1.0e+6, unit: "concentration"}
+      - {name: S, min: 0, max: 1.0e+6, unit: "concentration"}
+    output:
+      symbol: v
+      min: 0
+      max: 1.0e+9
+      unit: "rate"
+
+  MF-K02:
+    canonical_name: D_Value
+    inputs:
+      - {name: t, min: 0, max: 1.0e+6, unit: "s"}
+      - {name: time, min: 0, max: 1.0e+6, unit: "s"}
+      - {name: N, min: 0, max: 1.0e+15, unit: "CFU"}
+      - {name: N0, min: 1, max: 1.0e+15, unit: "CFU"}
+    output:
+      symbol: D
+      min: 0
+      max: 1.0e+6
+      unit: "s"
+
+  MF-K03:
+    canonical_name: z_Value
+    inputs:
+      - {name: T1, min: -50, max: 200, unit: "°C"}
+      - {name: T2, min: -50, max: 200, unit: "°C"}
+      - {name: D1, min: 1.0e-3, max: 1.0e+6, unit: "s"}
+      - {name: D2, min: 1.0e-3, max: 1.0e+6, unit: "s"}
+    output:
+      symbol: z
+      min: 0
+      max: 200
+      unit: "°C"
+
+  MF-K04:
+    canonical_name: F_Value
+    inputs:
+      - {name: T_ref, min: 50, max: 200, unit: "°C", default: 121.1}
+      - {name: z, min: 1, max: 50, unit: "°C", default: 10}
+      - {name: T_C, min: -50, max: 200, unit: "°C"}
+      - {name: time, min: 0, max: 1.0e+6, unit: "s"}
+      - {name: time_s, min: 0, max: 1.0e+6, unit: "s"}
+    output:
+      symbol: F
+      min: 0
+      max: 1.0e+4
+      unit: "min"
+
+  MF-K05:
+    canonical_name: Gompertz_Microbial
+    inputs:
+      - {name: A, min: 0, max: 20, unit: "log10 CFU"}
+      - {name: mu_max, min: 1.0e-3, max: 100, unit: "1/h"}
+      - {name: mu, min: 1.0e-3, max: 100, unit: "1/h"}
+      - {name: lam, min: 0, max: 1000, unit: "h"}
+      - {name: lambda, min: 0, max: 1000, unit: "h"}
+      - {name: lag, min: 0, max: 1000, unit: "h"}
+      - {name: lambda_h, min: 0, max: 1000, unit: "h"}
+      - {name: t, min: 0, max: 1.0e+5, unit: "h", soft: true}
+      - {name: time_h, min: 0, max: 1.0e+5, unit: "h", soft: true}
+    output:
+      symbol: log10(N/N0)
+      min: -100
+      max: 100
+      unit: "log10 ratio"
+
+  MF-M01:
+    canonical_name: Fick_2nd_Law
+    inputs:
+      - {name: C_init, min: 0, max: 1.0e+6, unit: "concentration"}
+      - {name: C_boundary, min: 0, max: 1.0e+6, unit: "concentration"}
+      - {name: D, min: 1.0e-15, max: 1.0e-3, unit: "m²/s"}
+      - {name: D_eff, min: 1.0e-15, max: 1.0e-3, unit: "m²/s"}
+      - {name: x, min: 0, max: 1.0, unit: "m"}
+      - {name: x_position, min: 0, max: 1.0, unit: "m"}
+      - {name: time, min: 0, max: 1.0e+6, unit: "s"}
+      - {name: thickness, min: 1.0e-4, max: 1.0, unit: "m"}
+    output:
+      symbol: C(x,t)
+      min: 0
+      max: 1.0e+6
+      unit: "concentration"
+
+  MF-M02:
+    canonical_name: GAB_Isotherm
+    inputs:
+      - {name: a_w, min: 0, max: 0.95, unit: "dimensionless", source: "researcher §6 hard safety envelope"}
+      - {name: aw, min: 0, max: 0.95, unit: "dimensionless", source: "researcher §6 hard safety envelope alias"}
+      - {name: a_w, min: 0.1, max: null, unit: "dimensionless", source: "researcher §6 preferred range", soft: true}
+      - {name: aw, min: 0.1, max: null, unit: "dimensionless", source: "researcher §6 preferred range alias", soft: true}
+      - {name: W_m, min: 1.0e-3, max: 1.0, unit: "kg/kg"}
+      - {name: Xm, min: 1.0e-3, max: 1.0, unit: "kg/kg"}
+      - {name: C, min: 0.1, max: 1000, unit: "dimensionless"}
+      - {name: K, min: 0.1, max: 1.0, unit: "dimensionless"}
+    output:
+      symbol: W
+      min: 0
+      max: 5
+      unit: "kg water/kg dry"
+
+  MF-M03:
+    canonical_name: Antoine_Equation
+    inputs:
+      - {name: T_C, min: 0, max: 374, unit: "°C", source: "Antoine water; substance-specific"}
+      - {name: T_c, min: 0, max: 374, unit: "°C", source: "Antoine water alias; substance-specific"}
+      - {name: substance, type: string, default: "water"}
+    output:
+      symbol: P
+      min: 0
+      max: 1.0e+8
+      unit: "Pa"
+
+  MF-M04:
+    canonical_name: Henderson_Hasselbalch
+    inputs:
+      - {name: pKa, min: -10, max: 20, unit: "dimensionless"}
+      - {name: A_minus_conc, min: 0, max: 1.0e+6, unit: "concentration"}
+      - {name: A_minus, min: 0, max: 1.0e+6, unit: "concentration"}
+      - {name: HA_conc, min: 1.0e-15, max: 1.0e+6, unit: "concentration"}
+      - {name: HA, min: 1.0e-15, max: 1.0e+6, unit: "concentration"}
+    output:
+      symbol: pH
+      min: -2
+      max: 16
+      unit: "dimensionless"
+
+  MF-M05:
+    canonical_name: Henry_Law_Aroma
+    inputs:
+      - {name: H, min: 1.0e-15, max: 1.0e+15, unit: "Pa·m³/mol or dimensionless"}
+      - {name: p_gas, min: 0, max: 1.0e+8, unit: "Pa"}
+      - {name: p, min: 0, max: 1.0e+8, unit: "Pa"}
+      - {name: c_gas, min: 0, max: 1.0e+6, unit: "concentration"}
+      - {name: T_C, min: -50, max: 200, unit: "°C"}
+      - {name: T_c, min: -50, max: 200, unit: "°C"}
+    output:
+      symbol: c_aq
+      min: 0
+      max: 1.0e+6
+      unit: "concentration"
+
+  MF-M06:
+    canonical_name: Latent_Heat
+    inputs:
+      - {name: T_C, min: 0, max: 374, unit: "°C", source: "water triple to critical"}
+      - {name: T_c, min: 0, max: 374, unit: "°C", source: "water triple to critical alias"}
+      - {name: substance, type: string, default: "water"}
+    output:
+      symbol: L
+      min: 0
+      max: 4.0e+6
+      unit: "J/kg"
+
+  MF-R01:
+    canonical_name: Power_Law
+    inputs:
+      - {name: K, min: 1.0e-6, max: 1.0e+6, unit: "Pa·s^n"}
+      - {name: n, min: 0.01, max: 5, unit: "dimensionless"}
+      - {name: gamma_dot, min: 0, max: 1000, unit: "1/s"}
+      - {name: gamma_dot, min: 1, max: null, unit: "1/s", source: "researcher §6 typical lower range", soft: true}
+    output:
+      symbol: tau
+      min: 0
+      max: 1.0e+8
+      unit: "Pa"
+
+  MF-R02:
+    canonical_name: Herschel_Bulkley
+    inputs:
+      - {name: tau_0, min: 0, max: 1.0e+6, unit: "Pa"}
+      - {name: tau0, min: 0, max: 1.0e+6, unit: "Pa"}
+      - {name: K, min: 1.0e-6, max: 1.0e+6, unit: "Pa·s^n"}
+      - {name: n, min: 0.01, max: 5, unit: "dimensionless"}
+      - {name: gamma_dot, min: 0, max: 1.0e+4, unit: "1/s"}
+    output:
+      symbol: tau
+      min: 0
+      max: 1.0e+8
+      unit: "Pa"
+
+  MF-R03:
+    canonical_name: Casson_Model
+    inputs:
+      - {name: tau_0, min: 0, max: 1.0e+6, unit: "Pa"}
+      - {name: tau_c, min: 0, max: 1.0e+6, unit: "Pa"}
+      - {name: K_C, min: 0, max: 1.0e+6, unit: "Pa·s"}
+      - {name: eta_c, min: 0, max: 1.0e+6, unit: "Pa·s"}
+      - {name: gamma_dot, min: 0, max: 1.0e+4, unit: "1/s"}
+    output:
+      symbol: tau
+      min: 0
+      max: 1.0e+8
+      unit: "Pa"
+
+  MF-R04:
+    canonical_name: Gordon_Taylor
+    inputs:
+      - {name: w1, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: w2, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: Tg1, min: -200, max: 500, unit: "°C"}
+      - {name: Tg2, min: -200, max: 500, unit: "°C"}
+      - {name: k, min: 0.01, max: 100, unit: "dimensionless"}
+    output:
+      symbol: Tg_mix
+      min: -200
+      max: 500
+      unit: "°C"
+
+  MF-R05:
+    canonical_name: WLF_Equation
+    inputs:
+      - {name: T, min: -200, max: 500, unit: "°C"}
+      - {name: Tg, min: -200, max: 500, unit: "°C"}
+      - {name: C1, min: 1, max: 50, unit: "dimensionless", default: 17.44}
+      - {name: C2, min: 10, max: 200, unit: "°C", default: 51.6}
+      - {name: T_minus_Tg, min: 0, max: 100, unit: "°C", source: "researcher §6 valid food polymer range", soft: true}
+    output:
+      symbol: aT
+      min: 1.0e-30
+      max: 1.0e+30
+      unit: "dimensionless"
+
+  MF-R06:
+    canonical_name: Stevens_Power_Law
+    inputs:
+      - {name: k, min: 1.0e-9, max: 1.0e+9, unit: "scale"}
+      - {name: I, min: 0, max: 1.0e+9, unit: "stimulus"}
+      - {name: n, min: 0.01, max: 5, unit: "dimensionless"}
+    output:
+      symbol: S
+      min: 0
+      max: 1.0e+15
+      unit: "intensity"
+
+  MF-R07:
+    canonical_name: Griffith_Fracture
+    inputs:
+      - {name: E, min: 1000, max: 1.0e+12, unit: "Pa"}
+      - {name: gamma_s, min: 1.0e-6, max: 100, unit: "J/m²"}
+      - {name: a, min: 1.0e-12, max: 1, unit: "m"}
+    output:
+      symbol: sigma_f
+      min: 0
+      max: 1.0e+12
+      unit: "Pa"
+
+  MF-C01:
+    canonical_name: Stokes_Sedimentation
+    inputs:
+      - {name: r, min: 1.0e-9, max: 1.0e-2, unit: "m"}
+      - {name: rho_p, min: 100, max: 25000, unit: "kg/m³"}
+      - {name: rho_f, min: 100, max: 2500, unit: "kg/m³"}
+      - {name: eta, min: 1.0e-6, max: 1000, unit: "Pa·s"}
+      - {name: mu, min: 1.0e-6, max: 1000, unit: "Pa·s"}
+      - {name: g, min: 0.1, max: 100, unit: "m/s²", default: 9.81}
+    output:
+      symbol: v
+      min: -1000
+      max: 1000
+      unit: "m/s"
+
+  MF-C02:
+    canonical_name: HLB_Griffin
+    inputs:
+      - {name: M_h, min: 0, max: 1.0e+9, unit: "g/mol"}
+      - {name: Mh, min: 0, max: 1.0e+9, unit: "g/mol"}
+      - {name: M_l, min: 0, max: 1.0e+9, unit: "g/mol"}
+      - {name: Ml, min: 0, max: 1.0e+9, unit: "g/mol"}
+      - {name: M, min: 0, max: 1.0e+9, unit: "g/mol"}
+    output:
+      symbol: HLB
+      min: 0
+      max: 20
+      unit: "dimensionless"
+
+  MF-C03:
+    canonical_name: DLVO_Theory
+    inputs:
+      - {name: A_H, min: 1.0e-22, max: 1.0e-18, unit: "J", source: "Hamaker typical food"}
+      - {name: A_hamaker, min: 1.0e-22, max: 1.0e-18, unit: "J", source: "Hamaker typical food alias"}
+      - {name: kappa, min: 1.0e+6, max: 1.0e+10, unit: "1/m", source: "Debye inverse"}
+      - {name: zeta, min: -0.2, max: 0.2, unit: "V"}
+      - {name: epsilon, min: 1, max: 100, unit: "dielectric"}
+      - {name: epsilon_r, min: 1, max: 100, unit: "dielectric"}
+      - {name: T, min: 273, max: 400, unit: "K"}
+      - {name: T_K, min: 273, max: 400, unit: "K"}
+      - {name: D, min: 1.0e-12, max: 1.0e-3, unit: "m"}
+      - {name: D, min: null, max: 1.0e-6, unit: "m", source: "researcher §6 typical separation", soft: true}
+    output:
+      symbol: V_T
+      min: -1.0e-15
+      max: 1.0e-15
+      unit: "J"
+
+  MF-C04:
+    canonical_name: Laplace_Pressure
+    inputs:
+      - {name: sigma, min: 1.0e-4, max: 1.0, unit: "N/m", source: "surface tension food"}
+      - {name: gamma, min: 1.0e-4, max: 1.0, unit: "N/m", source: "surface tension food alias"}
+      - {name: R, min: 1.0e-9, max: 1.0e-2, unit: "m"}
+      - {name: r, min: 1.0e-9, max: 1.0e-2, unit: "m"}
+    output:
+      symbol: delta_P
+      min: 0
+      max: 1.0e+10
+      unit: "Pa"
+
+  MF-C05:
+    canonical_name: Q10_Rule
+    inputs:
+      - {name: k1, min: 1.0e-15, max: 1.0e+15, unit: "rate"}
+      - {name: k2, min: 1.0e-15, max: 1.0e+15, unit: "rate"}
+      - {name: T1, min: -100, max: 200, unit: "°C"}
+      - {name: T2, min: -100, max: 200, unit: "°C"}
+    output:
+      symbol: Q10
+      min: 0
+      max: 1.0e+6
+      unit: "dimensionless"
