@@ -186,7 +186,7 @@ test_atoms:
         display_name_zh: "浓口酱油"
         display_name_en: koikuchi soy sauce
         aliases: [soy sauce]
-        scientific_name: "Glycine max / Triticum aestivum (fermented)"
+        scientific_name: "Glycine max / Triticum aestivum"  # architect 046b §1: §9.3 sci 必保留生物源，去 (fermented) suffix
         form_type: processed
         value_kind: specific_instance
         tree_status: active
@@ -218,7 +218,7 @@ test_atoms:
         display_name_zh: "蚝油"
         display_name_en: oyster sauce
         aliases: []
-        scientific_name: "Crassostrea spp. extract / sauce"
+        scientific_name: "Crassostrea spp."  # architect 046b §1: §9.3 sci 必保留生物源，去 extract/sauce
         form_type: processed
         value_kind: specific_instance
         tree_status: active
@@ -247,7 +247,7 @@ test_atoms:
         display_name_zh: "米酒"
         display_name_en: rice wine
         aliases: [mijiu]
-        scientific_name: "Oryza sativa (fermented)"
+        scientific_name: "Oryza sativa"  # architect 046b §1: §9.3 sci 必保留生物源，去 (fermented) suffix
         form_type: processed
         value_kind: specific_instance
         tree_status: active
@@ -327,6 +327,8 @@ test_atoms:
         has_culinary_role: []
       confidence_overall: ">=0.70"
       issue_codes: [zh_sci_mismatch, cuisine_deep_taxon_mismatch]
+      # architect 046b §1: chimera_node 是 046 STEP 11 引入的 informational code（不影响 verdict）
+      issue_codes_acceptable_extra: ["chimera_node", "evidence_split_required"]
       evidence_split_candidates:
         - target_canonical_id: bombay_duck
           data_kind: cuisine_deep_cantonese
@@ -434,6 +436,8 @@ test_atoms:
             process_type: cured
       confidence_overall: ">=0.80"
       issue_codes: []
+      # architect 046b §1: scientific_name_corrected_to_taxon 是 046 STEP 9.3 修复 info code
+      issue_codes_acceptable_extra: ["scientific_name_corrected_to_taxon"]
       evidence_split_candidates: []
       needs_human_review: false
   - atom_id: dried_shrimp

@@ -20,7 +20,7 @@ Same-scientific_name siblings (if any, for cluster consistency check):
 ```
 
 Target schema reference (key fields):
-- form_type ∈ {species, variety, part, processed, composite}
+- form_type ∈ {species, variety, part, processed, composite, ambiguous}
 - value_kind ∈ {specific_instance, representative_average, placeholder}
 - tree_status ∈ {active, identity_conflict, needs_review, excluded, alias_redirect}
 - exclusion_reason ∈ {noise, brand, abstract, chemical, babyfood, data_incomplete, duplicate, other}  (only when tree_status=excluded)
@@ -38,11 +38,29 @@ STEP 0 — HARD-PRUNE PRECHECK (RUN FIRST, BEFORE all other steps)
 
 Check if this atom should be EXCLUDED (skip distillation, set tree_status=excluded with exclusion_reason). Cases:
 
-**0.1 Chemical monomer** (set exclusion_reason=`chemical`):
-  - scientific_name contains chemical-formula indicators: `acid` / `amine` / `oside` / `monomer` / `-ic acid` / `-ide` / `(S)-`/`(R)-` IUPAC stereochemistry / pure organic chemistry name
-  - composition has protein_pct=100 OR water_pct≈0 with extreme single-component
-  - Examples: proline, lysine, glucose, sodium chloride
-  - Action: tree_status=excluded, exclusion_reason=chemical, do NOT propagate cuisine_deep
+**0.1 Chemical monomer** (set exclusion_reason=`chemical`) — **STRICT MUST RULE**:
+  This is a HARD-PRUNE rule. If ANY of the conditions below match → tree_status=excluded MANDATORILY. Do NOT continue to STEP 1+.
+  
+  **MUST trigger if**:
+  - canonical_id ∈ KNOWN_AMINO_ACIDS = {proline, lysine, glycine, alanine, valine, leucine, isoleucine, threonine, serine, cysteine, methionine, phenylalanine, tyrosine, tryptophan, aspartic_acid, glutamic_acid, asparagine, glutamine, arginine, histidine, hydroxyproline, taurine, ornithine, citrulline}
+  - canonical_id ∈ KNOWN_SUGARS = {glucose, fructose, sucrose, lactose, maltose, galactose, ribose, xylose, mannose}
+  - canonical_id ∈ KNOWN_PURE_CHEMICALS = {sodium_chloride, potassium_chloride, calcium_carbonate, citric_acid, acetic_acid, lactic_acid, malic_acid, tartaric_acid, ascorbic_acid}
+  - scientific_name contains: `(S)-` / `(R)-` IUPAC stereochemistry prefix
+  - scientific_name contains pure-chemistry suffixes: `-oside` / `-amine` / `monomer` / standalone `-ic acid` / standalone `-ide`
+  - composition.protein_pct ≥ 95 with water_pct < 5 AND no biological organism context
+  
+  **Action when triggered**: 
+  - target_node.tree_status = "excluded"
+  - target_node.exclusion_reason = "chemical"
+  - target_node.form_type = "processed" (technical compound, NOT composite or species)
+  - SKIP all of: derived_from / has_culinary_role / cuisine_deep extraction
+  - issue_codes = ["chemical_monomer_excluded"]
+  - DO NOT infer scientific_name into a biological organism
+  
+  **Examples** (CORRECT, MUST FOLLOW):
+  - canonical_id="proline" → tree_status=excluded, exclusion_reason=chemical, form_type=processed (NOT active, NOT species)
+  - canonical_id="lysine" → tree_status=excluded
+  - canonical_id="glucose" → tree_status=excluded
 
 **0.2 Babyfood** (set exclusion_reason=`babyfood`):
   - canonical_id starts with `babyfood_`
@@ -56,10 +74,30 @@ Check if this atom should be EXCLUDED (skip distillation, set tree_status=exclud
   - canonical_id is single generic noun: `paste`, `sauce`, `herb`, `broth`, `condiment`, `seasoning`, `oil`, `flour`, `salt`, `fat`, `spice` (when not specific)
   - Heuristic: composition values look like generic averages (e.g., 40/5/10/30 round numbers)
 
-**0.5 Data incomplete** (set exclusion_reason=`data_incomplete`):
-  - Both display_name.zh AND display_name.en empty/null
-  - OR scientific_name is null AND no useful biological signal anywhere
-  - Examples: green_mussel (raw atom has display_name fields all empty)
+**0.5 Data incomplete** (set exclusion_reason=`data_incomplete`) — **STRICT MUST RULE**:
+  This is a HARD-PRUNE rule. If conditions met → tree_status=excluded MANDATORILY. **DO NOT INFER from secondary fields.**
+  
+  **MUST trigger if** (raw atom):
+  - display_name.zh IS null/empty/whitespace AND display_name.en IS null/empty/whitespace
+  - OR scientific_name IS null AND raw atom contains no biological taxonomy/organism reference in primary fields
+  
+  **CRITICAL — DO NOT INFER**:
+  - You are FORBIDDEN to populate scientific_name by inferring from `ingredient` / `name` / `notes` / free-text fields when display_name.zh AND display_name.en are both empty
+  - You are FORBIDDEN to set tree_status=active when raw atom is data_incomplete
+  - You may NOT use canonical_id alone as evidence (canonical_id is a slug, not display data)
+  
+  **Action when triggered**:
+  - target_node.tree_status = "excluded"
+  - target_node.exclusion_reason = "data_incomplete"
+  - target_node.scientific_name = null (DO NOT fill)
+  - target_node.form_type = (best guess from canonical_id, or "species" placeholder)
+  - SKIP all edge_candidates (empty)
+  - issue_codes = ["data_incomplete_excluded"]
+  
+  **Examples** (CORRECT):
+  - canonical_id="green_mussel" with display_name.zh=null + display_name.en=null + scientific_name=null
+    → tree_status=excluded, exclusion_reason=data_incomplete, scientific_name=null
+    → DO NOT infer "Perna viridis" (FORBIDDEN — that's LLM hallucination from canonical_id slug)
 
 **0.6 Time period / non-ingredient** (set exclusion_reason=`noise`):
   - canonical_id matches `*_century` / `*_era`
@@ -173,6 +211,71 @@ STEP 11 — TREE_STATUS DECISION TABLE (refined)
 | Composition implausible (after tolerance) | needs_review | null | [composition_implausible] |
 | All clean | active | null | [] or empty |
 
+================================================================
+STEP 12 — ISSUE_CODES STRICT ENUM (NEW R2)
+================================================================
+
+**12.1 issue_codes MUST use canonical names from this enum** (no synonyms, no creative variations):
+
+| Canonical name | Trigger | Severity |
+|---|---|---|
+| `chemical_monomer_excluded` | Step 0.1 hit | hard |
+| `babyfood_excluded` | Step 0.2 hit | hard |
+| `brand_excluded` | Step 0.3 hit | hard |
+| `abstract_excluded` | Step 0.4 hit | hard |
+| `data_incomplete_excluded` | Step 0.5 hit | hard |
+| `noise_excluded` | Step 0.6 hit | hard |
+| `suspect` | Step 0.7 (compound dish) | review |
+| `zh_sci_mismatch` | display_name.zh ≠ scientific_name species | identity |
+| `cuisine_deep_taxon_mismatch` | cuisine_deep dishes belong to different taxon | identity |
+| `same_sci_cluster_outlier` | atom dramatically differs from siblings | review |
+| `composition_implausible` | sum out of range AND not in tolerance categories | data |
+| `canonical_id_ambiguity` | canonical_id maps to multiple distinct species/forms | identity |
+| `chimera_node` | identity_conflict requiring evidence_split | identity |
+| `evidence_split_required` | data should split into multiple canonical_ids | identity |
+| `scientific_name_corrected_to_taxon` | sci changed from descriptive phrase → biological taxon (Step 9.3) | info |
+| `malformed_cuisine_deep_nesting_corrected` | cuisine_deep had nesting bug, repaired | info |
+| `composition_sum_below_90_due_to_ethanol` | alcoholic beverage composition tolerance | info |
+
+**12.2 FORBIDDEN naming variations** (do NOT use):
+  - `ambiguous_canonical_id` (use `canonical_id_ambiguity`)
+  - `chemical_excluded` (use `chemical_monomer_excluded`)
+  - `data_missing` / `incomplete_data` (use `data_incomplete_excluded`)
+  - `taxon_mismatch` (use `zh_sci_mismatch` or `cuisine_deep_taxon_mismatch`)
+  - Free-form descriptions
+
+**12.3 Multi-issue ordering**: hard severity FIRST, then identity, then review/data/info.
+
+================================================================
+STEP 13 — FORM_TYPE AMBIGUOUS TRIGGER (NEW R2, fixes black_bean)
+================================================================
+
+**13.1 form_type=ambiguous when** (NOT species, NOT processed):
+  - canonical_id maps to MULTIPLE distinct biological species per common usage
+    - Examples: black_bean (Phaseolus vulgaris vs Glycine max [豆豉]), white_pomfret (multiple Pampus species), pepper (Piper nigrum vs Capsicum spp.)
+  - canonical_id is a Chinese cooking term ambiguous between fresh ingredient and processed form
+  - Compatible with tree_status=needs_review
+
+**13.2 When form_type=ambiguous**:
+  - target_node.scientific_name = pick MOST LIKELY species OR list both with `/`
+  - target_node.value_kind = "representative_average"
+  - target_node.tree_status = "needs_review"
+  - issue_codes MUST include `canonical_id_ambiguity`
+  - evidence_split_candidates SHOULD list possible split targets
+
+**13.3 form_type acceptable values** (full enum, no extension):
+  - `species` (clean species or single-species variety placeholder)
+  - `variety` (sub-species like bresse_chicken)
+  - `part` (chicken_skin, pork_belly)
+  - `processed` (sauce, jerky, dried_*, *_oil — see Step 9)
+  - `composite` (recipe-level dish — see Step 9.2)
+  - `ambiguous` (Step 13.1 trigger)
+  - **NEVER use anything else** ("category" / "general" / "type" are FORBIDDEN — those are IS_A.kind concerns, not form_type)
+
+**13.4 Examples**:
+  - black_bean: form_type=ambiguous, sci="Phaseolus vulgaris", issue_codes=["canonical_id_ambiguity"], evidence_split_candidates=[{target_canonical_id: "fermented_black_bean", data_kind: "alternative_meaning"}]
+
+================================================================
 ================================================================
 OUTPUT (strict JSON, no preamble)
 ================================================================
