@@ -3,10 +3,11 @@
 # 更新: 2026-05-02
 # 维护者: repo-curator agent
 
-version: "1.6"
+version: "1.7"
 status: "draft"  # draft → reviewed → locked
 last_updated: "2026-05-01"
 changelog:
+  - "1.7 (2026-05-01): PR #28 合并 — P1-21b Hypothesis property-based tests，新增 _hypothesis_helpers.py + 46 Hypothesis tests (15 MF solvers: T/M/R/C/K 家族)，315 tests + 1159 subtests passing in 5.03s"
   - "1.6 (2026-05-01): PR #27 合并 — P1-21a bounds validator，新增 config/solver_bounds.yaml (28 MF 范围定义) + @validate_bounds 装饰器，36 files 改动，269 tests + 1159 subtests passing，无回归"
   - "1.5 (2026-05-01): PR #26 合并 — P1-22 统一 MF solver 返回格式，30 solvers 全部含 provenance + llm_summary，新增 26 单元测试，265 tests + 1159 subtests passing"
   - "1.4 (2026-05-01): PR #25 合并 — P1-17 28/28 MF solvers 全部实现，batch 2-end (23 solvers + 27 tests)，211 tests passing，引擎层里程碑达成"
@@ -40,7 +41,7 @@ directories:
     status: active
     owner: coder
     children:
-      solver/:    "28 MF 数值求解器（28/28 已完成，PR #20/25/26/27，269 tests + 1159 subtests passing）— T01-05 (5), K01-05 (5), M01-06 (6), R01-07 (7), C01-05 (5) + 统一 provenance/llm_summary 返回格式（P1-22）+ @validate_bounds 装饰器（P1-21a）"
+      solver/:    "28 MF 数值求解器（28/28 已完成，PR #20/25/26/27/28，315 tests + 1159 subtests passing）— T01-05 (5), K01-05 (5), M01-06 (6), R01-07 (7), C01-05 (5) + 统一 provenance/llm_summary 返回格式（P1-22）+ @validate_bounds 装饰器（P1-21a）+ Hypothesis property tests（P1-21b, 46 tests 覆盖 15 高价值 MF）"
       tools/:     "Task-oriented wrapper（estimate_heating_time 等，待建 P1-20）"
       agent/:     "LangGraph Agent（Phase 4B，待建）"
       retrieval/: "检索策略（Phase 4B，待建）"
@@ -306,6 +307,16 @@ recent_activity:
       impact: "ce-hub 新增 session-manager/quarantine/config 模块，SQLite 新表，PR #24 已合并"
 
   prs:
+    - number: 28
+      title: "feat(P1-21b): Hypothesis property-based tests for 15 high-value MF solvers (T+M+R+C+K)"
+      status: "MERGED (commit d5a0dee, 2026-05-01)"
+      branch: "feat/p1-21b-hypothesis-tests"
+      files: "engine/solver/tests/_hypothesis_helpers.py (new, 226 lines shared strategies + physics validators), 15 new test files (test_mf_{t01/t02_cp/t02_k/t03/t04/m01/m03/r02/r05/c04/k01/k02/k03/k04/k05}_hypothesis.py, 46 Hypothesis tests total), requirements.txt (+hypothesis)"
+      impact: "P1-21b 里程碑达成：Hypothesis property-based testing 覆盖 15 高价值 MF (T家族 4, M家族 2, R家族 2, C家族 1, K家族 5)，自动验证物理定律 (Arrhenius/Michaelis-Menten/D-z-F value/Gompertz/power-law/Fourier/Newton cooling)，解锁 P1-21a @validate_bounds 端到端随机输入验证"
+      review: "R1 D69 Lightweight APPROVE_WITH_NOTES (K 家族未覆盖 P2) → commit 43e65c4 补全 K01-K05 × 3 = 15 tests → R2 D69 Lightweight APPROVE"
+      test_status: "315 passed (baseline 269 + 46 Hypothesis) + 1159 subtests in 5.03s, Hypothesis-only 46 in 4.49s, CI headroom <30s"
+      note: "Hypothesis 随机输入自动覆盖 @validate_bounds decorator 路径，间接验证 P1-21a bounds enforcement 正确性。1 P2 非阻塞 ('deliberately broad output caps') defer 到 P1-21c"
+
     - number: 27
       title: "feat(P1-21a): bounds.yaml + @validate_bounds decorator (28 MF range guard)"
       status: "MERGED (commit 4713408, 2026-05-01)"
