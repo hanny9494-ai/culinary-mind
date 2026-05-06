@@ -3,10 +3,11 @@
 # 更新: 2026-05-02
 # 维护者: repo-curator agent
 
-version: "1.8"
+version: "1.9"
 status: "draft"  # draft → reviewed → locked
 last_updated: "2026-05-01"
 changelog:
+  - "1.9 (2026-05-01): PR #30 合并 — P1-17.1.1 TOOL_ID 修复，mf_t02_k/cp/rho.py solver emit 'MF-T02-K/CP/RHO' (不再 'MF-T02')，canonical_name 对齐 config schema，grep 零残留 'MF-T02[^-]'，331 tests + 1159 subtests passing，P4-08 LangGraph dispatch 解锁"
   - "1.8 (2026-05-01): PR #29 合并 — P1-17.1 config sync，mother_formulas.yaml + mf_fingerprints.json 同步 mf_t02 → mf_t02_k/cp/rho 原子拆分（3 条目替换），新增 test_mf_t02_split_consistency.py (16 schema validation tests)，331 tests + 1159 subtests passing. Follow-up: P1-17.1.1 TOOL_ID/canonical_name 修复（pre-LangGraph 阻塞项）"
   - "1.7 (2026-05-01): PR #28 合并 — P1-21b Hypothesis property-based tests，新增 _hypothesis_helpers.py + 46 Hypothesis tests (15 MF solvers: T/M/R/C/K 家族)，315 tests + 1159 subtests passing in 5.03s"
   - "1.6 (2026-05-01): PR #27 合并 — P1-21a bounds validator，新增 config/solver_bounds.yaml (28 MF 范围定义) + @validate_bounds 装饰器，36 files 改动，269 tests + 1159 subtests passing，无回归"
@@ -308,6 +309,15 @@ recent_activity:
       impact: "ce-hub 新增 session-manager/quarantine/config 模块，SQLite 新表，PR #24 已合并"
 
   prs:
+    - number: 30
+      title: "fix(P1-17.1.1): solver TOOL_ID + canonical_name match P1-17.1 schema split"
+      status: "MERGED (commit 3e1371f, 2026-05-01)"
+      branch: "feat/p1-17-1-1-tool-id-sync"
+      files: "engine/solver/mf_t02_k.py (TOOL_ID → 'MF-T02-K'), engine/solver/mf_t02_cp.py (TOOL_ID → 'MF-T02-CP'), engine/solver/mf_t02_rho.py (TOOL_ID → 'MF-T02-RHO'), engine/solver/tests/test_provenance_consistency.py (3 assertions 更新)"
+      impact: "P1-17.1.1 follow-up 完成：solver TOOL_ID/canonical_name 对齐 P1-17.1 config schema split (PR #29)，grep -r 'TOOL_ID.*MF-T02[^-]' 零残留，P4-08 LangGraph dispatch via provenance.tool_id 解锁"
+      review: "code-reviewer D69 Lightweight APPROVE"
+      test_status: "331 passed + 1159 subtests in 4.81s, 无回归"
+
     - number: 28
       title: "feat(P1-21b): Hypothesis property-based tests for 15 high-value MF solvers (T+M+R+C+K)"
       status: "MERGED (commit d5a0dee, 2026-05-01)"
