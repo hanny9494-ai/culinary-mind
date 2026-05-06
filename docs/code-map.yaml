@@ -3,10 +3,11 @@
 # 更新: 2026-05-02
 # 维护者: repo-curator agent
 
-version: "1.5"
+version: "1.6"
 status: "draft"  # draft → reviewed → locked
 last_updated: "2026-05-01"
 changelog:
+  - "1.6 (2026-05-01): PR #27 合并 — P1-21a bounds validator，新增 config/solver_bounds.yaml (28 MF 范围定义) + @validate_bounds 装饰器，36 files 改动，269 tests + 1159 subtests passing，无回归"
   - "1.5 (2026-05-01): PR #26 合并 — P1-22 统一 MF solver 返回格式，30 solvers 全部含 provenance + llm_summary，新增 26 单元测试，265 tests + 1159 subtests passing"
   - "1.4 (2026-05-01): PR #25 合并 — P1-17 28/28 MF solvers 全部实现，batch 2-end (23 solvers + 27 tests)，211 tests passing，引擎层里程碑达成"
   - "1.3 (2026-05-03): PR #24 合并 (D68 PR A - quarantine/ack/session lifecycle)，ce-hub 新增 session-manager.ts/quarantine.ts/config.ts，SQLite 新表 inbox_messages/cc_lead_sessions，PR #20/#21 测试提交闭环"
@@ -39,11 +40,11 @@ directories:
     status: active
     owner: coder
     children:
-      solver/:    "28 MF 数值求解器（28/28 已完成，PR #20/25/26，265 tests + 1159 subtests passing）— T01-05 (5), K01-05 (5), M01-06 (6), R01-07 (7), C01-05 (5) + 统一 provenance/llm_summary 返回格式（P1-22）"
+      solver/:    "28 MF 数值求解器（28/28 已完成，PR #20/25/26/27，269 tests + 1159 subtests passing）— T01-05 (5), K01-05 (5), M01-06 (6), R01-07 (7), C01-05 (5) + 统一 provenance/llm_summary 返回格式（P1-22）+ @validate_bounds 装饰器（P1-21a）"
       tools/:     "Task-oriented wrapper（estimate_heating_time 等，待建 P1-20）"
       agent/:     "LangGraph Agent（Phase 4B，待建）"
       retrieval/: "检索策略（Phase 4B，待建）"
-    note: "D65 决策：不引入 SymPy/SciPy，所有 MF 手写解析解或数值解；依赖 CoolProp/fluids/ht/pint/scipy"
+    note: "D65 决策：不引入 SymPy/SciPy，所有 MF 手写解析解或数值解；依赖 CoolProp/fluids/ht/pint/scipy. P1-21a: solver_bounds.yaml sanity envelopes + @validate_bounds decorator 入参/输出范围校验"
 
   graph/:
     purpose: "Neo4j 图谱构建/查询（Phase 1F/4A，待建）"
@@ -86,6 +87,7 @@ directories:
     children:
       books.yaml:            "书目注册表（118本）"
       mother_formulas.yaml:  "28 MF 定义"
+      solver_bounds.yaml:    "28 MF solver 输入/输出范围定义（P1-21a）"
       api.yaml:              "API 配置"
 
   docs/:
@@ -203,6 +205,7 @@ import_boundaries:
 
 sensitive_paths:
   - config/mother_formulas.yaml
+  - config/solver_bounds.yaml
   - config/books.yaml
   - config/api.yaml
   - pipeline/skills/run_skill.py
@@ -303,6 +306,16 @@ recent_activity:
       impact: "ce-hub 新增 session-manager/quarantine/config 模块，SQLite 新表，PR #24 已合并"
 
   prs:
+    - number: 27
+      title: "feat(P1-21a): bounds.yaml + @validate_bounds decorator (28 MF range guard)"
+      status: "MERGED (commit 4713408, 2026-05-01)"
+      branch: "feat/p1-21a-bounds-validator"
+      files: "config/solver_bounds.yaml (new), engine/solver/_common.py (@validate_bounds decorator), 30 solvers 接入装饰器, 3 new test files (test_validate_bounds_decorator.py/test_solver_bounds_yaml.py/test_bounds_integration.py, 32 new tests)"
+      impact: "P1-21a 里程碑达成：28 MF solver 输入/输出范围校验装饰器，sanity envelopes 定义，解锁 P4-08 LangGraph safe consumption + 生产环境 robustness"
+      review: "code-reviewer Lightweight D69 APPROVE_WITH_NOTES (1 P2 non-blocking: output caps 是 sanity envelope 设计意图, defer)"
+      test_status: "269 passed + 1159 subtests in 2.19s (baseline 237 + 32 new), 无回归"
+      note: "Branch 原 stacked 在 P1-22 之上，P1-22 squash-merge 后 rebase --onto main 清理，零冲突"
+
     - number: 26
       title: "feat(P1-22): unified MF solver return format with provenance + llm_summary"
       status: "MERGED (commit efe115d, 2026-05-01)"
