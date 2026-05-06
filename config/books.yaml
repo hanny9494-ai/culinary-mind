@@ -1509,12 +1509,13 @@
   ocr_status: pending
   ocr_tool: none
   signal_status: pending
-  skill_a_status: pending
+  skill_a_status: done
   skill_b_status: skip
   skill_c_status: skip
   skill_d_status: skip
   pipeline: ["ocr", "signal", "skill_a"]
   parameter_density: high
+  l0_count: 1178
   target_chapters: "Ch4(Heat Transfer), Ch5(Preservation), Ch7(Freezing), Ch10(Mass Transfer)"
   target_formulas: "MF_001, MF_002, MF_003, MF_006, MF_009, MF_014"
 
@@ -1531,12 +1532,13 @@
   ocr_status: pending
   ocr_tool: none
   signal_status: pending
-  skill_a_status: pending
+  skill_a_status: done
   skill_b_status: skip
   skill_c_status: skip
   skill_d_status: skip
   pipeline: ["ocr", "signal", "skill_a"]
   parameter_density: high
+  l0_count: 1681
   note: "PaddleOCR pilot已通过(79页, 表格+LaTeX正确)"
   target_chapters: "Ch7(Heat), Ch8(Kinetics), Ch9(Thermal Process), Ch12(Dehydration)"
   target_formulas: "MF_001, MF_007, MF_009, MF_015"
@@ -1551,12 +1553,13 @@
   ocr_status: pending
   ocr_tool: none
   signal_status: pending
-  skill_a_status: pending
+  skill_a_status: done
   skill_b_status: skip
   skill_c_status: skip
   skill_d_status: skip
   pipeline: ["ocr", "signal", "skill_a"]
   parameter_density: medium
+  l0_count: 1900
   target_chapters: "Ch2(Water/aw), Ch5(Proteins), Ch10(Flavors), Ch13(Dispersed Systems)"
   target_formulas: "MF_015, MF_017, MF_025, MF_032"
 
@@ -1570,12 +1573,13 @@
   ocr_status: pending
   ocr_tool: none
   signal_status: pending
-  skill_a_status: pending
+  skill_a_status: done
   skill_b_status: skip
   skill_c_status: skip
   skill_d_status: skip
   pipeline: ["ocr", "signal", "skill_a"]
   parameter_density: high
+  l0_count: 2443
   target_chapters: "Ch2(Enzymes/MM), Ch4§4.2.4(Maillard), Ch5(Aroma thresholds)"
   target_formulas: "MF_010, MF_008, MF_025"
 
@@ -1589,12 +1593,13 @@
   ocr_status: pending
   ocr_tool: none
   signal_status: pending
-  skill_a_status: pending
+  skill_a_status: done
   skill_b_status: skip
   skill_c_status: skip
   skill_d_status: skip
   pipeline: ["ocr", "signal", "skill_a"]
   parameter_density: extreme
+  l0_count: 5962
   target_chapters: "Ch1(Rheology), Ch3(Kinetics), Ch4(Phase/State), Ch6(Heating), Ch7(Freezing), Ch11(Dehydration)"
   target_formulas: "MF_020, MF_007, MF_016, MF_001, MF_015"
 
@@ -1630,12 +1635,13 @@
   ocr_status: pending
   ocr_tool: none
   signal_status: pending
-  skill_a_status: pending
+  skill_a_status: done
   skill_b_status: skip
   skill_c_status: skip
   skill_d_status: skip
   pipeline: ["ocr", "signal", "skill_a"]
   parameter_density: high
+  l0_count: 260
   note: Ch7-8对FT层有独特价值
   target_chapters: "Ch3(Physics+Texture), Ch7-8(Sensory-Physical correlation)"
   target_formulas: "MF_020, MF_045"
@@ -1650,12 +1656,13 @@
   ocr_status: pending
   ocr_tool: none
   signal_status: pending
-  skill_a_status: pending
+  skill_a_status: done
   skill_b_status: skip
   skill_c_status: skip
   skill_d_status: skip
   pipeline: ["ocr", "signal", "skill_a"]
   parameter_density: medium
+  l0_count: 2295
   target_chapters: "Ch3(Intrinsic/Extrinsic), Ch17(D/z/F thermal death)"
   target_formulas: "MF_009, MF_011"
 
@@ -1669,12 +1676,13 @@
   ocr_status: pending
   ocr_tool: none
   signal_status: pending
-  skill_a_status: pending
+  skill_a_status: done
   skill_b_status: skip
   skill_c_status: skip
   skill_d_status: skip
   pipeline: ["ocr", "signal", "skill_a"]
   parameter_density: medium
+  l0_count: 725
   note: 与Fennema/Belitz重叠度高，交叉验证源
   target_chapters: "Ch1(Water/aw tables), Ch7(Flavor thresholds)"
   target_formulas: "MF_015, MF_025"
