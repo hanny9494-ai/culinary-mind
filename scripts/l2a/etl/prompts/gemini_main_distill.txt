@@ -23,14 +23,60 @@ Target schema reference (key fields):
 - form_type ∈ {species, variety, part, processed, composite}
 - value_kind ∈ {specific_instance, representative_average, placeholder}
 - tree_status ∈ {active, identity_conflict, needs_review, excluded, alias_redirect}
+- exclusion_reason ∈ {noise, brand, abstract, chemical, babyfood, data_incomplete, duplicate, other}  (only when tree_status=excluded)
 - peak_season_codes ∈ {spring, summer, autumn, winter, year_round, varies_by_region, varies_by_species, unknown}
 - peak_months ∈ [1-12]
 - seasonality_records: list of "region|season|months|source|confidence"
 - dietary_flags ∈ {vegan, halal, kosher, gluten_free, dairy_free, nut_free, low_carb, low_sodium, raw_consumable}
 - allergens ∈ {milk, egg, fish, shellfish, tree_nut, peanut, wheat, soy, sesame}
 - For DERIVED_FROM later: process_type ∈ {dried, fermented, cured, smoked, cooked, roasted, frozen, milled, pressed, extracted, mixed, pickled, aged}
+- For IS_A later: kind ∈ {breed, origin_variant, cultivar, market_variant, sex_variant, life_stage, culinary_subtype}  (STRICT — NO "category" or other broad values)
 
-Validation tasks (perform all):
+================================================================
+STEP 0 — HARD-PRUNE PRECHECK (RUN FIRST, BEFORE all other steps)
+================================================================
+
+Check if this atom should be EXCLUDED (skip distillation, set tree_status=excluded with exclusion_reason). Cases:
+
+**0.1 Chemical monomer** (set exclusion_reason=`chemical`):
+  - scientific_name contains chemical-formula indicators: `acid` / `amine` / `oside` / `monomer` / `-ic acid` / `-ide` / `(S)-`/`(R)-` IUPAC stereochemistry / pure organic chemistry name
+  - composition has protein_pct=100 OR water_pct≈0 with extreme single-component
+  - Examples: proline, lysine, glucose, sodium chloride
+  - Action: tree_status=excluded, exclusion_reason=chemical, do NOT propagate cuisine_deep
+
+**0.2 Babyfood** (set exclusion_reason=`babyfood`):
+  - canonical_id starts with `babyfood_`
+  - Examples: babyfood_meat_chicken_junior
+
+**0.3 Brand / numeric** (set exclusion_reason=`brand`):
+  - canonical_id starts with digit (`100_grand_bar`, `5th_avenue_*`)
+  - canonical_id contains `_bar` / `_grand` / `_company` / `_corp`
+
+**0.4 Abstract category word** (set exclusion_reason=`abstract`):
+  - canonical_id is single generic noun: `paste`, `sauce`, `herb`, `broth`, `condiment`, `seasoning`, `oil`, `flour`, `salt`, `fat`, `spice` (when not specific)
+  - Heuristic: composition values look like generic averages (e.g., 40/5/10/30 round numbers)
+
+**0.5 Data incomplete** (set exclusion_reason=`data_incomplete`):
+  - Both display_name.zh AND display_name.en empty/null
+  - OR scientific_name is null AND no useful biological signal anywhere
+  - Examples: green_mussel (raw atom has display_name fields all empty)
+
+**0.6 Time period / non-ingredient** (set exclusion_reason=`noise`):
+  - canonical_id matches `*_century` / `*_era`
+  - category=`time_period`
+  - Examples: 17th_century
+
+**0.7 Compound dish suspect** (DO NOT exclude, but set tree_status=`needs_review` + add issue_code=`suspect`):
+  - canonical_id contains compound recipe indicators: `_soup_base` / `_curry` / `_stew` / `_aspic` / `_chowder` / `_quenelles` / `_relish` / `_salad`
+  - Examples: beef_brisket_soup_base
+  - Reason: ambiguous between processed component vs full dish; needs human/peer review
+
+If ANY 0.1-0.6 hits → emit minimal target_node with tree_status=excluded + appropriate exclusion_reason, SKIP edge_candidates (empty), SKIP cuisine_deep extraction. issue_codes will list only the exclusion category.
+If 0.7 hits → continue normal distillation but mark needs_review + suspect.
+
+================================================================
+VALIDATION TASKS (perform all if atom passes Hard-Prune)
+================================================================
 
 1. **zh-sci consistency check**:
    Given scientific_name, is display_name.zh a correct/common Chinese name for that species?
@@ -46,10 +92,13 @@ Validation tasks (perform all):
 3. **Same-sci cluster outlier**:
    Compare to sibling atoms (same scientific_name). If this atom's display_name / cuisine_deep / composition is dramatically different from siblings, flag `same_sci_cluster_outlier`.
 
-4. **Composition reasonableness**:
-   - Sum of water+protein+fat+carb should be 90-110%.
-   - Values should be plausible for the named species.
-   - Outside reasonable range → flag `composition_implausible`.
+4. **Composition reasonableness (with tolerance for special cases)**:
+   - Sum of water+protein+fat+carb should be 90-110% FOR FRESH WHOLE FOODS.
+   - **Tolerance exceptions** (do NOT flag composition_implausible):
+     - **Dehydrated foods** (canonical_id starts with `dried_`, ends with `_powder` / `_jerky` / `_chips`): low water + non-zero salt/ash/fiber → sum 60-100% normal
+     - **Alcoholic beverages** (canonical_id contains `_wine` / `_beer` / `_spirits` / `rice_wine`): contains ethanol/dissolved solids not in 4-component → sum 80-95% normal
+     - **Fermented condiments** (soy_sauce, fish_sauce, vinegar): high salt + water → sum may be 95-105% with salt as protein-like
+   - Outside reasonable range AND not in tolerance category → flag `composition_implausible`.
 
 5. **Peak season normalization**:
    Map raw `sourcing.peak_season` (messy values like "Year-round" / "year-round" / "September" / "varies by species") to:
@@ -58,9 +107,9 @@ Validation tasks (perform all):
    - seasonality_records (if regions specified, encode "region|season|months|source|confidence")
 
 6. **Identity classification**:
-   - form_type from canonical_id pattern + culinary context
+   - form_type from canonical_id pattern + culinary context (see STEP 9 for processed vs composite rule)
    - value_kind: specific_instance for varieties (bresse_chicken), representative_average for species nodes (chicken), placeholder for stubs
-   - tree_status: active (clean) / identity_conflict (pomfret) / needs_review (suspect) / excluded (delete)
+   - tree_status: active (clean) / identity_conflict (pomfret) / needs_review (suspect/compound) / excluded (Step 0)
 
 7. **dietary_flags + allergens inference**:
    Based on scientific_name + composition + culinary_uses, infer dietary tags and FDA allergens.
@@ -68,7 +117,66 @@ Validation tasks (perform all):
 8. **embedding_text curation**:
    Generate a 50-150 character text suitable for vector retrieval, EXCLUDING any quarantined fields. Example for silver_pomfret: "silver pomfret; Pampus argenteus; 银鲳鱼; mild delicate white fish; Cantonese steamed whole fish."
 
-Output (strict JSON, no preamble):
+================================================================
+STEP 9 — PROCESSED-FORM HARD RULES (NEW, fixes Round 0 fails)
+================================================================
+
+**9.1 form_type=processed (NOT composite) for these patterns**:
+  - canonical_id ends with: `_sauce` / `_stock` / `_broth` / `_extract` / `_consomme` / `_demiglace` / `_juice` / `_butter` / `_oil` / `_milk` / `_cream` / `_paste` / `_syrup` / `_jelly` / `_jam` / `_powder` / `_flour` / `_curd` (when biological source clear) / `_jerky` / `_vinegar`
+  - canonical_id starts with: `dried_` / `cured_` / `smoked_` / `fermented_` / `pickled_` / `roasted_` / `aged_` / `canned_` / `frozen_` / `boiled_` / `cooked_` / `steamed_` / `blanched_` / `salted_`
+  - Default: form_type=processed unless atom is clearly a multi-component finished dish
+
+**9.2 form_type=composite ONLY when**:
+  - The canonical_id describes a recipe-level dish (e.g., chicken_curry, beef_stew, ash_roasted_chicken)
+  - Multiple primary ingredients of comparable importance
+  - Atom describes serving/plating, not bulk ingredient
+
+**9.3 Processed sci preservation (CRITICAL)**:
+  - For form_type=processed nodes, scientific_name MUST be the **biological source organism** (e.g., Bos taurus, Gallus gallus domesticus, Crassostrea spp.)
+  - NEVER set scientific_name to:
+    - Descriptive phrase (e.g., "Dehydrated beef", "Salted X", "Fermented Y")
+    - "N/A" / "n/a" / null when biological source is known
+    - Process verb-noun (e.g., "Sauce espagnole" is OK if sci context, but "Smoked beef" is NOT)
+  - Process information goes into `edge_candidates.derived_from[].process_type` and `form_type=processed`, NOT into scientific_name
+  - Examples (CORRECT):
+    - beef_jerky: scientific_name="Bos taurus" + derived_from {target=beef, process_type=cured} (or dried+cured chained)
+    - oyster_sauce: scientific_name="Crassostrea spp." + derived_from {target=oyster, process_type=extracted+mixed}
+    - rice_wine: scientific_name="Oryza sativa" + derived_from {target=rice, process_type=fermented}
+
+================================================================
+STEP 10 — IS_A kind STRICT ENUM (NEW, fixes IS_A.kind=category bug)
+================================================================
+
+**10.1 edge_candidates.is_a[].kind MUST be one of**:
+  `breed` / `origin_variant` / `cultivar` / `market_variant` / `sex_variant` / `life_stage` / `culinary_subtype`
+
+**10.2 Examples**:
+  - bresse_chicken IS_A chicken {kind: origin_variant}
+  - black_bone_chicken IS_A chicken {kind: breed}
+  - capon IS_A chicken {kind: sex_variant}
+  - young_chicken IS_A chicken {kind: life_stage}
+  - russet_potato IS_A potato {kind: cultivar}
+
+**10.3 NEVER use**:
+  - "category" / "type" / "general" / "subcategory" / arbitrary words not in 10.1 enum
+
+================================================================
+STEP 11 — TREE_STATUS DECISION TABLE (refined)
+================================================================
+
+| Condition | tree_status | exclusion_reason | issue_codes |
+|---|---|---|---|
+| Step 0 hit (chemical/babyfood/brand/abstract/data_incomplete/noise) | excluded | yes | [from Step 0] |
+| pomfret-style zh-sci + cuisine_deep mismatch | identity_conflict | null | [zh_sci_mismatch, cuisine_deep_taxon_mismatch, ...] |
+| Compound dish suspect (Step 0.7) | needs_review | null | [suspect] |
+| Cluster outlier within same sci | needs_review | null | [same_sci_cluster_outlier] |
+| Composition implausible (after tolerance) | needs_review | null | [composition_implausible] |
+| All clean | active | null | [] or empty |
+
+================================================================
+OUTPUT (strict JSON, no preamble)
+================================================================
+
 ```json
 {
   "target_node": {

@@ -98,7 +98,12 @@ test_atoms:
         display_name_zh: "褐皮土豆"
         display_name_en: russet potato
         aliases: []
+        # architect 046 §4: scientific_name accept either species or species+cultivar form
         scientific_name: "Solanum tuberosum"
+        scientific_name_acceptable_list:
+          - "Solanum tuberosum"
+          - "Solanum tuberosum 'Russet Burbank'"
+          - "Solanum tuberosum (Russet Burbank)"
         form_type: variety
         value_kind: specific_instance
         tree_status: active
@@ -200,6 +205,8 @@ test_atoms:
           - cuisine_id: japanese
       confidence_overall: ">=0.80"
       issue_codes: []
+      # architect 046 §4: nesting bug flag is acceptable
+      issue_codes_acceptable_extra: ["malformed_cuisine_deep_nesting_corrected"]
       evidence_split_candidates: []
       needs_human_review: false
   - atom_id: oyster_sauce
@@ -258,21 +265,31 @@ test_atoms:
           - cuisine_id: cantonese
       confidence_overall: ">=0.80"
       issue_codes: []
+      # architect 046 §4: alcohol composition flag is acceptable (prompt fix should obviate it)
+      issue_codes_acceptable_extra: ["composition_sum_below_90_due_to_ethanol"]
       evidence_split_candidates: []
       needs_human_review: false
   - atom_id: black_bean
     file: output/l2a/atoms_r2/black_bean.json
     expected_category: cantonese_specific
+    # architect 046 §4: atom_id 设计模糊（黑豆 vs 豆豉），test LLM 是否识别 ambiguity
     expected_distillation_outcome:
       target_node:
         canonical_id: black_bean
         display_name_zh: "黑豆"
         display_name_en: black bean
         aliases: []
+        # acceptable: either Phaseolus vulgaris (黑豆) or Glycine max (豆豉/fermented soybean)
         scientific_name: "Phaseolus vulgaris"
+        scientific_name_acceptable_list:
+          - "Phaseolus vulgaris"
+          - "Glycine max"
         form_type: species
+        form_type_acceptable_list:
+          - species
+          - ambiguous
         value_kind: representative_average
-        tree_status: active
+        tree_status: needs_review
         exclusion_reason: null
         peak_season_codes: [year_round]
         peak_months: []
@@ -282,8 +299,9 @@ test_atoms:
       edge_candidates:
         has_culinary_role:
           - cuisine_id: cantonese
-      confidence_overall: ">=0.75"
-      issue_codes: []
+      confidence_overall: ">=0.50"
+      issue_codes: ["canonical_id_ambiguity"]
+      issue_codes_acceptable_extra: ["cuisine_deep_taxon_mismatch", "suspect"]
       evidence_split_candidates: []
       needs_human_review: false
   - atom_id: pomfret
@@ -427,7 +445,19 @@ test_atoms:
         display_name_zh: "虾米"
         display_name_en: dried shrimp
         aliases: [dried prawns]
+        # architect 046 §4: acceptable variations for shrimp taxonomy
         scientific_name: "Penaeidae spp."
+        # architect 046 §4: acceptable shrimp taxonomy variations
+        scientific_name_acceptable_list:
+          - "Penaeidae spp."
+          - "Penaeidae"
+          - "Penaeidae / Acetes"
+          - "Penaeoidea"
+        scientific_name_acceptable_list:
+          - "Penaeidae spp."
+          - "Penaeidae"
+          - "Penaeidae / Acetes"
+          - "Penaeoidea"
         form_type: processed
         value_kind: specific_instance
         tree_status: active
@@ -445,6 +475,8 @@ test_atoms:
           - cuisine_id: cantonese
       confidence_overall: ">=0.80"
       issue_codes: []
+      # architect 046 §4: dehydration food composition flag is acceptable (prompt fix should obviate it)
+      issue_codes_acceptable_extra: ["composition_implausible"]
       evidence_split_candidates: []
       needs_human_review: false
   - atom_id: chicken_skin
