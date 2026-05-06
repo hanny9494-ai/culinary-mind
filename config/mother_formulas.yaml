@@ -28,12 +28,11 @@
 
 - id: MF-T02
   canonical_name: Choi_Okos
-  display_name: "Choi-Okos Thermal Property Prediction"
-  equation_latex: "C_p^{mix} = \\sum_i X_i C_{p,i}(T)"
-  sympy_expression: "Xw*Cp_water + Xp*Cp_protein + Xf*Cp_fat + Xc*Cp_carb + Xa*Cp_ash"
+  display_name: "Choi-Okos Thermal Property Prediction (parent)"
+  equation_latex: "\\{C_p^{mix}, \\rho^{mix}, k^{mix}\\} = \\text{Choi-Okos}(X_i, T)"
+  sympy_expression: "Choi_Okos_family(Xi, T)"
   domain: [thermal_dynamics]
-  # parameters_needed: [Xw, Xp, Xf, Xc, Xa]   # legacy — replaced by role-split schema below
-  output_symbol: Cp_mix
+  output_symbol: "{Cp_mix, rho_mix, k_mix}"
   runtime_variables: [T]
   one_of_inputs:
     - [Xw, Xp, Xf, Xc, Xa]
@@ -41,7 +40,63 @@
   units: {Xi: "dimensionless (mass fraction)", T: "°C", Cp: "J/(kg·K)", k: "W/(m·K)", rho: "kg/m³"}
   applicable_range: {T: {min: -40, max: 150, unit: "°C"}, moisture: {min: 0, max: 1}}
   source_books: ["Singh_Heldman_Ch4", "Rao_Engineering_Ch4"]
-  notes: "Choi, Y. & Okos, M.R. (1986). Three properties: Cp (mass-weighted), rho (volume-parallel), k (volume-fraction-weighted)"
+  parent_only: true   # P1-17.1: parent entry, not directly routable. Routes go to children below.
+  children: [MF-T02-K, MF-T02-CP, MF-T02-RHO]
+  notes: "Choi, Y. & Okos, M.R. (1986). Parent entry — routable solvers are split into MF-T02-K (thermal_conductivity), MF-T02-CP (specific_heat), MF-T02-RHO (density). See engine/solver/mf_t02_{k,cp,rho}.py."
+
+- id: MF-T02-K
+  canonical_name: Choi_Okos_thermal_conductivity
+  display_name: "Choi-Okos Food Thermal Conductivity"
+  equation_latex: "k^{mix} = \\sum_i \\phi_i k_i(T)"
+  sympy_expression: "phi_w*k_water + phi_p*k_protein + phi_f*k_fat + phi_c*k_carb + phi_a*k_ash"
+  domain: [thermal_dynamics]
+  output_symbol: k_mix
+  runtime_variables: [T]
+  one_of_inputs:
+    - [Xw, Xp, Xf, Xc, Xa]
+  constants: []
+  units: {Xi: "dimensionless (mass fraction)", phi_i: "dimensionless (volume fraction, derived)", T: "°C", k: "W/(m·K)"}
+  applicable_range: {T: {min: -40, max: 150, unit: "°C"}, moisture: {min: 0, max: 1}}
+  source_books: ["Singh_Heldman_Ch4", "Rao_Engineering_Ch4"]
+  parent: MF-T02
+  solver_module: engine.solver.mf_t02_k
+  notes: "Volume-fraction-weighted (parallel-conductivity model). CoolProp pure-water reference when X_w=1."
+
+- id: MF-T02-CP
+  canonical_name: Choi_Okos_specific_heat
+  display_name: "Choi-Okos Food Specific Heat"
+  equation_latex: "C_p^{mix} = \\sum_i X_i C_{p,i}(T)"
+  sympy_expression: "Xw*Cp_water + Xp*Cp_protein + Xf*Cp_fat + Xc*Cp_carb + Xa*Cp_ash"
+  domain: [thermal_dynamics]
+  output_symbol: Cp_mix
+  runtime_variables: [T]
+  one_of_inputs:
+    - [Xw, Xp, Xf, Xc, Xa]
+  constants: []
+  units: {Xi: "dimensionless (mass fraction)", T: "°C", Cp: "J/(kg·K)"}
+  applicable_range: {T: {min: -40, max: 150, unit: "°C"}, moisture: {min: 0, max: 1}}
+  source_books: ["Singh_Heldman_Ch4", "Rao_Engineering_Ch4"]
+  parent: MF-T02
+  solver_module: engine.solver.mf_t02_cp
+  notes: "Mass-fraction-weighted. CoolProp pure-water reference when X_w=1."
+
+- id: MF-T02-RHO
+  canonical_name: Choi_Okos_density
+  display_name: "Choi-Okos Food Density"
+  equation_latex: "\\rho^{mix} = \\left(\\sum_i X_i / \\rho_i(T)\\right)^{-1}"
+  sympy_expression: "1 / (Xw/rho_water + Xp/rho_protein + Xf/rho_fat + Xc/rho_carb + Xa/rho_ash)"
+  domain: [thermal_dynamics]
+  output_symbol: rho_mix
+  runtime_variables: [T]
+  one_of_inputs:
+    - [Xw, Xp, Xf, Xc, Xa]
+  constants: []
+  units: {Xi: "dimensionless (mass fraction)", T: "°C", rho: "kg/m³"}
+  applicable_range: {T: {min: -40, max: 150, unit: "°C"}, moisture: {min: 0, max: 1}}
+  source_books: ["Singh_Heldman_Ch4", "Rao_Engineering_Ch4"]
+  parent: MF-T02
+  solver_module: engine.solver.mf_t02_rho
+  notes: "Volume-parallel (specific-volume additivity). CoolProp pure-water reference when X_w=1."
 
 - id: MF-T03
   canonical_name: Arrhenius
