@@ -49,7 +49,7 @@
   "MF-T02": {
     "id": "MF-T02",
     "canonical_name": "Choi_Okos",
-    "display_name": "Choi-Okos Thermal Property Prediction",
+    "display_name": "Choi-Okos Thermal Property Prediction (parent)",
     "domains": [
       "thermal_dynamics"
     ],
@@ -101,7 +101,187 @@
       "Singh_Heldman_Ch4",
       "Rao_Engineering_Ch4"
     ],
-    "equation_latex": "C_p^{mix} = \\sum_i X_i C_{p,i}(T)"
+    "equation_latex": "C_p^{mix} = \\sum_i X_i C_{p,i}(T)",
+    "parent_only": true,
+    "children": [
+      "MF-T02-K",
+      "MF-T02-CP",
+      "MF-T02-RHO"
+    ]
+  },
+  "MF-T02-K": {
+    "id": "MF-T02-K",
+    "canonical_name": "Choi_Okos_thermal_conductivity",
+    "display_name": "Choi-Okos Food Thermal Conductivity",
+    "domains": [
+      "thermal_dynamics"
+    ],
+    "keywords_en": [
+      "thermal conductivity",
+      "k",
+      "W/(m·K)",
+      "volume fraction",
+      "phi",
+      "Choi-Okos",
+      "food",
+      "composition",
+      "weighted",
+      "Xw",
+      "Xp",
+      "Xf",
+      "Xc",
+      "Xa",
+      "mass fraction"
+    ],
+    "keywords_zh": [
+      "导热系数",
+      "热导率",
+      "k",
+      "Choi-Okos",
+      "食品",
+      "组分",
+      "加权",
+      "水分",
+      "蛋白质",
+      "脂肪",
+      "碳水",
+      "灰分"
+    ],
+    "parameter_names": [
+      "Xw",
+      "Xp",
+      "Xf",
+      "Xc",
+      "Xa",
+      "T"
+    ],
+    "typical_statements": [
+      "k^{mix} = \\sum_i \\phi_i k_i(T)"
+    ],
+    "source_books": [
+      "Singh_Heldman_Ch4",
+      "Rao_Engineering_Ch4"
+    ],
+    "equation_latex": "k^{mix} = \\sum_i \\phi_i k_i(T)",
+    "parent": "MF-T02",
+    "solver_module": "engine.solver.mf_t02_k",
+    "output_symbol": "k_mix",
+    "output_unit": "W/(m·K)"
+  },
+  "MF-T02-CP": {
+    "id": "MF-T02-CP",
+    "canonical_name": "Choi_Okos_specific_heat",
+    "display_name": "Choi-Okos Food Specific Heat",
+    "domains": [
+      "thermal_dynamics"
+    ],
+    "keywords_en": [
+      "specific heat",
+      "Cp",
+      "J/(kg·K)",
+      "heat capacity",
+      "Choi-Okos",
+      "food",
+      "composition",
+      "weighted",
+      "Xw",
+      "Xp",
+      "Xf",
+      "Xc",
+      "Xa",
+      "mass fraction"
+    ],
+    "keywords_zh": [
+      "比热容",
+      "比热",
+      "Cp",
+      "Choi-Okos",
+      "食品",
+      "组分",
+      "加权",
+      "水分",
+      "蛋白质",
+      "脂肪",
+      "碳水",
+      "灰分"
+    ],
+    "parameter_names": [
+      "Xw",
+      "Xp",
+      "Xf",
+      "Xc",
+      "Xa",
+      "T"
+    ],
+    "typical_statements": [
+      "C_p^{mix} = \\sum_i X_i C_{p,i}(T)"
+    ],
+    "source_books": [
+      "Singh_Heldman_Ch4",
+      "Rao_Engineering_Ch4"
+    ],
+    "equation_latex": "C_p^{mix} = \\sum_i X_i C_{p,i}(T)",
+    "parent": "MF-T02",
+    "solver_module": "engine.solver.mf_t02_cp",
+    "output_symbol": "Cp_mix",
+    "output_unit": "J/(kg·K)"
+  },
+  "MF-T02-RHO": {
+    "id": "MF-T02-RHO",
+    "canonical_name": "Choi_Okos_density",
+    "display_name": "Choi-Okos Food Density",
+    "domains": [
+      "thermal_dynamics"
+    ],
+    "keywords_en": [
+      "density",
+      "rho",
+      "kg/m³",
+      "specific volume",
+      "Choi-Okos",
+      "food",
+      "composition",
+      "weighted",
+      "Xw",
+      "Xp",
+      "Xf",
+      "Xc",
+      "Xa",
+      "mass fraction"
+    ],
+    "keywords_zh": [
+      "密度",
+      "比容",
+      "Choi-Okos",
+      "食品",
+      "组分",
+      "加权",
+      "水分",
+      "蛋白质",
+      "脂肪",
+      "碳水",
+      "灰分"
+    ],
+    "parameter_names": [
+      "Xw",
+      "Xp",
+      "Xf",
+      "Xc",
+      "Xa",
+      "T"
+    ],
+    "typical_statements": [
+      "\\rho^{mix} = \\left(\\sum_i X_i / \\rho_i(T)\\right)^{-1}"
+    ],
+    "source_books": [
+      "Singh_Heldman_Ch4",
+      "Rao_Engineering_Ch4"
+    ],
+    "equation_latex": "\\rho^{mix} = \\left(\\sum_i X_i / \\rho_i(T)\\right)^{-1}",
+    "parent": "MF-T02",
+    "solver_module": "engine.solver.mf_t02_rho",
+    "output_symbol": "rho_mix",
+    "output_unit": "kg/m³"
   },
   "MF-T03": {
     "id": "MF-T03",
