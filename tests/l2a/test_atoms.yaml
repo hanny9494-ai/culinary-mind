@@ -1,0 +1,551 @@
+test_prompt_set:
+  version: "1.0-day1"
+  description: "20 atoms covering generic, variant, Cantonese-specific, identity conflict, ambiguous, processed, part, and hard-prune cases."
+test_atoms:
+  - atom_id: chicken
+    file: output/l2a/atoms_r2/chicken.json
+    expected_category: generic
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: chicken
+        display_name_zh: "鸡"
+        display_name_en: chicken
+        aliases: []
+        scientific_name: "Gallus gallus domesticus"
+        form_type: species
+        value_kind: representative_average
+        tree_status: active
+        exclusion_reason: null
+        peak_season_codes: [year_round]
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: [halal, kosher, low_carb]
+        allergens: []
+        embedding_text: "chicken; Gallus gallus domesticus; 鸡; poultry"
+      edge_candidates:
+        is_a: []
+        part_of: []
+        derived_from: []
+        has_culinary_role: []
+      confidence_overall: ">=0.85"
+      issue_codes: []
+      evidence_split_candidates: []
+      needs_human_review: false
+  - atom_id: beef_chuck
+    file: output/l2a/atoms_r2/beef_chuck.json
+    expected_category: generic
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: beef_chuck
+        display_name_zh: "牛肩肉"
+        display_name_en: beef chuck
+        aliases: []
+        scientific_name: "Bos taurus"
+        form_type: part
+        value_kind: specific_instance
+        tree_status: active
+        exclusion_reason: null
+        peak_season_codes: [year_round]
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: [halal, kosher, low_carb]
+        allergens: []
+      edge_candidates:
+        part_of:
+          - target_canonical_id: beef
+            part_role: meat
+      confidence_overall: ">=0.80"
+      issue_codes: []
+      evidence_split_candidates: []
+      needs_human_review: false
+  - atom_id: bresse_chicken
+    file: output/l2a/atoms_r2/bresse_chicken.json
+    expected_category: variant
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: bresse_chicken
+        display_name_zh: "布雷斯鸡"
+        display_name_en: Bresse chicken
+        aliases: []
+        scientific_name: "Gallus gallus domesticus (Bresse Gauloise)"
+        form_type: variety
+        value_kind: specific_instance
+        tree_status: active
+        exclusion_reason: null
+        peak_season_codes: [autumn, winter]
+        peak_months: [9, 10, 11, 12, 1, 2]
+        seasonality_records: []
+        dietary_flags: [halal, kosher, low_carb]
+        allergens: []
+      edge_candidates:
+        is_a:
+          - target_canonical_id: chicken
+            kind: origin_variant
+        has_culinary_role:
+          - cuisine_id: cantonese
+          - cuisine_id: french
+          - cuisine_id: japanese
+      confidence_overall: ">=0.95"
+      issue_codes: []
+      evidence_split_candidates: []
+      needs_human_review: false
+  - atom_id: russet_potato
+    file: output/l2a/atoms_r2/russet_potato.json
+    expected_category: variant
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: russet_potato
+        display_name_zh: "褐皮土豆"
+        display_name_en: russet potato
+        aliases: []
+        scientific_name: "Solanum tuberosum"
+        form_type: variety
+        value_kind: specific_instance
+        tree_status: active
+        exclusion_reason: null
+        peak_season_codes: [autumn, winter]
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: [vegan, gluten_free, halal, kosher]
+        allergens: []
+      edge_candidates:
+        is_a:
+          - target_canonical_id: potato
+            kind: cultivar
+      confidence_overall: ">=0.85"
+      issue_codes: []
+      evidence_split_candidates: []
+      needs_human_review: false
+  - atom_id: black_bone_chicken
+    file: output/l2a/atoms_r2/black_bone_chicken.json
+    expected_category: variant
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: black_bone_chicken
+        display_name_zh: "乌骨鸡"
+        display_name_en: black-bone chicken
+        aliases: [silkie chicken]
+        scientific_name: "Gallus gallus domesticus"
+        form_type: variety
+        value_kind: specific_instance
+        tree_status: active
+        exclusion_reason: null
+        peak_season_codes: [year_round]
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: [halal, kosher, low_carb]
+        allergens: []
+      edge_candidates:
+        is_a:
+          - target_canonical_id: chicken
+            kind: breed
+        has_culinary_role:
+          - cuisine_id: cantonese
+      confidence_overall: ">=0.85"
+      issue_codes: []
+      evidence_split_candidates: []
+      needs_human_review: false
+  - atom_id: capon
+    file: output/l2a/atoms_r2/capon.json
+    expected_category: variant
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: capon
+        display_name_zh: "阉鸡"
+        display_name_en: capon
+        aliases: []
+        scientific_name: "Gallus gallus domesticus"
+        form_type: variety
+        value_kind: specific_instance
+        tree_status: active
+        exclusion_reason: null
+        peak_season_codes: [winter]
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: [halal, kosher, low_carb]
+        allergens: []
+      edge_candidates:
+        is_a:
+          - target_canonical_id: chicken
+            kind: sex_variant
+      confidence_overall: ">=0.85"
+      issue_codes: []
+      evidence_split_candidates: []
+      needs_human_review: false
+  - atom_id: soy_sauce
+    file: output/l2a/atoms_r2/soy_sauce.json
+    expected_category: cantonese_specific
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: soy_sauce
+        display_name_zh: "浓口酱油"
+        display_name_en: koikuchi soy sauce
+        aliases: [soy sauce]
+        scientific_name: "Glycine max / Triticum aestivum (fermented)"
+        form_type: processed
+        value_kind: specific_instance
+        tree_status: active
+        exclusion_reason: null
+        peak_season_codes: [year_round]
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: [dairy_free]
+        allergens: [wheat, soy]
+      edge_candidates:
+        derived_from:
+          - target_canonical_id: soybean
+            process_type: fermented
+        has_culinary_role:
+          - cuisine_id: cantonese
+          - cuisine_id: japanese
+      confidence_overall: ">=0.80"
+      issue_codes: []
+      evidence_split_candidates: []
+      needs_human_review: false
+  - atom_id: oyster_sauce
+    file: output/l2a/atoms_r2/oyster_sauce.json
+    expected_category: cantonese_specific
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: oyster_sauce
+        display_name_zh: "蚝油"
+        display_name_en: oyster sauce
+        aliases: []
+        scientific_name: "Crassostrea spp. extract / sauce"
+        form_type: processed
+        value_kind: specific_instance
+        tree_status: active
+        exclusion_reason: null
+        peak_season_codes: [year_round]
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: [dairy_free]
+        allergens: [shellfish]
+      edge_candidates:
+        derived_from:
+          - target_canonical_id: oyster
+            process_type: extracted
+        has_culinary_role:
+          - cuisine_id: cantonese
+      confidence_overall: ">=0.80"
+      issue_codes: []
+      evidence_split_candidates: []
+      needs_human_review: false
+  - atom_id: rice_wine
+    file: output/l2a/atoms_r2/rice_wine.json
+    expected_category: cantonese_specific
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: rice_wine
+        display_name_zh: "米酒"
+        display_name_en: rice wine
+        aliases: [mijiu]
+        scientific_name: "Oryza sativa (fermented)"
+        form_type: processed
+        value_kind: specific_instance
+        tree_status: active
+        exclusion_reason: null
+        peak_season_codes: [year_round]
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: [vegan, dairy_free]
+        allergens: []
+      edge_candidates:
+        derived_from:
+          - target_canonical_id: rice
+            process_type: fermented
+        has_culinary_role:
+          - cuisine_id: cantonese
+      confidence_overall: ">=0.80"
+      issue_codes: []
+      evidence_split_candidates: []
+      needs_human_review: false
+  - atom_id: black_bean
+    file: output/l2a/atoms_r2/black_bean.json
+    expected_category: cantonese_specific
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: black_bean
+        display_name_zh: "黑豆"
+        display_name_en: black bean
+        aliases: []
+        scientific_name: "Phaseolus vulgaris"
+        form_type: species
+        value_kind: representative_average
+        tree_status: active
+        exclusion_reason: null
+        peak_season_codes: [year_round]
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: [vegan, gluten_free, halal, kosher]
+        allergens: []
+      edge_candidates:
+        has_culinary_role:
+          - cuisine_id: cantonese
+      confidence_overall: ">=0.75"
+      issue_codes: []
+      evidence_split_candidates: []
+      needs_human_review: false
+  - atom_id: pomfret
+    file: output/l2a/atoms_r2/pomfret.json
+    expected_category: identity_conflict
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: pomfret
+        display_name_zh: "九肚魚"
+        display_name_en: pomfret
+        aliases: []
+        scientific_name: "Pampus argenteus"
+        form_type: species
+        value_kind: representative_average
+        tree_status: identity_conflict
+        exclusion_reason: null
+        peak_season_codes: [summer, autumn]
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: [low_carb]
+        allergens: [fish]
+      edge_candidates:
+        has_culinary_role: []
+      confidence_overall: ">=0.70"
+      issue_codes: [zh_sci_mismatch, cuisine_deep_taxon_mismatch]
+      evidence_split_candidates:
+        - target_canonical_id: bombay_duck
+          data_kind: cuisine_deep_cantonese
+      needs_human_review: true
+  - atom_id: beef_brisket_soup_base
+    file: output/l2a/atoms_r2/beef_brisket_soup_base.json
+    expected_category: identity_conflict
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: beef_brisket_soup_base
+        display_name_zh: "牛胸肉汤底"
+        display_name_en: beef brisket soup stock
+        aliases: []
+        scientific_name: "Bos taurus"
+        form_type: processed
+        value_kind: specific_instance
+        tree_status: needs_review
+        exclusion_reason: null
+        peak_season_codes: [year_round]
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: [low_carb]
+        allergens: []
+      edge_candidates:
+        derived_from:
+          - target_canonical_id: beef_brisket
+            process_type: cooked
+      confidence_overall: ">=0.70"
+      issue_codes: [suspect]
+      evidence_split_candidates: []
+      needs_human_review: true
+  - atom_id: green_mussel
+    file: output/l2a/atoms_r2/green_mussel.json
+    expected_category: ambiguous
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: green_mussel
+        display_name_zh: null
+        display_name_en: null
+        aliases: []
+        scientific_name: null
+        form_type: species
+        value_kind: representative_average
+        tree_status: excluded
+        exclusion_reason: data_incomplete
+        peak_season_codes: [unknown]
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: []
+        allergens: [shellfish]
+      edge_candidates: {}
+      confidence_overall: ">=0.80"
+      issue_codes: [data_incomplete]
+      evidence_split_candidates: []
+      needs_human_review: false
+  - atom_id: chicken_stock
+    file: output/l2a/atoms_r2/chicken_stock.json
+    expected_category: process_derived
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: chicken_stock
+        display_name_zh: "鸡高汤"
+        display_name_en: chicken stock
+        aliases: []
+        scientific_name: "Gallus gallus domesticus"
+        form_type: processed
+        value_kind: specific_instance
+        tree_status: active
+        exclusion_reason: null
+        peak_season_codes: [year_round]
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: [low_carb]
+        allergens: []
+      edge_candidates:
+        derived_from:
+          - target_canonical_id: chicken
+            process_type: cooked
+      confidence_overall: ">=0.80"
+      issue_codes: []
+      evidence_split_candidates: []
+      needs_human_review: false
+  - atom_id: beef_jerky
+    file: output/l2a/atoms_r2/beef_jerky.json
+    expected_category: process_derived
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: beef_jerky
+        display_name_zh: "牛肉干"
+        display_name_en: beef jerky
+        aliases: []
+        scientific_name: "Bos taurus"
+        form_type: processed
+        value_kind: specific_instance
+        tree_status: active
+        exclusion_reason: null
+        peak_season_codes: [year_round]
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: [low_carb]
+        allergens: []
+      edge_candidates:
+        derived_from:
+          - target_canonical_id: beef
+            process_type: cured
+      confidence_overall: ">=0.80"
+      issue_codes: []
+      evidence_split_candidates: []
+      needs_human_review: false
+  - atom_id: dried_shrimp
+    file: output/l2a/atoms_r2/dried_shrimp.json
+    expected_category: process_derived
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: dried_shrimp
+        display_name_zh: "虾米"
+        display_name_en: dried shrimp
+        aliases: [dried prawns]
+        scientific_name: "Penaeidae spp."
+        form_type: processed
+        value_kind: specific_instance
+        tree_status: active
+        exclusion_reason: null
+        peak_season_codes: [year_round]
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: [low_carb]
+        allergens: [shellfish]
+      edge_candidates:
+        derived_from:
+          - target_canonical_id: shrimp
+            process_type: dried
+        has_culinary_role:
+          - cuisine_id: cantonese
+      confidence_overall: ">=0.80"
+      issue_codes: []
+      evidence_split_candidates: []
+      needs_human_review: false
+  - atom_id: chicken_skin
+    file: output/l2a/atoms_r2/chicken_skin.json
+    expected_category: part
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: chicken_skin
+        display_name_zh: "鸡皮"
+        display_name_en: chicken skin
+        aliases: []
+        scientific_name: "Gallus gallus domesticus"
+        form_type: part
+        value_kind: specific_instance
+        tree_status: active
+        exclusion_reason: null
+        peak_season_codes: [year_round]
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: [low_carb]
+        allergens: []
+      edge_candidates:
+        part_of:
+          - target_canonical_id: chicken
+            part_role: skin
+      confidence_overall: ">=0.80"
+      issue_codes: []
+      evidence_split_candidates: []
+      needs_human_review: false
+  - atom_id: pork_belly
+    file: output/l2a/atoms_r2/pork_belly.json
+    expected_category: part
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: pork_belly
+        display_name_zh: "五花肉"
+        display_name_en: pork belly
+        aliases: []
+        scientific_name: "Sus scrofa domesticus"
+        form_type: part
+        value_kind: specific_instance
+        tree_status: active
+        exclusion_reason: null
+        peak_season_codes: [year_round]
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: [low_carb]
+        allergens: []
+      edge_candidates:
+        part_of:
+          - target_canonical_id: pork
+            part_role: belly
+      confidence_overall: ">=0.80"
+      issue_codes: []
+      evidence_split_candidates: []
+      needs_human_review: false
+  - atom_id: 17th_century
+    file: output/l2a/atoms_r2/17th_century.json
+    expected_category: pollution
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: 17th_century
+        display_name_zh: "17世纪"
+        display_name_en: 17th Century
+        aliases: []
+        scientific_name: "Early Modern Culinary Era"
+        form_type: composite
+        value_kind: placeholder
+        tree_status: excluded
+        exclusion_reason: noise
+        peak_season_codes: []
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: []
+        allergens: []
+      edge_candidates: {}
+      confidence_overall: ">=0.95"
+      issue_codes: [noise]
+      evidence_split_candidates: []
+      needs_human_review: false
+  - atom_id: proline
+    file: output/l2a/atoms_r2/proline.json
+    expected_category: pollution
+    expected_distillation_outcome:
+      target_node:
+        canonical_id: proline
+        display_name_zh: "脯氨酸"
+        display_name_en: proline
+        aliases: []
+        scientific_name: "(S)-Pyrrolidine-2-carboxylic acid"
+        form_type: composite
+        value_kind: placeholder
+        tree_status: excluded
+        exclusion_reason: chemical
+        peak_season_codes: []
+        peak_months: []
+        seasonality_records: []
+        dietary_flags: []
+        allergens: []
+      edge_candidates: {}
+      confidence_overall: ">=0.95"
+      issue_codes: [chemical]
+      evidence_split_candidates: []
+      needs_human_review: false
