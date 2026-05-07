@@ -165,39 +165,152 @@ async def call_lingya_with_retries(
     raise RuntimeError("unreachable Lingya retry state")
 
 
+DEFAULT_PRICE_PER_1K_TOKENS_USD = 0.01
+ATOM_DIR = ROOT / "output" / "l2a" / "atoms_r2"
+
+
+def estimate_cost_usd(usage: dict, price_per_1k: float = DEFAULT_PRICE_PER_1K_TOKENS_USD) -> float:
+    tokens = (usage.get("prompt_tokens") or 0) + (usage.get("completion_tokens") or 0)
+    return tokens / 1000.0 * price_per_1k
+
+
+def response_content(payload: dict[str, Any]) -> str:
+    return payload["choices"][0]["message"]["content"]
+
+
+async def review_one_atom(
+    *,
+    record: dict[str, Any],
+    semaphore: asyncio.Semaphore,
+    model: str,
+    endpoint: str,
+    api_key: str,
+    prompt_template: str,
+) -> dict[str, Any]:
+    """Call GPT 5.4 to peer-review a single Gemini main_distill record."""
+    atom_id = record.get("atom_id") or "?"
+    raw_path = ATOM_DIR / f"{atom_id}.json"
+    raw_atom = json.loads(raw_path.read_text(encoding="utf-8")) if raw_path.exists() else {}
+
+    messages = render_prompt(
+        prompt_template,
+        raw_atom_json=raw_atom,
+        siblings=[],  # cluster siblings handled in Step 5; empty for canary
+        gemini_target_node=record.get("target_node", {}),
+        gemini_issues=list(record.get("issue_codes") or []),
+        gemini_conf=float(record.get("confidence_overall") or 0.0),
+    )
+    payload = await call_lingya_with_retries(
+        messages=messages,
+        semaphore=semaphore,
+        model=model,
+        endpoint=endpoint,
+        api_key=api_key,
+    )
+    content = response_content(payload)
+    try:
+        parsed = parse_peer_review_response(content)
+    except Exception as exc:
+        parsed = {
+            "agreement": "refine",
+            "corrections": {},
+            "issues_added": [],
+            "issues_removed": [],
+            "reason": f"parse_error: {exc}",
+            "final_review_status": "needs_review",
+        }
+    usage = payload.get("usage") or {}
+    return {
+        "atom_id": atom_id,
+        "gemini_confidence": float(record.get("confidence_overall") or 0.0),
+        "gemini_issues": list(record.get("issue_codes") or []),
+        "gpt_review": parsed,
+        "usage": usage,
+        "estimated_cost_usd": estimate_cost_usd(usage),
+    }
+
+
 async def run_peer_review(
     *,
     input_path: Path,
     output_path: Path,
     limit_atoms: int | None = None,
     resume: bool = False,
+    cost_cap_usd: float = 2.0,
 ) -> dict[str, Any]:
+    """Run GPT 5.4 peer_review on records that pass needs_peer_review()."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     progress_path = output_path.parent / "_progress.json"
     state = load_progress(progress_path) if resume else CheckpointState()
 
     if not input_path.exists():
-        atomic_write_json(output_path, {"results": [], "note": "input missing; Day 1 skeleton"})
-        return {"step": 4, "count": 0, "output": str(output_path), "skeleton": True}
+        atomic_write_json(output_path, {"results": [], "note": "input missing"})
+        return {"step": 4, "count": 0, "output": str(output_path)}
 
     data = json.loads(input_path.read_text(encoding="utf-8"))
     records = data.get("results", data if isinstance(data, list) else [])
-    selected = [record for record in records if needs_peer_review(record)]
+    candidates = [r for r in records if needs_peer_review(r)]
     if limit_atoms is not None:
-        selected = selected[:limit_atoms]
+        candidates = candidates[:limit_atoms]
 
-    results = []
-    for record in selected:
-        atom_id = record.get("atom_id")
-        if atom_id in state.processed_atom_ids:
-            continue
-        results.append({"atom_id": atom_id, "status": "pending_day2_peer_review"})
-        state.processed_atom_ids.add(atom_id)
-    atomic_write_json(output_path, {"results": results})
-    state.metadata["last_step"] = "peer_review"
-    state.save(progress_path)
-    await asyncio.sleep(0)
-    return {"step": 4, "count": len(results), "output": str(output_path), "skeleton": True}
+    endpoint = os.environ.get("L0_API_ENDPOINT")
+    api_key = os.environ.get("L0_API_KEY")
+    if not endpoint or not api_key:
+        raise RuntimeError("L0_API_ENDPOINT and L0_API_KEY are required for GPT peer review")
+
+    prompt_template = load_prompt_template()
+    model = os.environ.get("L2A_GPT_MODEL", DEFAULT_MODEL)
+    semaphore = asyncio.Semaphore(DEFAULT_SEMAPHORE_LIMIT)
+
+    pending = [r for r in candidates if r.get("atom_id") not in state.processed_atom_ids]
+    results: list[dict[str, Any]] = []
+    total_cost = 0.0
+
+    async def review_path(record: dict[str, Any]) -> dict[str, Any]:
+        return await review_one_atom(
+            record=record,
+            semaphore=semaphore,
+            model=model,
+            endpoint=endpoint,
+            api_key=api_key,
+            prompt_template=prompt_template,
+        )
+
+    tasks = [asyncio.create_task(review_path(r)) for r in pending]
+    for task in asyncio.as_completed(tasks):
+        out = await task
+        results.append(out)
+        total_cost += float(out.get("estimated_cost_usd") or 0.0)
+        state.processed_atom_ids.add(out["atom_id"])
+        state.metadata["last_step"] = "peer_review"
+        state.metadata["estimated_cost_usd"] = total_cost
+        state.save(progress_path)
+        if total_cost > cost_cap_usd:
+            atomic_write_json(output_path, {
+                "results": results,
+                "estimated_cost_usd": total_cost,
+                "blocked_at_cap": True,
+                "cap_usd": cost_cap_usd,
+            })
+            raise RuntimeError(
+                f"peer_review cost ${total_cost:.4f} exceeded cap ${cost_cap_usd:.2f}; "
+                "stopped per Round 2 protocol fix"
+            )
+
+    atomic_write_json(output_path, {
+        "results": results,
+        "n_total_records": len(records),
+        "n_candidates_for_review": len(candidates),
+        "n_processed_this_run": len(results),
+        "estimated_cost_usd": total_cost,
+    })
+    return {
+        "step": 4,
+        "count": len(results),
+        "output": str(output_path),
+        "estimated_cost_usd": total_cost,
+        "trigger_rate": f"{len(candidates)}/{len(records)}",
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
