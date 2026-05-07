@@ -31,6 +31,8 @@ if str(ROOT) not in sys.path:
 
 
 from scripts.l2a.etl.utils.checkpointing import CheckpointState, atomic_write_json, load_progress
+from scripts.l2a.etl.prefilter import check as prefilter_check
+from scripts.l2a.etl.post_normalizer import normalize as post_normalize
 
 
 PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "gemini_main_distill.txt"
@@ -217,6 +219,18 @@ async def distill_one_atom(
 ) -> dict[str, Any]:
     atom = json.loads(path.read_text(encoding="utf-8"))
     atom_id = atom.get("canonical_id") or path.stem
+
+    # Option D Hybrid (P1-13.1, architect 047): Python pre-filter runs
+    # BEFORE the LLM call. Hard-prune categories (amino acids / chemicals /
+    # data_incomplete / brands / time periods / babyfood) bypass the LLM
+    # entirely — saves cost AND gives 100% deterministic exclusion.
+    prefiltered = prefilter_check(atom)
+    if prefiltered is not None:
+        prefiltered.setdefault("file", str(path.relative_to(ROOT)))
+        prefiltered.setdefault("usage", {})
+        prefiltered.setdefault("estimated_cost_usd", 0.0)
+        return prefiltered
+
     messages = render_prompt(prompt_template, atom_id=atom_id, atom=atom, siblings=[])
     payload = await call_lingya_with_retries(
         messages=messages,
@@ -228,7 +242,7 @@ async def distill_one_atom(
     content = response_content(payload)
     parsed = extract_json_object(content)
     usage = payload.get("usage") or {}
-    return {
+    record = {
         "atom_id": atom_id,
         "file": str(path.relative_to(ROOT)),
         "target_node": parsed.get("target_node", {}),
@@ -241,6 +255,9 @@ async def distill_one_atom(
         "usage": usage,
         "estimated_cost_usd": estimate_cost_usd(usage),
     }
+
+    # Post-normalize: canonicalise issue_code synonyms + validate enums
+    return post_normalize(record)
 
 
 async def run_distillation(

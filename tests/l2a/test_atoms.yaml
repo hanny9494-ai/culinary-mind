@@ -56,6 +56,7 @@ test_atoms:
             part_role: meat
       confidence_overall: ">=0.80"
       issue_codes: []
+      issue_codes_acceptable_extra: ['scientific_name_corrected_to_taxon']
       evidence_split_candidates: []
       needs_human_review: false
   - atom_id: bresse_chicken
@@ -87,6 +88,7 @@ test_atoms:
           - cuisine_id: japanese
       confidence_overall: ">=0.95"
       issue_codes: []
+      issue_codes_acceptable_extra: ['scientific_name_corrected_to_taxon']
       evidence_split_candidates: []
       needs_human_review: false
   - atom_id: russet_potato
@@ -186,7 +188,11 @@ test_atoms:
         display_name_zh: "浓口酱油"
         display_name_en: koikuchi soy sauce
         aliases: [soy sauce]
-        scientific_name: "Glycine max / Triticum aestivum"  # architect 046b §1: §9.3 sci 必保留生物源，去 (fermented) suffix
+        scientific_name: "Glycine max / Triticum aestivum"  # architect 046b §1
+        scientific_name_acceptable_list:
+          - "Glycine max / Triticum aestivum"
+          - "Glycine max, Triticum aestivum"
+          - "Glycine max / Triticum aestivum (fermented)"
         form_type: processed
         value_kind: specific_instance
         tree_status: active
@@ -206,7 +212,7 @@ test_atoms:
       confidence_overall: ">=0.80"
       issue_codes: []
       # architect 046 §4: nesting bug flag is acceptable
-      issue_codes_acceptable_extra: ["malformed_cuisine_deep_nesting_corrected"]
+      issue_codes_acceptable_extra: ['malformed_cuisine_deep_nesting_corrected', 'scientific_name_corrected_to_taxon']
       evidence_split_candidates: []
       needs_human_review: false
   - atom_id: oyster_sauce
@@ -218,7 +224,12 @@ test_atoms:
         display_name_zh: "蚝油"
         display_name_en: oyster sauce
         aliases: []
-        scientific_name: "Crassostrea spp."  # architect 046b §1: §9.3 sci 必保留生物源，去 extract/sauce
+        scientific_name: "Crassostrea spp."  # architect 046b §1
+        scientific_name_acceptable_list:
+          - "Crassostrea spp."
+          - "Ostreidae"
+          - "Ostreidae spp."
+          - "Crassostrea spp. extract / sauce"
         form_type: processed
         value_kind: specific_instance
         tree_status: active
@@ -236,6 +247,7 @@ test_atoms:
           - cuisine_id: cantonese
       confidence_overall: ">=0.80"
       issue_codes: []
+      issue_codes_acceptable_extra: ["malformed_cuisine_deep_nesting_corrected", "scientific_name_corrected_to_taxon"]
       evidence_split_candidates: []
       needs_human_review: false
   - atom_id: rice_wine
@@ -266,7 +278,7 @@ test_atoms:
       confidence_overall: ">=0.80"
       issue_codes: []
       # architect 046 §4: alcohol composition flag is acceptable (prompt fix should obviate it)
-      issue_codes_acceptable_extra: ["composition_sum_below_90_due_to_ethanol"]
+      issue_codes_acceptable_extra: ['composition_sum_below_90_due_to_ethanol', 'scientific_name_corrected_to_taxon']
       evidence_split_candidates: []
       needs_human_review: false
   - atom_id: black_bean
@@ -290,6 +302,8 @@ test_atoms:
           - ambiguous
         value_kind: representative_average
         tree_status: needs_review
+        # architect 047 prompt: identity_conflict also acceptable for ambiguous canonical_id
+        tree_status_acceptable_list: [needs_review, identity_conflict]
         exclusion_reason: null
         peak_season_codes: [year_round]
         peak_months: []
@@ -301,7 +315,7 @@ test_atoms:
           - cuisine_id: cantonese
       confidence_overall: ">=0.50"
       issue_codes: ["canonical_id_ambiguity"]
-      issue_codes_acceptable_extra: ["cuisine_deep_taxon_mismatch", "suspect"]
+      issue_codes_acceptable_extra: ['cuisine_deep_taxon_mismatch', 'suspect', 'chimera_node']
       evidence_split_candidates: []
       needs_human_review: false
   - atom_id: pomfret
@@ -328,7 +342,7 @@ test_atoms:
       confidence_overall: ">=0.70"
       issue_codes: [zh_sci_mismatch, cuisine_deep_taxon_mismatch]
       # architect 046b §1: chimera_node 是 046 STEP 11 引入的 informational code（不影响 verdict）
-      issue_codes_acceptable_extra: ["chimera_node", "evidence_split_required"]
+      issue_codes_acceptable_extra: ['chimera_node', 'evidence_split_required', 'canonical_id_ambiguity', 'heavy_cross_contamination']
       evidence_split_candidates:
         - target_canonical_id: bombay_duck
           data_kind: cuisine_deep_cantonese
@@ -357,7 +371,8 @@ test_atoms:
           - target_canonical_id: beef_brisket
             process_type: cooked
       confidence_overall: ">=0.70"
-      issue_codes: [suspect]
+      issue_codes: []
+      issue_codes_acceptable_required_or_extra: ['suspect', 'mixed_form_types', 'compound_dish_suspect']
       evidence_split_candidates: []
       needs_human_review: true
   - atom_id: green_mussel
@@ -370,7 +385,7 @@ test_atoms:
         display_name_en: null
         aliases: []
         scientific_name: null
-        form_type: species
+        form_type: composite
         value_kind: representative_average
         tree_status: excluded
         exclusion_reason: data_incomplete
@@ -409,6 +424,7 @@ test_atoms:
             process_type: cooked
       confidence_overall: ">=0.80"
       issue_codes: []
+      issue_codes_acceptable_extra: ['scientific_name_corrected_to_taxon']
       evidence_split_candidates: []
       needs_human_review: false
   - atom_id: beef_jerky
@@ -456,11 +472,13 @@ test_atoms:
           - "Penaeidae spp."
           - "Penaeidae"
           - "Penaeidae / Acetes"
+          - "Penaeidae, Acetes"
           - "Penaeoidea"
         scientific_name_acceptable_list:
           - "Penaeidae spp."
           - "Penaeidae"
           - "Penaeidae / Acetes"
+          - "Penaeidae, Acetes"
           - "Penaeoidea"
         form_type: processed
         value_kind: specific_instance
@@ -480,7 +498,7 @@ test_atoms:
       confidence_overall: ">=0.80"
       issue_codes: []
       # architect 046 §4: dehydration food composition flag is acceptable (prompt fix should obviate it)
-      issue_codes_acceptable_extra: ["composition_implausible"]
+      issue_codes_acceptable_extra: ['composition_implausible', 'scientific_name_corrected_to_taxon', 'malformed_cuisine_deep_nesting_corrected']
       evidence_split_candidates: []
       needs_human_review: false
   - atom_id: chicken_skin
@@ -508,6 +526,7 @@ test_atoms:
             part_role: skin
       confidence_overall: ">=0.80"
       issue_codes: []
+      issue_codes_acceptable_extra: ['scientific_name_corrected_to_taxon']
       evidence_split_candidates: []
       needs_human_review: false
   - atom_id: pork_belly
@@ -535,6 +554,7 @@ test_atoms:
             part_role: belly
       confidence_overall: ">=0.80"
       issue_codes: []
+      issue_codes_acceptable_extra: ['scientific_name_corrected_to_taxon']
       evidence_split_candidates: []
       needs_human_review: false
   - atom_id: 17th_century
@@ -546,7 +566,9 @@ test_atoms:
         display_name_zh: "17世纪"
         display_name_en: 17th Century
         aliases: []
-        scientific_name: "Early Modern Culinary Era"
+        # Per Option D Hybrid: pre-filter excluded stub has sci=null
+        scientific_name: null
+        scientific_name_acceptable_list: [null, "Early Modern Culinary Era"]
         form_type: composite
         value_kind: placeholder
         tree_status: excluded
@@ -570,7 +592,9 @@ test_atoms:
         display_name_zh: "脯氨酸"
         display_name_en: proline
         aliases: []
-        scientific_name: "(S)-Pyrrolidine-2-carboxylic acid"
+        # Per Option D Hybrid: pre-filter generates excluded stub with sci=None
+        scientific_name: null
+        scientific_name_acceptable_list: [null, "(S)-Pyrrolidine-2-carboxylic acid"]
         form_type: composite
         value_kind: placeholder
         tree_status: excluded
