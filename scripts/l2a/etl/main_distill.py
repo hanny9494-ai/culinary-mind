@@ -42,7 +42,11 @@ DEFAULT_HARD_TIMEOUT_SECONDS = 300
 DEFAULT_RETRY_BACKOFF_SECONDS = (5, 10, 20)
 DEFAULT_SEMAPHORE_LIMIT = 8
 CHECKPOINT_EVERY = 100
-DEFAULT_PRICE_PER_1K_TOKENS_USD = 0.01
+# Real Lingya pricing (per dispatch_1778178479123, Jeff 02:00 decision):
+#   input:  ¥5.6 / 1M = $0.000778 / 1K (at ¥7.2/USD)
+#   output: ¥17 / 1M  = $0.00236 / 1K (3x input typical)
+#   blended (67:33 in:out): $0.0013 / 1K
+DEFAULT_PRICE_PER_1K_TOKENS_USD = 0.0013
 
 
 class CostCapExceeded(RuntimeError):

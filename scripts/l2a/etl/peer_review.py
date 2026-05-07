@@ -165,7 +165,11 @@ async def call_lingya_with_retries(
     raise RuntimeError("unreachable Lingya retry state")
 
 
-DEFAULT_PRICE_PER_1K_TOKENS_USD = 0.01
+# Real Lingya pricing (per dispatch_1778178479123, Jeff 02:00 decision):
+#   input:  ¥5.6 / 1M = $0.000778 / 1K (at ¥7.2/USD)
+#   output: ¥17 / 1M  = $0.00236 / 1K (3x input typical)
+#   blended (67:33 in:out): $0.0013 / 1K
+DEFAULT_PRICE_PER_1K_TOKENS_USD = 0.0013
 ATOM_DIR = ROOT / "output" / "l2a" / "atoms_r2"
 
 
