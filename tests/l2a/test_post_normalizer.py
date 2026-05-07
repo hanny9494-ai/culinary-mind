@@ -130,3 +130,33 @@ class TestPostNormalizer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestExcludedFallback(unittest.TestCase):
+    """Round 1 follow-up: fallback for excluded without exclusion_reason."""
+
+    def test_excluded_without_reason_filled(self):
+        out, repairs = validate_and_repair({
+            "target_node": {"tree_status": "excluded", "exclusion_reason": None},
+            "issue_codes": [],
+        })
+        self.assertEqual(out["target_node"]["exclusion_reason"], "other")
+        self.assertIn("auto_assigned_other_reason", out["issue_codes"])
+        self.assertTrue(any("excluded_without_reason" in r for r in repairs))
+
+    def test_excluded_with_reason_unchanged(self):
+        out, repairs = validate_and_repair({
+            "target_node": {"tree_status": "excluded", "exclusion_reason": "chemical"},
+            "issue_codes": [],
+        })
+        self.assertEqual(out["target_node"]["exclusion_reason"], "chemical")
+        self.assertNotIn("auto_assigned_other_reason", out["issue_codes"])
+
+    def test_active_without_reason_unchanged(self):
+        # tree_status='active' should NOT trigger fallback even if reason is None
+        out, _ = validate_and_repair({
+            "target_node": {"tree_status": "active", "exclusion_reason": None},
+            "issue_codes": [],
+        })
+        self.assertIsNone(out["target_node"]["exclusion_reason"])
+        self.assertNotIn("auto_assigned_other_reason", out["issue_codes"])

@@ -35,6 +35,7 @@ class ExclusionReason(str, Enum):
     BABYFOOD = "babyfood"
     ABSTRACT = "abstract"
     NOISE = "noise"  # cc-lead decision 4: 统一短名
+    OTHER = "other"  # post_normalizer fallback when LLM emits excluded without reason
 
 
 class IssueCode(str, Enum):

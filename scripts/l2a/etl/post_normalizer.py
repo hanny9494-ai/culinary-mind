@@ -95,6 +95,14 @@ def validate_and_repair(
             repairs.append(f"invalid_exclusion_reason: {er!r} -> None")
             target["exclusion_reason"] = None
 
+    # ── 3. fallback: excluded without exclusion_reason → 'other' (Round 1 follow-up)
+    if (target.get("tree_status") == TreeStatus.EXCLUDED.value
+        and target.get("exclusion_reason") is None):
+        repairs.append("excluded_without_reason: filled exclusion_reason='other'")
+        target["exclusion_reason"] = "other"
+        if "auto_assigned_other_reason" not in canonical_issues:
+            canonical_issues.append("auto_assigned_other_reason")
+
     out["target_node"] = target
     out["issue_codes"] = canonical_issues  # rewrite if any repair appended
 
