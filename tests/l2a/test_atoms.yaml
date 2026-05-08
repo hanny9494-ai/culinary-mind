@@ -399,7 +399,7 @@ test_atoms:
       edge_candidates: {}
       confidence_overall: ">=0.50"
       issue_codes: []
-      issue_codes_acceptable_extra: ["cuisine_deep_taxon_mismatch", "zh_sci_mismatch", "scientific_name_corrected_to_taxon"]
+      issue_codes_acceptable_extra: ["cuisine_deep_taxon_mismatch", "zh_sci_mismatch", "scientific_name_corrected_to_taxon", "canonical_id_ambiguity"]
       evidence_split_candidates: []
       needs_human_review: false
   - atom_id: chicken_stock
