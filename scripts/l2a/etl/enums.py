@@ -117,14 +117,25 @@ KNOWN_PURE_CHEMICALS: frozenset[str] = frozenset({
 
 # Slug regex patterns (each list item is a Python regex applied to canonical_id.lower())
 KNOWN_BRAND_PATTERNS: list[str] = [
-    r"^\d",                  # leading digit (e.g. 100_grand_bar / 7up)
-    r"_bar$",                # foo_bar (chocolate bars)
-    r"_chocolate_bar",       # foo_chocolate_bar
-    r"_grand",               # 100_grand
-    r"_brand",               # x_brand
+    # architect 048 narrow — leading digit only matches known brand formats,
+    # not generic descriptive numbers (e.g. 100_percent_chocolate).
+    r"^\d+_grand(_bar)?$",   # 100_grand, 100_grand_bar
+    r"^\d_musketeers",       # 3_musketeers, 3_musketeers_bar
+    r"^\dth_avenue",         # 5th_avenue_candy_bar
+    r"^\d+up$",              # 7up
+    r"_candy_bar$",          # foo_candy_bar (typical brand suffix)
+    r"_chocolate_bar$",      # foo_chocolate_bar
+    r"_grand$",              # _grand
+    r"_brand$",              # x_brand (anchored: avoids brandy / brandaris)
     r"^after_eight",         # after_eight (mint chocolate)
     r"_kit_kat",             # kit kat
     r"^kit_kat",
+    r"^lay'?s_",             # lay's chips
+    r"^doritos",
+    r"^pringles",
+    r"^cheez_it",
+    r"^oreo(s|_|$)",         # oreo, oreos, oreo_ (NOT oreochromis_*)
+    r"^pop_tart",
 ]
 
 KNOWN_TIME_PERIOD_PATTERNS: list[str] = [

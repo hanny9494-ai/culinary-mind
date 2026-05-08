@@ -44,6 +44,19 @@ _TIME_RE = [re.compile(p) for p in KNOWN_TIME_PERIOD_PATTERNS]
 _BABYFOOD_RE = [re.compile(p) for p in KNOWN_BABYFOOD_PATTERNS]
 _IUPAC_STEREO_RE = re.compile(r"^\(([SR])\)-")
 
+# Latin binomial slug pattern (genus_species, lowercase). Matches:
+#   abralia_multihamata, panthera_tigris
+# Will also match English compounds like chicken_skin / pork_belly, but those
+# are real foods that should pass through to the LLM anyway. Conservative.
+_BINOMIAL_RE = re.compile(r"^[a-z][a-z]+_[a-z][a-z]+(_(var|spp|subsp|f))?$")
+
+# Brand false-positive guard. Any of these substrings means "not a brand":
+#   _percent_   (descriptive, e.g. 100_percent_unsweetened_chocolate)
+_BRAND_FALSE_POS_SUBSTRINGS = ("_percent_",)
+_BRAND_FALSE_POS_EXACT = frozenset({
+    "00_flour", "0_flour", "0_grade_flour", "tipo_00_flour",
+})
+
 
 def check(raw_atom: dict[str, Any]) -> dict[str, Any] | None:
     """Apply hard-prune rules in priority order.
@@ -61,8 +74,26 @@ def check(raw_atom: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
     sci = (raw_atom.get("scientific_name") or "").strip()
+
+    # display_name may be either nested dict {zh, en} (Shape B atoms, ~80%)
+    # OR flat fields display_name_zh / display_name_en (legacy Shape).
+    # Read both paths.
     display_zh = (raw_atom.get("display_name_zh") or "").strip()
     display_en = (raw_atom.get("display_name_en") or "").strip()
+    display_dn = raw_atom.get("display_name")
+    if isinstance(display_dn, dict):
+        display_zh = display_zh or (display_dn.get("zh") or "").strip()
+        display_en = display_en or (display_dn.get("en") or "").strip()
+
+    # `ingredient` field — Shape A atoms (Latin binomial seafood, ~16%)
+    # have ingredient = canonical_id (Latin name) but no scientific_name field.
+    ingredient = (raw_atom.get("ingredient") or "").strip()
+
+    # Latin binomial canonical_id pattern — `genus_species` heuristic identity
+    # signal (e.g. abralia_multihamata, panthera_tigris). Conservative: even if
+    # this matches an English compound (chicken_skin), the worst outcome is
+    # passing the atom to the LLM, which is the safe direction.
+    is_binomial_cid = bool(_BINOMIAL_RE.match(canonical_lower))
 
     # Rule 1a: known amino acid / pure chemical canonical_id (exact match)
     if canonical_lower in KNOWN_AMINO_ACIDS or canonical_lower in KNOWN_PURE_CHEMICALS:
@@ -76,8 +107,17 @@ def check(raw_atom: dict[str, Any]) -> dict[str, Any] | None:
             raw_atom, ExclusionReason.CHEMICAL, [IssueCode.CHEMICAL]
         )
 
-    # Rule 2: data_incomplete — display_name 全空 + sci null
-    if not display_zh and not display_en and not sci:
+    # Rule 2 (architect 048 fix): data_incomplete — atom has NO identity signal
+    # in any commonly-used field.
+    # An atom is identifiable if ANY of:
+    #   - scientific_name has text
+    #   - display_name (zh|en, dict or flat) has text
+    #   - ingredient has text (Shape A seafood Latin atoms)
+    #   - canonical_id matches Latin binomial pattern (genus_species)
+    has_identity_signal = bool(
+        sci or display_zh or display_en or ingredient or is_binomial_cid
+    )
+    if not has_identity_signal:
         return _make_excluded_node(
             raw_atom, ExclusionReason.DATA_INCOMPLETE, [IssueCode.DATA_INCOMPLETE]
         )
@@ -91,12 +131,16 @@ def check(raw_atom: dict[str, Any]) -> dict[str, Any] | None:
                 raw_atom, ExclusionReason.NOISE, [IssueCode.NOISE]
             )
 
-    # Rule 4: brand
-    for pat in _BRAND_RE:
-        if pat.search(canonical_lower):
-            return _make_excluded_node(
-                raw_atom, ExclusionReason.BRAND, [IssueCode.BRAND]
-            )
+    # Rule 4: brand (with false-positive guards per architect 048)
+    if (
+        canonical_lower not in _BRAND_FALSE_POS_EXACT
+        and not any(s in canonical_lower for s in _BRAND_FALSE_POS_SUBSTRINGS)
+    ):
+        for pat in _BRAND_RE:
+            if pat.search(canonical_lower):
+                return _make_excluded_node(
+                    raw_atom, ExclusionReason.BRAND, [IssueCode.BRAND]
+                )
 
     # Rule 5: babyfood
     for pat in _BABYFOOD_RE:
