@@ -99,43 +99,45 @@ def parse_peer_review_response(content: str) -> dict[str, Any]:
     return parsed
 
 
-def _post_once(*, endpoint: str, api_key: str, model: str, messages: list[dict[str, str]]) -> dict[str, Any]:
+async def _post_async(
+    *, client: httpx.AsyncClient, endpoint: str, api_key: str,
+    model: str, messages: list[dict[str, str]],
+    hard_timeout_seconds: int = DEFAULT_HARD_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Native async POST. Replaces threading.join wrapper (Round 3 v3 fix)."""
     payload = {"model": model, "messages": messages, "temperature": 0}
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     url = endpoint.rstrip("/")
     if not url.endswith("/v1/chat/completions"):
         url += "/v1/chat/completions"
-    with httpx.Client(trust_env=False, timeout=None) as client:
-        response = client.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        return response.json()
+    response = await asyncio.wait_for(
+        client.post(url, headers=headers, json=payload),
+        timeout=hard_timeout_seconds,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
-def post_with_thread_timeout(
-    *,
-    endpoint: str,
-    api_key: str,
-    model: str,
-    messages: list[dict[str, str]],
-    hard_timeout_seconds: int = DEFAULT_HARD_TIMEOUT_SECONDS,
-) -> dict[str, Any]:
-    result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+# Backward-compat shim (raises rather than silently working with leak).
+def post_with_thread_timeout(*args, **kwargs):  # pragma: no cover - legacy
+    raise RuntimeError(
+        "post_with_thread_timeout is deprecated; use _post_async (Round 3 v3 fix)"
+    )
 
-    def worker() -> None:
-        try:
-            result_queue.put(("ok", _post_once(endpoint=endpoint, api_key=api_key, model=model, messages=messages)))
-        except BaseException as exc:  # noqa: BLE001
-            result_queue.put(("error", exc))
 
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
-    thread.join(hard_timeout_seconds)
-    if thread.is_alive():
-        raise TimeoutError(f"Lingya request exceeded {hard_timeout_seconds}s hard timeout")
-    status, payload = result_queue.get_nowait()
-    if status == "error":
-        raise payload
-    return payload
+_HTTPX_ASYNC_CLIENT: httpx.AsyncClient | None = None
+
+
+def _get_async_client() -> httpx.AsyncClient:
+    global _HTTPX_ASYNC_CLIENT
+    if _HTTPX_ASYNC_CLIENT is None or _HTTPX_ASYNC_CLIENT.is_closed:
+        _HTTPX_ASYNC_CLIENT = httpx.AsyncClient(
+            trust_env=False,
+            timeout=httpx.Timeout(DEFAULT_HARD_TIMEOUT_SECONDS),
+            limits=httpx.Limits(max_connections=DEFAULT_SEMAPHORE_LIMIT * 2,
+                                max_keepalive_connections=DEFAULT_SEMAPHORE_LIMIT),
+        )
+    return _HTTPX_ASYNC_CLIENT
 
 
 async def call_lingya_with_retries(
@@ -148,11 +150,12 @@ async def call_lingya_with_retries(
     retry_backoff_seconds: tuple[int, ...] = DEFAULT_RETRY_BACKOFF_SECONDS,
 ) -> dict[str, Any]:
     async with semaphore:
+        client = _get_async_client()
         attempts = len(retry_backoff_seconds) + 1
         for attempt in range(attempts):
             try:
-                return await asyncio.to_thread(
-                    post_with_thread_timeout,
+                return await _post_async(
+                    client=client,
                     endpoint=endpoint,
                     api_key=api_key,
                     model=model,
@@ -169,7 +172,7 @@ async def call_lingya_with_retries(
 #   input:  ¥5.6 / 1M = $0.000778 / 1K (at ¥7.2/USD)
 #   output: ¥17 / 1M  = $0.00236 / 1K (3x input typical)
 #   blended (67:33 in:out): $0.0013 / 1K
-DEFAULT_PRICE_PER_1K_TOKENS_USD = 0.0013
+DEFAULT_PRICE_PER_1K_TOKENS_USD = 0.0153  # Lingya Gemini blended USD: input $5.6/1M + output $33.6/1M
 ATOM_DIR = ROOT / "output" / "l2a" / "atoms_r2"
 
 
