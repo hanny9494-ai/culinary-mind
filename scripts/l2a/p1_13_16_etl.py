@@ -74,7 +74,7 @@ def ingest_raw_atoms(*, limit_atoms: int | None = None, output_dir: Path = STAGI
 
 def resolve_steps(step: str) -> list[int]:
     if step == "all":
-        return [1, 2, 3, 4, 5, 6, 7]
+        return [5, 6, 7]
     return [int(step)]
 
 
@@ -110,18 +110,18 @@ async def run_step(step: int, args: argparse.Namespace) -> dict:
         )
     if step == 5:
         return cluster_merge.run_cluster_merge(
-            input_path=Path(args.input) if args.input else ETL_DIR / "distilled" / "peer_review.json",
-            output_path=Path(args.output) if args.output else ETL_DIR / "distilled" / "clustered.json",
+            input_path=Path(args.input) if args.input else None,
+            output_path=Path(args.output) if args.output else ETL_DIR / "step5_merged.json",
         )
     if step == 6:
         return relationship_build.run_relationship_build(
-            input_path=Path(args.input) if args.input else ETL_DIR / "distilled" / "clustered.json",
-            output_path=Path(args.output) if args.output else ETL_DIR / "distilled" / "relationships.json",
+            input_path=Path(args.input) if args.input else ETL_DIR / "step5_merged.json",
+            output_path=Path(args.output) if args.output else ETL_DIR / "step6_edges.json",
         )
     if step == 7:
         return export_neo4j.run_export(
-            input_path=Path(args.input) if args.input else ETL_DIR / "distilled" / "relationships.json",
-            output_dir=Path(args.output) if args.output else ETL_DIR / "final",
+            input_path=Path(args.input) if args.input else ETL_DIR / "step6_edges.json",
+            output_dir=Path(args.output_dir or args.output) if (args.output_dir or args.output) else ETL_DIR / "final",
         )
     raise ValueError(f"Unsupported step: {step}")
 
@@ -136,6 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--test-atoms", default=str(ROOT / "tests" / "l2a" / "test_atoms.yaml"))
     parser.add_argument("--input", default=None)
     parser.add_argument("--output", default=None)
+    parser.add_argument("--output-dir", default=None)
     parser.add_argument("--cost-cap-usd", type=float, default=5.0)
     return parser
 

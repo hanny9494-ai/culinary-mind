@@ -1,0 +1,27 @@
+atoms_total: 21423
+tree_status_counts:
+  excluded: 2168
+  active: 12795
+  alias_redirect: 403
+  needs_review: 6057
+stubs: 5486
+nodes_exported: 24338
+edge_counts:
+  IS_A: 30141
+  PART_OF: 2476
+  DERIVED_FROM: 19696
+  HAS_CULINARY_ROLE: 0
+orphan_stubs: 5486
+isa_cycles: 0
+derived_from_cycles: 0
+hard_fail_checks:
+- canonical_id_missing
+- display_name_both_empty
+- derived_from_process_type_invalid
+- edge_target_missing
+- identity_conflict_active
+- cross_kingdom_isa
+- isa_dag_cycle
+- derived_from_dag_cycle
+hard_failures: []
+export_status: ok
