@@ -13,6 +13,18 @@ from scripts.l2a.etl.relationship_build import EDGE_TYPES, VALID_PROCESS_TYPES
 from scripts.l2a.etl.utils.checkpointing import atomic_write_json
 
 
+# P1-16 (D80 namespace isolation): label prefix to isolate L2a tree from
+# P1-33 prototype data on the same Neo4j Community single-database instance.
+# Default 'CKG_L2A_' separates 24,338 L2a-tree nodes from the 15-node P1-33 demo.
+# Set env L2A_NEO4J_LABEL_PREFIX="" to revert to plain CKG_Ingredient labels.
+import os as _os
+LABEL_PREFIX = _os.environ.get("L2A_NEO4J_LABEL_PREFIX", "CKG_L2A_")
+LABEL_INGREDIENT = f"{LABEL_PREFIX}Ingredient" if LABEL_PREFIX else "CKG_Ingredient"
+LABEL_CUISINE = f"{LABEL_PREFIX}Cuisine" if LABEL_PREFIX else "CKG_Cuisine"
+CONSTRAINT_INGREDIENT = LABEL_INGREDIENT.lower() + "_canonical_id_unique"
+CONSTRAINT_CUISINE = LABEL_CUISINE.lower() + "_cuisine_id_unique"
+
+
 HARD_FAIL_CHECKS = [
     "canonical_id_missing",
     "display_name_both_empty",
@@ -183,12 +195,20 @@ def write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str] | No
 
 
 def write_cypher_script(out_dir: Path) -> None:
-    cypher = """// Neo4j LOAD CSV seed script for ingredient tree
-CREATE CONSTRAINT ingredient_id IF NOT EXISTS FOR (i:CKG_Ingredient) REQUIRE i.canonical_id IS UNIQUE;
-CREATE CONSTRAINT cuisine_id IF NOT EXISTS FOR (c:CKG_Cuisine) REQUIRE c.cuisine_id IS UNIQUE;
+    """Generate seed_ingredient_tree.cypher. Uses LABEL_INGREDIENT / LABEL_CUISINE
+    constants so the script can target a namespaced label (CKG_L2A_Ingredient
+    by default) and avoid colliding with P1-33 prototype's CKG_Ingredient nodes
+    on the same Neo4j Community single-database instance.
+    """
+    cypher = f"""// Neo4j LOAD CSV seed script for L2a ingredient tree
+// P1-16: namespace-isolated labels ({LABEL_INGREDIENT}, {LABEL_CUISINE})
+// 与 P1-33 prototype 的 CKG_Ingredient/CKG_Cuisine 物理隔离（同 db，不同 label）
+
+CREATE CONSTRAINT {CONSTRAINT_INGREDIENT} IF NOT EXISTS FOR (i:{LABEL_INGREDIENT}) REQUIRE i.canonical_id IS UNIQUE;
+CREATE CONSTRAINT {CONSTRAINT_CUISINE} IF NOT EXISTS FOR (c:{LABEL_CUISINE}) REQUIRE c.cuisine_id IS UNIQUE;
 
 LOAD CSV WITH HEADERS FROM 'file:///nodes.csv' AS row
-CREATE (:CKG_Ingredient {
+CREATE (:{LABEL_INGREDIENT} {{
   canonical_id: row.canonical_id,
   display_name_zh: row.display_name_zh,
   display_name_en: row.display_name_en,
@@ -205,38 +225,38 @@ CREATE (:CKG_Ingredient {
   allergens_json: row.allergens,
   atom_id: row.atom_id,
   confidence_overall: row.confidence_overall
-});
+}});
 
 LOAD CSV WITH HEADERS FROM 'file:///is_a_edges.csv' AS row
-MATCH (s:CKG_Ingredient {canonical_id: row.source})
-MATCH (t:CKG_Ingredient {canonical_id: row.target})
-CREATE (s)-[:IS_A {kind: row.kind}]->(t);
+MATCH (s:{LABEL_INGREDIENT} {{canonical_id: row.source}})
+MATCH (t:{LABEL_INGREDIENT} {{canonical_id: row.target}})
+CREATE (s)-[:IS_A {{kind: row.kind}}]->(t);
 
 LOAD CSV WITH HEADERS FROM 'file:///part_of_edges.csv' AS row
-MATCH (s:CKG_Ingredient {canonical_id: row.source})
-MATCH (t:CKG_Ingredient {canonical_id: row.target})
-CREATE (s)-[:PART_OF {part_role: row.part_role}]->(t);
+MATCH (s:{LABEL_INGREDIENT} {{canonical_id: row.source}})
+MATCH (t:{LABEL_INGREDIENT} {{canonical_id: row.target}})
+CREATE (s)-[:PART_OF {{part_role: row.part_role}}]->(t);
 
 LOAD CSV WITH HEADERS FROM 'file:///derived_from_edges.csv' AS row
-MATCH (s:CKG_Ingredient {canonical_id: row.source})
-MATCH (t:CKG_Ingredient {canonical_id: row.target})
-CREATE (s)-[:DERIVED_FROM {process_type: row.process_type}]->(t);
+MATCH (s:{LABEL_INGREDIENT} {{canonical_id: row.source}})
+MATCH (t:{LABEL_INGREDIENT} {{canonical_id: row.target}})
+CREATE (s)-[:DERIVED_FROM {{process_type: row.process_type}}]->(t);
 
 LOAD CSV WITH HEADERS FROM 'file:///cuisines_seed.csv' AS row
-CREATE (:CKG_Cuisine {
+CREATE (:{LABEL_CUISINE} {{
   cuisine_id: row.cuisine_id,
   name_zh: row.name_zh,
   name_en: row.name_en,
   region: row.region
-});
+}});
 
 LOAD CSV WITH HEADERS FROM 'file:///has_culinary_role_edges.csv' AS row
-MATCH (i:CKG_Ingredient {canonical_id: row.source})
-MATCH (c:CKG_Cuisine {cuisine_id: row.target})
-CREATE (i)-[:HAS_CULINARY_ROLE {
+MATCH (i:{LABEL_INGREDIENT} {{canonical_id: row.source}})
+MATCH (c:{LABEL_CUISINE} {{cuisine_id: row.target}})
+CREATE (i)-[:HAS_CULINARY_ROLE {{
   applications: row.applications,
   tips: row.tips
-}]->(c);
+}}]->(c);
 """
     (out_dir / "seed_ingredient_tree.cypher").write_text(cypher, encoding="utf-8")
 
