@@ -3,10 +3,11 @@
 # 更新: 2026-05-02
 # 维护者: repo-curator agent
 
-version: "1.11"
+version: "1.12"
 status: "draft"  # draft → reviewed → locked
 last_updated: "2026-05-01"
 changelog:
+  - "1.12 (2026-05-01): PR #33 合并 — P2-Sa1 Skill A → MF value database (11,004 records, 41.2% coverage from 26,727 total)，新增 scripts/skill_a/etl/ 目录（3 ETL scripts: build_mf_value_database/extend_mf_schemas/rescue_backlog_to_new_fields），6 MF schema 扩展至 config/solver_bounds.yaml + config/mf_fingerprints.json，12 新 MF spec 记录至 config/new_mf_candidates_backlog.yaml (P3-P4 实施参考)，400 tests + 1195 subtests passing 无回归，已识别 outliers（MF-M01.D_eff 负值 + MF-T01.k=202 金属数值）待 P2-Sa2 抽样验证"
   - "1.11 (2026-05-01): PR #32 合并 — P1-21c-D Skill A parameter ontology mapping (cc-lead direct via Codex CLI)，新增 scripts/skill_a/ 目录（5 files, 1,254 LOC: extract_unique_pairs/codex_ontology_batch/codex_ontology_v2_cross_mf/aggregate_ontology/aggregate_ontology_v2），34.2% Skill A records mapped to 28 MF solvers (9,153/26,727)，13,080 records flagged as new MF candidates (P1-28 扩展 MF 库数据基础)，报告 raw/cc-lead/p1-21c-d-ontology-mapping-20260511.md + p1-21c-d-v2-final-report-20260511.md"
   - "1.10 (2026-05-01): PR #31 合并 — P1-13~16 L2a ingredient tree ETL 完整链路（Steps 5/6/7: cluster_merge/relationship_build/export_neo4j），CKG_L2A_* namespace 全节点隔离，21,423 atoms → 24,335 nodes + 52,313 edges 导入 Neo4j live，D74 process_type 13-value enum + D82 namespace 决策实现，GPT 5.5 + cc-lead 50-node audit 双签 APPROVE_WITH_NOTES (0 P0/P1, 6 P2 polish deferred)，69 L2a tests + 331 solver tests = 400 total passing (全绿无回归)，P4-08 LangGraph L2a 查询解锁"
   - "1.9 (2026-05-01): PR #30 合并 — P1-17.1.1 TOOL_ID 修复，mf_t02_k/cp/rho.py solver emit 'MF-T02-K/CP/RHO' (不再 'MF-T02')，canonical_name 对齐 config schema，grep 零残留 'MF-T02[^-]'，331 tests + 1159 subtests passing，P4-08 LangGraph dispatch 解锁"
@@ -90,10 +91,12 @@ directories:
     status: active
     sensitive: true
     children:
-      books.yaml:            "书目注册表（118本）"
-      mother_formulas.yaml:  "28 MF 定义"
-      solver_bounds.yaml:    "28 MF solver 输入/输出范围定义（P1-21a）"
-      api.yaml:              "API 配置"
+      books.yaml:                      "书目注册表（118本）"
+      mother_formulas.yaml:            "28 MF 定义"
+      solver_bounds.yaml:              "28 MF solver 输入/输出范围定义（P1-21a），6 MF 扩展（P2-Sa1）"
+      mf_fingerprints.json:            "28 MF 指纹配置（P1-22），6 MF 扩展（P2-Sa1）"
+      new_mf_candidates_backlog.yaml:  "12 新 MF spec backlog（P2-Sa1，P3-P4 待实施）"
+      api.yaml:                        "API 配置"
 
   docs/:
     purpose: "技术文档（git 管理）"
@@ -112,7 +115,7 @@ directories:
       orchestrator.py: "蒸馏编排器"
       y_s1/:           "Neo4j 导入（应迁移到 graph/import/）"
       l2a/:            "L2a ingredient tree ETL 完整链路（P1-13~16，PR #31）— Step 5 cluster_merge / Step 6 relationship_build / Step 7 export_neo4j，CKG_L2A_* namespace，24,335 nodes + 52,313 edges"
-      skill_a/:        "Skill A parameter ontology mapping（P1-21c-D，PR #32）— 5 scripts: extract_unique_pairs/codex_ontology_batch/codex_ontology_v2_cross_mf/aggregate_ontology/aggregate_ontology_v2，34.2% mapped to 28 MF solvers，13,080 new MF candidates"
+      skill_a/:        "Skill A 二期数据处理（P1-21c-D/P2-Sa1）— ontology mapping（P1-21c-D，PR #32，5 scripts，34.2% mapped to 28 MF solvers，13,080 new MF candidates）+ etl/（P2-Sa1，PR #33，3 ETL scripts: build_mf_value_database/extend_mf_schemas/rescue_backlog_to_new_fields，11,004 records 41.2% coverage）"
 
   # ── 数据（不入 git） ──
   output/:
