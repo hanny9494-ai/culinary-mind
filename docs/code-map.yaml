@@ -3,10 +3,11 @@
 # 更新: 2026-05-02
 # 维护者: repo-curator agent
 
-version: "1.15"
+version: "1.16"
 status: "draft"  # draft → reviewed → locked
 last_updated: "2026-05-01"
 changelog:
+  - "1.16 (2026-05-01): PR #37 合并 — P4-case-studies 4 food scenarios 跨域验证（Yogurt Fermentation/Microwave Reheating/Apple Cold Storage/Tomato Drying），13 unique MFs chained 跨 thermal/kinetic/mass-transfer/dielectric 域，所有场景 order-of-magnitude 匹配文献参考值，新增 scripts/skill_a/benchmark/case_studies_batch.py (240 LOC)，报告 raw/cc-lead/p4-case-studies-batch-20260511.md，里程碑：Layer 3 推理链跨域验证完成，P4-Be2-lite (beef) + 本 PR (4 scenarios) = 5 real food scenarios validated，P4-08 LangGraph 接入准备充分"
   - "1.15 (2026-05-01): PR #36 合并 — P4-Be2-lite MF benchmark + beef boiling end-to-end case study，2,220 tests / 1,359 passed (61.2% global pass rate)，所有 40 MF solvers operationally sound，beef boiling 6-MF chain validated (MF-T02-K/CP/RHO → MF-T01 → MF-T06 → MF-T03 → MF-K04 → MF-K06)，Layer 3 推理引擎首次端到端验证通过，新增 scripts/skill_a/benchmark/mf_real_data_benchmark.py + case_study_beef_boiling.py (~320 LOC)，报告 raw/cc-lead/p4-be2-lite-benchmark-and-case-study-20260511.md，里程碑：P4-Be2-lite complete, P4-08 LangGraph 正式接入基础验证完成"
   - "1.14 (2026-05-01): PR #35 合并 — P3-Tier2-3 8 new MF solvers (M07/M08/T08/K07/T09/M09/M11/M10)，engine/solver 新增 8 solvers (solubility/gas_permeability/ohmic_heating/binding_kinetics/respiration_rate/osmotic_dehydration/supercritical_extraction/membrane_transport)，32 → 40 MF solvers，config 同步 solver_bounds + mf_fingerprints + mother_formulas，35 新单元测试 (428 → 463 tests, 1291 → 1483 subtests passing)，里程碑：P1-21c-D 12 new MF candidates backlog 全部实施完成 (Tier 1 4个 + Tier 2-3 8个)，新增 scripts/skill_a/etl/add_p3_tier2_tier3_mf_schemas.py"
   - "1.13 (2026-05-01): PR #34 合并 — P3-Tier1 4 new MF solvers (T06/K06/T07/T10) + P2-Sa2 outlier cleaning，engine/solver 新增 mf_t06/k06/t07/t10.py (protein denaturation/hurdle tech/microwave dielectric/crystallization kinetics)，28 → 32 MF solvers，config 同步 solver_bounds + mf_fingerprints + mother_formulas，28 新单元测试 (428 tests total passing)，P2-Sa2 outlier 清除 11,004 → 10,462 production-ready records (-542 outliers: MF-M01.D_eff 负值 + MF-T01.k=202 金属数值等)，新增 scripts/skill_a/etl/add_p3_tier1_mf_schemas.py + p2_sa2_outlier_cleaning.py"
@@ -118,7 +119,7 @@ directories:
       orchestrator.py: "蒸馏编排器"
       y_s1/:           "Neo4j 导入（应迁移到 graph/import/）"
       l2a/:            "L2a ingredient tree ETL 完整链路（P1-13~16，PR #31）— Step 5 cluster_merge / Step 6 relationship_build / Step 7 export_neo4j，CKG_L2A_* namespace，24,335 nodes + 52,313 edges"
-      skill_a/:        "Skill A 二期数据处理（P1-21c-D/P2-Sa1/P3-Tier1/P4-Be2-lite）— ontology mapping（P1-21c-D，PR #32，5 scripts，34.2% mapped to 28 MF solvers，13,080 new MF candidates）+ etl/（P2-Sa1，PR #33，3 ETL scripts: build_mf_value_database/extend_mf_schemas/rescue_backlog_to_new_fields，11,004 records 41.2% coverage）+ etl/（P3-Tier1，PR #34，2 ETL scripts: add_p3_tier1_mf_schemas + p2_sa2_outlier_cleaning，10,462 production-ready records）+ benchmark/（P4-Be2-lite，PR #36，2 scripts: mf_real_data_benchmark + case_study_beef_boiling，2,220 tests / 1,359 passed 61.2% pass rate + beef boiling 6-MF end-to-end chain）"
+      skill_a/:        "Skill A 二期数据处理（P1-21c-D/P2-Sa1/P3-Tier1/P4-Be2-lite/P4-case-studies）— ontology mapping（P1-21c-D，PR #32，5 scripts，34.2% mapped to 28 MF solvers，13,080 new MF candidates）+ etl/（P2-Sa1，PR #33，3 ETL scripts: build_mf_value_database/extend_mf_schemas/rescue_backlog_to_new_fields，11,004 records 41.2% coverage）+ etl/（P3-Tier1，PR #34，2 ETL scripts: add_p3_tier1_mf_schemas + p2_sa2_outlier_cleaning，10,462 production-ready records）+ benchmark/（P4-Be2-lite，PR #36，2 scripts: mf_real_data_benchmark + case_study_beef_boiling，2,220 tests / 1,359 passed 61.2% pass rate + beef boiling 6-MF end-to-end chain）+ benchmark/（P4-case-studies，PR #37，case_studies_batch.py，4 food scenarios 跨 thermal/kinetic/mass-transfer/dielectric 域，13 unique MFs chained，Layer 3 推理链跨域验证完成）"
 
   # ── 数据（不入 git） ──
   output/:
@@ -326,6 +327,15 @@ recent_activity:
       impact: "ce-hub 新增 session-manager/quarantine/config 模块，SQLite 新表，PR #24 已合并"
 
   prs:
+    - number: 37
+      title: "feat(P4-case-studies): 4 food scenarios validate Layer 3 reasoning chain"
+      status: "MERGED (commit b4a34c8, 2026-05-01)"
+      branch: "feat/p4-case-studies-batch"
+      files: "scripts/skill_a/benchmark/case_studies_batch.py (new, 240 LOC), raw/cc-lead/p4-case-studies-batch-20260511.md"
+      impact: "P4-case-studies 里程碑完成：4 food scenarios 跨域验证（Yogurt Fermentation/Microwave Reheating/Apple Cold Storage/Tomato Drying），13 unique MFs chained 跨 thermal/kinetic/mass-transfer/dielectric 域，所有场景 order-of-magnitude 匹配文献参考值，Layer 3 推理链跨域验证完成，P4-Be2-lite (beef) + 本 PR (4 scenarios) = 5 real food scenarios validated，P4-08 LangGraph 接入准备充分"
+      review: "N/A (scripts + report only, no CI impact)"
+      test_status: "4 scenarios validated, 13 unique MFs chained"
+
     - number: 36
       title: "feat(P4-Be2-lite): MF real-data benchmark + beef boiling case study"
       status: "MERGED (commit 446a4d4, 2026-05-01)"
