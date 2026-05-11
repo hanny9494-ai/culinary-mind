@@ -658,3 +658,347 @@ solvers:
       min: 0.0
       max: 1.0
       unit: dimensionless
+  MF-M07:
+    canonical_name: Solubility_Partition
+    inputs:
+      - name: logP
+        min: -5.0
+        max: 10.0
+        unit: dimensionless
+        source: P3 Tier 2
+      - name: log_p
+        min: -5.0
+        max: 10.0
+        unit: dimensionless
+        source: P3 Tier 2 alias
+      - name: S_water
+        min: 1.0e-12
+        max: 100.0
+        unit: mol/L
+        source: P3 Tier 2
+      - name: T_C
+        min: 0.0
+        max: 100.0
+        unit: °C
+        source: P3 Tier 2
+      - name: T_c
+        min: 0.0
+        max: 100.0
+        unit: °C
+        source: P3 Tier 2 alias
+    output:
+      symbol: K_partition
+      min: 1.0e-05
+      max: 10000000000.0
+      unit: dimensionless
+  MF-M08:
+    canonical_name: Gas_Permeability
+    inputs:
+      - name: P_O2
+        min: 1.0e-05
+        max: 10000.0
+        unit: cm³·mil/(m²·day·atm)
+        source: P3 Tier 2
+      - name: P_CO2
+        min: 1.0e-05
+        max: 50000.0
+        unit: cm³·mil/(m²·day·atm)
+        source: P3 Tier 2
+      - name: permeability
+        min: 1.0e-05
+        max: 50000.0
+        unit: input units
+        source: P3 Tier 2 generic
+      - name: thickness
+        min: 1.0e-06
+        max: 0.01
+        unit: m
+        source: P3 Tier 2
+      - name: delta_p
+        min: 0.0
+        max: 100.0
+        unit: atm
+        source: P3 Tier 2
+      - name: T_C
+        min: -30.0
+        max: 60.0
+        unit: °C
+        source: P3 Tier 2
+      - name: RH
+        min: 0.0
+        max: 100.0
+        unit: '%'
+        source: P3 Tier 2
+    output:
+      symbol: Q_perm
+      min: 0.0
+      max: 10000000000.0
+      unit: permeability·atm/m
+  MF-T08:
+    canonical_name: Ohmic_Heating
+    inputs:
+      - name: sigma_25
+        min: 0.001
+        max: 10.0
+        unit: S/m
+        source: P3 Tier 2
+      - name: sigma_T
+        min: 0.001
+        max: 10.0
+        unit: S/m
+        source: P3 Tier 2 alias
+      - name: sigma
+        min: 0.001
+        max: 10.0
+        unit: S/m
+        source: P3 Tier 2 alias
+      - name: alpha
+        min: -0.1
+        max: 0.5
+        unit: 1/°C
+        source: P3 Tier 2
+      - name: E_field
+        min: 0.0
+        max: 10000.0
+        unit: V/m
+        source: P3 Tier 2
+      - name: E
+        min: 0.0
+        max: 10000.0
+        unit: V/m
+        source: P3 Tier 2 alias
+      - name: T_C
+        min: 0.0
+        max: 150.0
+        unit: °C
+        source: P3 Tier 2
+      - name: T_c
+        min: 0.0
+        max: 150.0
+        unit: °C
+        source: P3 Tier 2 alias
+    output:
+      symbol: Q_dot
+      min: 0.0
+      max: 1000000000.0
+      unit: W/m³
+  MF-K07:
+    canonical_name: Binding_Equilibrium
+    inputs:
+      - name: K_a
+        min: 1.0
+        max: 1000000000.0
+        unit: L/mol
+        source: P3 Tier 2
+      - name: Ka
+        min: 1.0
+        max: 1000000000.0
+        unit: L/mol
+        source: P3 Tier 2 alias
+      - name: K_d
+        min: 1.0e-09
+        max: 1.0
+        unit: mol/L
+        source: P3 Tier 2
+      - name: Kd
+        min: 1.0e-09
+        max: 1.0
+        unit: mol/L
+        source: P3 Tier 2 alias
+      - name: L_total
+        min: 1.0e-09
+        max: 1.0
+        unit: mol/L
+        source: P3 Tier 2
+      - name: L
+        min: 1.0e-09
+        max: 1.0
+        unit: mol/L
+        source: P3 Tier 2 alias
+      - name: P_total
+        min: 1.0e-09
+        max: 1.0
+        unit: mol/L
+        source: P3 Tier 2
+      - name: P
+        min: 1.0e-09
+        max: 1.0
+        unit: mol/L
+        source: P3 Tier 2 alias
+    output:
+      symbol: f_bound
+      min: 0.0
+      max: 1.0
+      unit: dimensionless
+  MF-T09:
+    canonical_name: Respiration_Heat
+    inputs:
+      - name: a
+        min: 0.001
+        max: 10.0
+        unit: W/kg
+        source: P3 Tier 3
+      - name: a_coef
+        min: 0.001
+        max: 10.0
+        unit: W/kg
+        source: P3 Tier 3 alias
+      - name: b
+        min: 0.0
+        max: 0.2
+        unit: 1/°C
+        source: P3 Tier 3
+      - name: b_coef
+        min: 0.0
+        max: 0.2
+        unit: 1/°C
+        source: P3 Tier 3 alias
+      - name: T_C
+        min: -5.0
+        max: 35.0
+        unit: °C
+        source: P3 Tier 3
+      - name: T_c
+        min: -5.0
+        max: 35.0
+        unit: °C
+        source: P3 Tier 3 alias
+    output:
+      symbol: Q_resp
+      min: 0.0
+      max: 1000.0
+      unit: W/kg
+  MF-M09:
+    canonical_name: Osmotic_Pressure
+    inputs:
+      - name: M
+        min: 0.0
+        max: 10.0
+        unit: mol/L
+        source: P3 Tier 3
+      - name: M_osmolar
+        min: 0.0
+        max: 10.0
+        unit: mol/L
+        source: P3 Tier 3 alias
+      - name: c
+        min: 0.0
+        max: 10.0
+        unit: mol/L
+        source: P3 Tier 3 alias
+      - name: T_K
+        min: 250.0
+        max: 400.0
+        unit: K
+        source: P3 Tier 3
+      - name: T_C
+        min: -20.0
+        max: 100.0
+        unit: °C
+        source: P3 Tier 3
+      - name: T_c
+        min: -20.0
+        max: 100.0
+        unit: °C
+        source: P3 Tier 3 alias
+      - name: i
+        min: 0.5
+        max: 10.0
+        unit: dimensionless
+        source: P3 Tier 3 van't Hoff factor
+    output:
+      symbol: pi
+      min: 0.0
+      max: 500000000.0
+      unit: Pa
+  MF-M11:
+    canonical_name: SCFE_Solubility
+    inputs:
+      - name: rho_CO2
+        min: 200.0
+        max: 1100.0
+        unit: kg/m³
+        source: P3 Tier 3
+      - name: rho
+        min: 200.0
+        max: 1100.0
+        unit: kg/m³
+        source: P3 Tier 3 alias
+      - name: T_K
+        min: 304.0
+        max: 500.0
+        unit: K
+        source: P3 Tier 3 (above critical)
+      - name: T_C
+        min: 31.0
+        max: 200.0
+        unit: °C
+        source: P3 Tier 3
+      - name: T_c
+        min: 31.0
+        max: 200.0
+        unit: °C
+        source: P3 Tier 3 alias
+      - name: k
+        min: 0.0
+        max: 50.0
+        unit: dimensionless
+        source: P3 Tier 3 Chrastil exponent
+      - name: a
+        min: -10000.0
+        max: 10000.0
+        unit: K
+        source: P3 Tier 3 Chrastil
+      - name: b
+        min: -100.0
+        max: 100.0
+        unit: dimensionless
+        source: P3 Tier 3 Chrastil
+    output:
+      symbol: y_solute
+      min: 0.0
+      max: 1.0
+      unit: dimensionless (mole fraction)
+  MF-M10:
+    canonical_name: Membrane_Transport
+    inputs:
+      - name: P_solute
+        min: 1.0e-12
+        max: 0.0001
+        unit: m/s
+        source: P3 Tier 3
+      - name: P
+        min: 1.0e-12
+        max: 0.0001
+        unit: m/s
+        source: P3 Tier 3 alias
+      - name: thickness
+        min: 1.0e-09
+        max: 0.001
+        unit: m
+        source: P3 Tier 3
+      - name: L
+        min: 1.0e-09
+        max: 0.001
+        unit: m
+        source: P3 Tier 3 alias
+      - name: dC
+        min: -10000.0
+        max: 10000.0
+        unit: mol/m³
+        source: P3 Tier 3
+      - name: dc
+        min: -10000.0
+        max: 10000.0
+        unit: mol/m³
+        source: P3 Tier 3 alias
+      - name: delta_c
+        min: -10000.0
+        max: 10000.0
+        unit: mol/m³
+        source: P3 Tier 3 alias
+    output:
+      symbol: J_solute
+      min: -1000.0
+      max: 1000.0
+      unit: mol/(m²·s)

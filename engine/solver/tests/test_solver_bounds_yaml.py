@@ -28,6 +28,8 @@ class TestSolverBoundsYaml(unittest.TestCase):
             "MF-R01", "MF-R02", "MF-R03", "MF-R04", "MF-R05", "MF-R06", "MF-R07",
             "MF-C01", "MF-C02", "MF-C03", "MF-C04", "MF-C05",
             "MF-T06", "MF-T07", "MF-T10", "MF-K06",  # P3 Tier 1 (2026-05-11)
+            "MF-M07", "MF-M08", "MF-T08", "MF-K07",  # P3 Tier 2 (2026-05-11)
+            "MF-T09", "MF-M09", "MF-M11", "MF-M10",  # P3 Tier 3 (2026-05-11)
         }
         self.assertEqual(set(self.data["solvers"].keys()), expected)
 
