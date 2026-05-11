@@ -88,12 +88,7 @@ def check(raw_atom: dict[str, Any]) -> dict[str, Any] | None:
     # `ingredient` field — Shape A atoms (Latin binomial seafood, ~16%)
     # have ingredient = canonical_id (Latin name) but no scientific_name field.
     ingredient = (raw_atom.get("ingredient") or "").strip()
-
-    # Latin binomial canonical_id pattern — `genus_species` heuristic identity
-    # signal (e.g. abralia_multihamata, panthera_tigris). Conservative: even if
-    # this matches an English compound (chicken_skin), the worst outcome is
-    # passing the atom to the LLM, which is the safe direction.
-    is_binomial_cid = bool(_BINOMIAL_RE.match(canonical_lower))
+    ingredient_is_canonical_label = ingredient.lower().replace(" ", "_") == canonical_lower
 
     # Rule 1a: known amino acid / pure chemical canonical_id (exact match)
     if canonical_lower in KNOWN_AMINO_ACIDS or canonical_lower in KNOWN_PURE_CHEMICALS:
@@ -112,10 +107,9 @@ def check(raw_atom: dict[str, Any]) -> dict[str, Any] | None:
     # An atom is identifiable if ANY of:
     #   - scientific_name has text
     #   - display_name (zh|en, dict or flat) has text
-    #   - ingredient has text (Shape A seafood Latin atoms)
-    #   - canonical_id matches Latin binomial pattern (genus_species)
+    #   - ingredient has text beyond a restatement of canonical_id
     has_identity_signal = bool(
-        sci or display_zh or display_en or ingredient or is_binomial_cid
+        sci or display_zh or display_en or (ingredient and not ingredient_is_canonical_label)
     )
     if not has_identity_signal:
         return _make_excluded_node(
