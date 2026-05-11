@@ -1719,5 +1719,158 @@
       "van_Boekel_Ch5"
     ],
     "equation_latex": "Q_{10} = \\left(\\frac{k_2}{k_1}\\right)^{10/(T_2-T_1)}"
+  },
+  "MF-T06": {
+    "id": "MF-T06",
+    "canonical_name": "Protein_Denaturation",
+    "display_name": "Protein Denaturation (van't Hoff sigmoid)",
+    "domains": [
+      "protein_science"
+    ],
+    "keywords_en": [
+      "protein denaturation",
+      "denaturation temperature",
+      "Td",
+      "van't Hoff",
+      "DSC",
+      "native fraction",
+      "thermal stability of protein"
+    ],
+    "keywords_zh": [
+      "蛋白质变性",
+      "变性温度",
+      "天然态分数",
+      "热稳定性"
+    ],
+    "parameter_names": [
+      "T_d",
+      "dH_d",
+      "T_C",
+      "sigma_override"
+    ],
+    "typical_statements": [
+      "WARNING: dH_d in kJ/mol; sigma derived from van't Hoff if not supplied"
+    ],
+    "source_books": [
+      "Belitz_Food_Chemistry_Ch1",
+      "Privalov_1974"
+    ],
+    "equation_latex": "f_{native}(T) = \\frac{1}{1+\\exp((T-T_d)/\\sigma)}"
+  },
+  "MF-K06": {
+    "id": "MF-K06",
+    "canonical_name": "Growth_Limit",
+    "display_name": "Microbial Growth Limit Boundary",
+    "domains": [
+      "food_safety"
+    ],
+    "keywords_en": [
+      "minimum pH growth",
+      "minimum water activity",
+      "MIC",
+      "growth limit",
+      "hurdle technology"
+    ],
+    "keywords_zh": [
+      "生长极限",
+      "最低生长 pH",
+      "最低水活度",
+      "MIC",
+      "栅栏技术"
+    ],
+    "parameter_names": [
+      "pH_min",
+      "a_w_min",
+      "T_min",
+      "MIC",
+      "pH",
+      "a_w",
+      "T_C",
+      "substance_conc"
+    ],
+    "typical_statements": [
+      "AND-combination of all supplied hurdles"
+    ],
+    "source_books": [
+      "ICMSF_2018_v6",
+      "Pitt_Hocking_Fungi"
+    ],
+    "equation_latex": "\\text{growth} = (pH \\geq pH_{min}) \\wedge (a_w \\geq a_{w,min}) \\wedge (T \\geq T_{min}) \\wedge ([s] \\leq MIC)"
+  },
+  "MF-T07": {
+    "id": "MF-T07",
+    "canonical_name": "Dielectric_Properties",
+    "display_name": "Dielectric Properties for RF/Microwave Heating",
+    "domains": [
+      "equipment_physics",
+      "thermal_dynamics"
+    ],
+    "keywords_en": [
+      "dielectric constant",
+      "loss factor",
+      "microwave heating",
+      "RF heating",
+      "permittivity",
+      "absorbed power"
+    ],
+    "keywords_zh": [
+      "介电常数",
+      "介电损耗",
+      "微波加热",
+      "射频加热",
+      "吸收功率"
+    ],
+    "parameter_names": [
+      "epsilon_double_prime",
+      "epsilon_pp",
+      "frequency",
+      "E_field"
+    ],
+    "typical_statements": [
+      "P_abs = 2π·f·ε₀·ε''·|E|²"
+    ],
+    "source_books": [
+      "Singh_Heldman_Ch5",
+      "Datta_MW_Food_2000",
+      "Buffler_MW_Cooking"
+    ],
+    "equation_latex": "P_{abs} = 2\\pi f \\varepsilon_0 \\varepsilon'' |E|^2"
+  },
+  "MF-T10": {
+    "id": "MF-T10",
+    "canonical_name": "Starch_Gelatinization",
+    "display_name": "Starch Gelatinization Kinetics (Avrami)",
+    "domains": [
+      "carbohydrate"
+    ],
+    "keywords_en": [
+      "starch gelatinization",
+      "Avrami",
+      "gelatinization extent",
+      "T_gel",
+      "starch hydration"
+    ],
+    "keywords_zh": [
+      "淀粉糊化",
+      "糊化程度",
+      "Avrami 动力学"
+    ],
+    "parameter_names": [
+      "T_C",
+      "time",
+      "A",
+      "Ea",
+      "n",
+      "water_content"
+    ],
+    "typical_statements": [
+      "α(t) = 1 - exp(-k(T)·t^n); k follows Arrhenius"
+    ],
+    "source_books": [
+      "BeMiller_Whistler_Starch_Ch7",
+      "Marabi_2003_JFE",
+      "Lund_1984"
+    ],
+    "equation_latex": "\\alpha(t) = 1 - \\exp(-k(T) t^n)"
   }
 }
