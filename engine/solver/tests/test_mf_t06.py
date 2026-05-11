@@ -51,3 +51,12 @@ class TestMFT06(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestMFT06SigmaOverrideAlone(unittest.TestCase):
+    def test_sigma_override_without_dH_d(self):
+        """P1 fix from cross-review: sigma_override alone should be sufficient."""
+        out = mf_t06.solve({"T_d": 70.0, "T_C": 75.0, "sigma_override": 5.0})
+        self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
+        expected = 1.0 / (1.0 + math.exp((75.0 - 70.0) / 5.0))
+        self.assertAlmostEqual(out["result"]["value"], expected, places=6)

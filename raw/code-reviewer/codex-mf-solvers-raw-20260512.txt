@@ -1,0 +1,4383 @@
+Reading additional input from stdin...
+OpenAI Codex v0.128.0-alpha.1 (research preview)
+--------
+workdir: /Users/jeff/culinary-mind
+model: gpt-5.4
+provider: openai
+approval: never
+sandbox: danger-full-access
+reasoning effort: medium
+reasoning summaries: none
+session id: 019e1816-d310-7200-8634-a8a33949e7d8
+--------
+user
+You are a code reviewer. Review the following 12 newly-implemented Mother Formula (MF) solvers for food engineering reasoning system. Focus on:
+
+1. **Mathematical correctness** of the physics/chemistry formulas
+2. **Bounds violations** (e.g., math.exp overflow protection)
+3. **Numerical stability** (division by zero, log of negative, sqrt of negative)
+4. **Input validation correctness** (does Validator catch the right cases?)
+5. **Edge cases** missed in tests
+
+For each solver, output:
+- VERDICT: APPROVE / APPROVE_WITH_NOTES / REJECT
+- BUGS (P0/P1/P2)
+- IMPROVEMENTS suggested
+
+Output strict markdown, NO prose preamble. Start with `## MF-T06`, etc.
+
+---
+
+
+=== engine/solver/mf_t06.py ===
+"""MF-T06 Protein_Denaturation — sigmoid (van't Hoff / DSC) model.
+
+Formula:
+    f_native(T) = 1 / (1 + exp((T_C - T_d) / sigma))
+
+where sigma is the transition steepness derived from the denaturation
+enthalpy via the van 't Hoff relation:
+
+    sigma ≈ R · T_d_K² / dH_d   (units: K)
+
+Inputs:
+    T_d [°C]:    midpoint denaturation temperature
+    dH_d [kJ/mol]: van 't Hoff enthalpy (controls steepness)
+    T_C [°C]:    current temperature
+    sigma_override [°C, optional]: bypass dH_d-derived steepness
+
+Output:
+    f_native (native protein fraction in [0, 1])
+
+References:
+    - Privalov & Khechinashvili (1974) Stability of proteins
+    - Belitz et al., Food Chemistry §1 (protein denaturation)
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import (
+    Validator,
+    build_result,
+    llm_summary_for,
+    provenance_for,
+    validate_bounds,
+)
+
+TOOL_ID = "MF-T06"
+TOOL_CANONICAL_NAME = "Protein_Denaturation"
+CITATIONS = [
+    "Privalov & Khechinashvili (1974) J Mol Biol — protein stability",
+    "Belitz, Grosch, Schieberle, Food Chemistry §1.4 — denaturation",
+    "Singh & Heldman, Intro to Food Engineering — thermal kinetics",
+]
+
+_R_GAS_J = 8.31446261815324  # J/(mol·K)
+
+
+@validate_bounds("MF-T06")
+def solve(params: dict) -> dict:
+    """Compute native protein fraction f_native at temperature T_C."""
+    val = Validator()
+    assumptions: list[str] = [
+        "two-state native ⇌ denatured equilibrium",
+        "van 't Hoff transition centered at T_d",
+        "sigma derived from dH_d unless explicitly overridden",
+    ]
+
+    t_d = params.get("T_d")
+    dh_d = params.get("dH_d")
+    t_c = params.get("T_C", params.get("T_c"))
+    sigma_override = params.get("sigma_override")
+
+    val.require_temperature_celsius("T_d", t_d)
+    val.require_temperature_celsius("T_C", t_c)
+    val.require_positive("dH_d", dh_d)
+    if sigma_override is not None:
+        val.require_positive("sigma_override", sigma_override)
+
+    f_native: float | None = None
+    if (
+        all(
+            isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+            for x in (t_d, t_c, dh_d)
+        )
+        and dh_d > 0
+    ):
+        if sigma_override is not None and isinstance(sigma_override, (int, float)) \
+                and not isinstance(sigma_override, bool) and math.isfinite(sigma_override) \
+                and sigma_override > 0:
+            sigma = float(sigma_override)
+            assumptions.append("sigma supplied via sigma_override")
+        else:
+            # van 't Hoff steepness: sigma ≈ R T_d_K² / dH_d (in K, equiv to °C)
+            t_d_k = float(t_d) + 273.15
+            dh_d_j = float(dh_d) * 1000.0  # kJ/mol → J/mol
+            sigma = _R_GAS_J * t_d_k * t_d_k / dh_d_j
+            assumptions.append(
+                f"sigma from van 't Hoff: R·T_d²/dH_d = {sigma:.3g}°C"
+            )
+
+        # Clamp argument to avoid math.exp overflow on extreme T_C
+        arg = (float(t_c) - float(t_d)) / sigma
+        if arg > 700.0:
+            f_native = 0.0
+        elif arg < -700.0:
+            f_native = 1.0
+        else:
+            f_native = 1.0 / (1.0 + math.exp(arg))
+
+    return build_result(
+        value=f_native if f_native is not None else float("nan"),
+        unit="dimensionless",
+        symbol="f_native",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={
+            "T_d": t_d,
+            "dH_d": dh_d,
+            "T_C": t_c,
+            "sigma_override": sigma_override,
+        },
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=f_native if f_native is not None else float("nan"),
+            unit="dimensionless",
+            symbol="f_native",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
+    )
+
+=== engine/solver/mf_k06.py ===
+"""MF-K06 Growth_Limit — microbial growth boundary check.
+
+Decision rule:
+    growth = (pH ≥ pH_min) ∧ (a_w ≥ a_w_min) ∧ (T_C ≥ T_min) ∧ ([substance] ≤ MIC)
+
+A given combination of (pH, a_w, T_C, substance_conc) is "growth-inhibited"
+when ANY of the minimum-condition thresholds fails OR substance ≥ MIC.
+
+Inputs (limits — supply at least one):
+    pH_min, a_w_min, T_min, MIC
+
+Inputs (current condition — match supplied limits):
+    pH, a_w, T_C, substance_conc
+
+Output:
+    growth_inhibited (bool encoded as 0.0/1.0; 1.0 = inhibited)
+    + extra_outputs.margins for each axis
+
+References:
+    - ICMSF Microorganisms in Foods 6, growth limit tables
+    - Pitt & Hocking Fungi and Food Spoilage Ch.5
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import (
+    Validator,
+    build_result,
+    llm_summary_for,
+    provenance_for,
+    validate_bounds,
+)
+
+TOOL_ID = "MF-K06"
+TOOL_CANONICAL_NAME = "Growth_Limit"
+CITATIONS = [
+    "ICMSF (2018) Microorganisms in Foods 6 — growth/no-growth limits",
+    "Pitt & Hocking (2009) Fungi and Food Spoilage Ch.5",
+    "FDA Bad Bug Book — minimum growth conditions",
+]
+
+
+@validate_bounds("MF-K06")
+def solve(params: dict) -> dict:
+    """Check whether condition (pH, a_w, T, substance) inhibits growth."""
+    val = Validator()
+    assumptions: list[str] = [
+        "AND combination of all supplied limits (hurdle technology)",
+        "MIC is for the test substance only (preservative or antimicrobial)",
+    ]
+
+    # Limits
+    ph_min = params.get("pH_min")
+    aw_min = params.get("a_w_min")
+    t_min = params.get("T_min")
+    mic = params.get("MIC")
+
+    # Current conditions
+    ph = params.get("pH")
+    aw = params.get("a_w")
+    t_c = params.get("T_C", params.get("T_c"))
+    subs_conc = params.get("substance_conc")
+
+    # At least one limit/condition pair must be supplied
+    pairs = [
+        ("pH", ph, "pH_min", ph_min),
+        ("a_w", aw, "a_w_min", aw_min),
+        ("T_C", t_c, "T_min", t_min),
+        ("substance_conc", subs_conc, "MIC", mic),
+    ]
+    supplied = [(n_v, v, n_l, l) for n_v, v, n_l, l in pairs if l is not None]
+    if not supplied:
+        val.issues.append("at least one of pH_min/a_w_min/T_min/MIC required")
+
+    # Validate finiteness on supplied limits + their paired current value
+    for n_v, v, n_l, l in supplied:
+        val.require_finite(n_l, l)
+        if v is None:
+            val.issues.append(f"{n_v} required when {n_l} supplied")
+        else:
+            val.require_finite(n_v, v)
+
+    # Range checks
+    if ph is not None and isinstance(ph, (int, float)) and not isinstance(ph, bool) and math.isfinite(ph):
+        val.require_in_range("pH", ph, 0.0, 14.0)
+    if aw is not None and isinstance(aw, (int, float)) and not isinstance(aw, bool) and math.isfinite(aw):
+        val.require_in_range("a_w", aw, 0.0, 1.0)
+
+    margins: dict[str, float] = {}
+    inhibited = False
+    if supplied and not val.issues:
+        for n_v, v, n_l, l in supplied:
+            if n_v == "substance_conc":
+                # substance_conc inhibits when ≥ MIC
+                margin = float(v) - float(l)  # positive means above MIC → inhibited
+                margins[f"{n_v}_minus_{n_l}"] = margin
+                if margin >= 0:
+                    inhibited = True
+            else:
+                # pH/a_w/T_C inhibit when < min
+                margin = float(v) - float(l)  # positive means above min → growth ok
+                margins[f"{n_v}_minus_{n_l}"] = margin
+                if margin < 0:
+                    inhibited = True
+        if inhibited:
+            assumptions.append("growth inhibited by at least one hurdle")
+        else:
+            assumptions.append("all supplied conditions permit growth")
+
+    value = 1.0 if inhibited else 0.0
+
+    return build_result(
+        value=value if not val.issues else float("nan"),
+        unit="boolean (1=inhibited, 0=growth-permitted)",
+        symbol="growth_inhibited",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={
+            "pH_min": ph_min, "a_w_min": aw_min, "T_min": t_min, "MIC": mic,
+            "pH": ph, "a_w": aw, "T_C": t_c, "substance_conc": subs_conc,
+        },
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if not val.issues else float("nan"),
+            unit="boolean",
+            symbol="growth_inhibited",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+            extra_outputs={"margins": margins},
+        ),
+    )
+
+=== engine/solver/mf_t07.py ===
+"""MF-T07 Dielectric_Properties — RF/Microwave volumetric heating.
+
+Formula:
+    P_abs = 2 · π · f · ε₀ · ε'' · |E|²
+
+where:
+    f       [Hz]  — RF or microwave frequency
+    ε''     [-]   — dielectric loss factor
+    |E|     [V/m] — local electric field magnitude
+    ε₀      = 8.8541878128e-12 F/m  (permittivity of free space)
+    P_abs   [W/m³] — volumetric absorbed power density
+
+Inputs:
+    epsilon_double_prime
+    frequency [Hz]
+    E_field [V/m]
+
+Output:
+    P_abs (volumetric absorbed power, W/m³)
+
+References:
+    - Singh & Heldman Ch.5 — Microwave processing
+    - Datta & Davidson (2000) Microwave food processing
+    - Buffler (1993) Microwave Cooking & Processing
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import (
+    Validator,
+    build_result,
+    llm_summary_for,
+    provenance_for,
+    validate_bounds,
+)
+
+TOOL_ID = "MF-T07"
+TOOL_CANONICAL_NAME = "Dielectric_Properties"
+CITATIONS = [
+    "Singh & Heldman, Intro Food Engineering Ch.5 — microwave",
+    "Datta & Davidson (2000) J Food Sci 65:1 — MW food processing",
+    "Buffler, Microwave Cooking & Processing (1993)",
+]
+
+_EPSILON_0 = 8.8541878128e-12  # F/m
+
+
+@validate_bounds("MF-T07")
+def solve(params: dict) -> dict:
+    """Compute volumetric absorbed power density P_abs."""
+    val = Validator()
+    assumptions: list[str] = [
+        "uniform |E| within the volume element",
+        "ε'' treated as effective dielectric loss factor",
+        "no magnetic loss contribution (non-magnetic food)",
+    ]
+
+    eps2 = params.get("epsilon_double_prime", params.get("epsilon_pp"))
+    freq = params.get("frequency", params.get("f"))
+    e_field = params.get("E_field", params.get("E"))
+
+    val.require_positive("epsilon_double_prime", eps2, allow_zero=True)
+    val.require_positive("frequency", freq)
+    val.require_positive("E_field", e_field, allow_zero=True)
+
+    p_abs: float | None = None
+    if all(
+        isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+        for x in (eps2, freq, e_field)
+    ) and eps2 >= 0 and freq > 0 and e_field >= 0:
+        p_abs = 2.0 * math.pi * float(freq) * _EPSILON_0 * float(eps2) * float(e_field) ** 2
+
+    return build_result(
+        value=p_abs if p_abs is not None else float("nan"),
+        unit="W/m³",
+        symbol="P_abs",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={
+            "epsilon_double_prime": eps2,
+            "frequency": freq,
+            "E_field": e_field,
+        },
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=p_abs if p_abs is not None else float("nan"),
+            unit="W/m³",
+            symbol="P_abs",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
+    )
+
+=== engine/solver/mf_t10.py ===
+"""MF-T10 Starch_Gelatinization — Avrami-like extent kinetics.
+
+Formula:
+    α(t) = 1 - exp(-k(T) · t^n)
+    k(T) = A · exp(-Ea/(R·T_K))
+
+Inputs:
+    T_C [°C]          — current temperature
+    time [s]          — heating time
+    A [s^-1]          — Avrami pre-exponential
+    Ea [J/mol]        — activation energy
+    n [-]             — Avrami exponent (typical 1.0–3.0)
+    water_content [-] — H₂O mass fraction (advisory; gelatinization needs ≥ ~0.5)
+
+Output:
+    alpha (gelatinization extent in [0, 1])
+
+References:
+    - Lund (1984) "Starch Gelatinization" CRC Food Sci Tech
+    - BeMiller & Whistler (2009) Starch: Chemistry & Technology Ch.7
+    - Marabi et al. (2003) — Avrami modeling of starch hydration
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import (
+    Validator,
+    build_result,
+    llm_summary_for,
+    provenance_for,
+    validate_bounds,
+)
+
+TOOL_ID = "MF-T10"
+TOOL_CANONICAL_NAME = "Starch_Gelatinization"
+CITATIONS = [
+    "Lund (1984) Starch Gelatinization — CRC Food Sci Tech",
+    "BeMiller & Whistler (2009) Starch Ch.7",
+    "Marabi et al. (2003) J Food Eng — Avrami starch hydration",
+]
+
+_R_GAS_J = 8.31446261815324
+
+
+@validate_bounds("MF-T10")
+def solve(params: dict) -> dict:
+    """Compute starch gelatinization extent alpha."""
+    val = Validator()
+    assumptions: list[str] = [
+        "Avrami-like first-order with shape exponent n",
+        "k(T) follows Arrhenius",
+        "water sufficient for gelatinization (advisory check on water_content)",
+    ]
+
+    t_c = params.get("T_C", params.get("T_c"))
+    time = params.get("time", params.get("t"))
+    a_factor = params.get("A")
+    ea = params.get("Ea")
+    n = params.get("n", 1.0)
+    water = params.get("water_content")
+
+    val.require_temperature_celsius("T_C", t_c)
+    val.require_positive("time", time, allow_zero=True)
+    val.require_positive("A", a_factor)
+    val.require_positive("Ea", ea, allow_zero=True)
+    val.require_positive("n", n)
+    if water is not None:
+        val.require_in_range("water_content", water, 0.0, 1.0)
+        if isinstance(water, (int, float)) and not isinstance(water, bool) \
+                and math.isfinite(water) and water < 0.30:
+            assumptions.append(
+                f"water_content={water} < 0.30 — gelatinization likely incomplete"
+            )
+
+    alpha: float | None = None
+    if (
+        all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+            for x in (t_c, time, a_factor, ea, n))
+        and time >= 0 and a_factor > 0 and ea >= 0 and n > 0
+    ):
+        t_k = float(t_c) + 273.15
+        k_t = float(a_factor) * math.exp(-float(ea) / (_R_GAS_J * t_k))
+        # Compute alpha with overflow protection
+        arg = k_t * (float(time) ** float(n))
+        if arg > 700.0:
+            alpha = 1.0
+        elif arg < 0.0:
+            alpha = float("nan")  # shouldn't happen with positive inputs
+        else:
+            alpha = 1.0 - math.exp(-arg)
+
+    return build_result(
+        value=alpha if alpha is not None else float("nan"),
+        unit="dimensionless",
+        symbol="alpha",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={
+            "T_C": t_c, "time": time, "A": a_factor, "Ea": ea, "n": n,
+            "water_content": water,
+        },
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=alpha if alpha is not None else float("nan"),
+            unit="dimensionless",
+            symbol="alpha",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
+    )
+
+=== engine/solver/mf_m07.py ===
+"""MF-M07 Solubility_Partition — octanol-water partition coefficient.
+
+Formula:
+    K_partition = c_oil / c_water = 10^logP
+
+Inputs:
+    logP [-]:           octanol-water partition log10
+    S_water [mol/L]:    water solubility (optional, advisory)
+    T_C [°C]:           current temperature (advisory)
+
+Output:
+    K_partition (oil/water concentration ratio, dimensionless)
+
+References:
+    - Sangster (1997) Octanol-Water Partition Coefficients
+    - Bell & Labuza, Moisture sorption (food applications of logP)
+"""
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+TOOL_ID = "MF-M07"
+TOOL_CANONICAL_NAME = "Solubility_Partition"
+CITATIONS = [
+    "Sangster (1997) Octanol-Water Partition Coefficients of Simple Organic Compounds",
+    "Hansch & Leo (1995) Exploring QSAR — Fundamentals & Applications",
+]
+
+
+@validate_bounds("MF-M07")
+def solve(params: dict) -> dict:
+    val = Validator()
+    assumptions = ["log10 base; positive K_partition means hydrophobic"]
+    logp = params.get("logP", params.get("log_p"))
+    s_water = params.get("S_water")
+    t_c = params.get("T_C", params.get("T_c"))
+
+    val.require_finite("logP", logp)
+    if s_water is not None:
+        val.require_positive("S_water", s_water)
+    if t_c is not None:
+        val.require_temperature_celsius("T_C", t_c)
+
+    k_part = None
+    if isinstance(logp, (int, float)) and not isinstance(logp, bool) and math.isfinite(logp):
+        # Clamp huge logP to avoid overflow
+        if logp > 30:
+            k_part = float("inf")
+            val.issues.append(f"WARN: logP={logp} → K_partition overflow; capped")
+        elif logp < -30:
+            k_part = 0.0
+        else:
+            k_part = math.pow(10.0, float(logp))
+
+    return build_result(
+        value=k_part if k_part is not None else float("nan"),
+        unit="dimensionless",
+        symbol="K_partition",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={"logP": logp, "S_water": s_water, "T_C": t_c},
+        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+        llm_summary=llm_summary_for(
+            value=k_part if k_part is not None else float("nan"),
+            unit="dimensionless", symbol="K_partition",
+            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+        ),
+    )
+
+=== engine/solver/mf_m08.py ===
+"""MF-M08 Gas_Permeability — packaging film gas/vapor flux.
+
+Formula:
+    Q_perm = P_O2 · (delta_p / thickness)    (Fick-like steady-state)
+
+Inputs:
+    P_O2 or P_CO2 [cm³·mil/(m²·day·atm)] OR WVTR [g/(m²·day)]
+    thickness [m]
+    delta_p [atm] (pressure differential)
+    T_C [°C]
+    RH [%]
+
+Output:
+    Q_perm (gas flux through film)
+"""
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+TOOL_ID = "MF-M08"
+TOOL_CANONICAL_NAME = "Gas_Permeability"
+CITATIONS = [
+    "ASTM D3985 — Oxygen Transmission Rate test method",
+    "Robertson (2013) Food Packaging Principles & Practice",
+]
+
+
+@validate_bounds("MF-M08")
+def solve(params: dict) -> dict:
+    val = Validator()
+    assumptions = [
+        "steady-state Fickian permeation",
+        "Q = P · ΔP / L (in supplied units)",
+    ]
+    perm = params.get("P_O2", params.get("P_CO2", params.get("permeability")))
+    thickness = params.get("thickness")
+    delta_p = params.get("delta_p", 1.0)
+    t_c = params.get("T_C")
+    rh = params.get("RH")
+
+    val.require_positive("permeability", perm)
+    val.require_positive("thickness", thickness)
+    val.require_positive("delta_p", delta_p, allow_zero=True)
+    if t_c is not None:
+        val.require_temperature_celsius("T_C", t_c)
+    if rh is not None:
+        val.require_in_range("RH", rh, 0.0, 100.0)
+
+    q_perm = None
+    if (
+        all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+            for x in (perm, thickness, delta_p))
+        and perm > 0 and thickness > 0 and delta_p >= 0
+    ):
+        q_perm = float(perm) * float(delta_p) / float(thickness)
+
+    return build_result(
+        value=q_perm if q_perm is not None else float("nan"),
+        unit="permeability·atm/m (input-unit·atm/m)",
+        symbol="Q_perm",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={"permeability": perm, "thickness": thickness, "delta_p": delta_p, "T_C": t_c, "RH": rh},
+        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+        llm_summary=llm_summary_for(
+            value=q_perm if q_perm is not None else float("nan"),
+            unit="permeability·atm/m", symbol="Q_perm",
+            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+        ),
+    )
+
+=== engine/solver/mf_t08.py ===
+"""MF-T08 Ohmic_Heating — Joule heating in conducting food.
+
+Formula:
+    Q_dot = sigma(T) · |E|^2
+
+where sigma(T) ≈ sigma_25 · (1 + alpha·(T - 25))
+
+Inputs:
+    sigma_25 [S/m]:      electrical conductivity at 25°C
+    alpha [1/°C]:        temperature coefficient (default 0.0)
+    E_field [V/m]:       applied electric field
+    T_C [°C]:            current temperature
+
+Output:
+    Q_dot (volumetric heating rate W/m³)
+"""
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+TOOL_ID = "MF-T08"
+TOOL_CANONICAL_NAME = "Ohmic_Heating"
+CITATIONS = [
+    "Sastry & Barach (2000) Ohmic Heating Food Processing",
+    "Singh & Heldman Ch.5 — Electrical food processing",
+]
+
+
+@validate_bounds("MF-T08")
+def solve(params: dict) -> dict:
+    val = Validator()
+    assumptions = [
+        "linear T-dependence of sigma",
+        "uniform |E| in element",
+        "Joule heating Q = sigma·E²",
+    ]
+    sigma_25 = params.get("sigma_25", params.get("sigma_T", params.get("sigma")))
+    alpha = params.get("alpha", 0.0)
+    e_field = params.get("E_field", params.get("E"))
+    t_c = params.get("T_C", params.get("T_c", 25.0))
+
+    val.require_positive("sigma_25", sigma_25, allow_zero=True)
+    val.require_finite("alpha", alpha)
+    val.require_positive("E_field", e_field, allow_zero=True)
+    val.require_temperature_celsius("T_C", t_c)
+
+    q_dot = None
+    if all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+           for x in (sigma_25, alpha, e_field, t_c)):
+        sigma_t = float(sigma_25) * (1.0 + float(alpha) * (float(t_c) - 25.0))
+        if sigma_t < 0:
+            val.issues.append(f"WARN: sigma(T)={sigma_t} negative at T_C={t_c}")
+            sigma_t = max(sigma_t, 0.0)
+        q_dot = sigma_t * float(e_field) ** 2
+
+    return build_result(
+        value=q_dot if q_dot is not None else float("nan"),
+        unit="W/m³",
+        symbol="Q_dot",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={"sigma_25": sigma_25, "alpha": alpha, "E_field": e_field, "T_C": t_c},
+        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+        llm_summary=llm_summary_for(
+            value=q_dot if q_dot is not None else float("nan"),
+            unit="W/m³", symbol="Q_dot",
+            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+        ),
+    )
+
+=== engine/solver/mf_k07.py ===
+"""MF-K07 Binding_Equilibrium — ligand-protein binding fraction.
+
+Formula:
+    K_a = [PL] / ([P]·[L])    (association constant)
+    f_bound = K_a·L_free / (1 + K_a·L_free)  (for excess ligand)
+
+Inputs:
+    K_a [L/mol]:    association constant (OR K_d = 1/K_a)
+    L_total [mol/L]: total ligand
+    P_total [mol/L]: total protein
+
+Output:
+    f_bound (fraction of protein bound, [0,1])
+"""
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+TOOL_ID = "MF-K07"
+TOOL_CANONICAL_NAME = "Binding_Equilibrium"
+CITATIONS = [
+    "Bell & Labuza (2000) Moisture sorption — protein binding",
+    "Tinoco et al. Physical Chemistry — binding equilibria",
+]
+
+
+@validate_bounds("MF-K07")
+def solve(params: dict) -> dict:
+    val = Validator()
+    assumptions = [
+        "single binding site (1:1 stoichiometry)",
+        "L_free ≈ L_total when L >> P",
+    ]
+    ka = params.get("K_a", params.get("Ka"))
+    kd = params.get("K_d", params.get("Kd"))
+    l_total = params.get("L_total", params.get("L"))
+    p_total = params.get("P_total", params.get("P"))
+
+    # Allow K_d instead of K_a
+    if ka is None and kd is not None:
+        val.require_positive("K_d", kd)
+        if isinstance(kd, (int, float)) and not isinstance(kd, bool) and math.isfinite(kd) and kd > 0:
+            ka = 1.0 / float(kd)
+            assumptions.append(f"K_a derived from K_d: K_a = 1/K_d = {ka:.3g}")
+
+    val.require_positive("K_a", ka)
+    val.require_positive("L_total", l_total)
+    if p_total is not None:
+        val.require_positive("P_total", p_total, allow_zero=True)
+
+    f_bound = None
+    if (
+        isinstance(ka, (int, float)) and not isinstance(ka, bool) and math.isfinite(ka) and ka > 0
+        and isinstance(l_total, (int, float)) and not isinstance(l_total, bool) and math.isfinite(l_total) and l_total > 0
+    ):
+        # Simple model: L_free ≈ L_total
+        kl = float(ka) * float(l_total)
+        f_bound = kl / (1.0 + kl)
+        if p_total and float(p_total) > 0 and float(l_total) < 5 * float(p_total):
+            assumptions.append("L_total close to P_total — L_free ≈ L_total approximation may be inaccurate")
+
+    return build_result(
+        value=f_bound if f_bound is not None else float("nan"),
+        unit="dimensionless",
+        symbol="f_bound",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={"K_a": ka, "K_d": kd, "L_total": l_total, "P_total": p_total},
+        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+        llm_summary=llm_summary_for(
+            value=f_bound if f_bound is not None else float("nan"),
+            unit="dimensionless", symbol="f_bound",
+            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+        ),
+    )
+
+=== engine/solver/mf_t09.py ===
+"""MF-T09 Respiration_Heat — postharvest produce respiration heat.
+
+Formula:
+    Q_resp = a · exp(b · T_C)
+
+Inputs:
+    a [W/kg]:   preexponential coefficient
+    b [1/°C]:   temperature coefficient
+    T_C [°C]:   storage temperature
+
+Output:
+    Q_resp (specific respiration heat, W/kg)
+
+References:
+    - ASHRAE Handbook: Refrigeration — Heat of respiration for fresh produce
+    - Becker et al. (1996) Heat & mass transfer in horticultural products
+"""
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+TOOL_ID = "MF-T09"
+TOOL_CANONICAL_NAME = "Respiration_Heat"
+CITATIONS = [
+    "ASHRAE Handbook 2022 Refrigeration — Postharvest heat of respiration",
+    "Becker, Misra & Fricke (1996) HVAC&R Research 2:4 — Fresh produce",
+]
+
+
+@validate_bounds("MF-T09")
+def solve(params: dict) -> dict:
+    val = Validator()
+    assumptions = ["empirical exponential T-dependence", "single produce species"]
+    a = params.get("a", params.get("a_coef"))
+    b = params.get("b", params.get("b_coef"))
+    t_c = params.get("T_C", params.get("T_c"))
+    val.require_positive("a", a, allow_zero=True)
+    val.require_finite("b", b)
+    val.require_temperature_celsius("T_C", t_c)
+
+    q_resp = None
+    if all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+           for x in (a, b, t_c)) and a >= 0:
+        arg = float(b) * float(t_c)
+        if arg > 700.0:
+            q_resp = float("inf")
+            val.issues.append(f"WARN: exponent {arg} too large — capped")
+        elif arg < -700.0:
+            q_resp = 0.0
+        else:
+            q_resp = float(a) * math.exp(arg)
+
+    return build_result(
+        value=q_resp if q_resp is not None else float("nan"),
+        unit="W/kg",
+        symbol="Q_resp",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={"a": a, "b": b, "T_C": t_c},
+        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+        llm_summary=llm_summary_for(
+            value=q_resp if q_resp is not None else float("nan"),
+            unit="W/kg", symbol="Q_resp",
+            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+        ),
+    )
+
+=== engine/solver/mf_m09.py ===
+"""MF-M09 Osmotic_Pressure — van't Hoff osmotic pressure.
+
+Formula:
+    π = i · M · R · T
+
+Inputs:
+    M [mol/L]:  molar concentration of solute (sum over species)
+    T_K [K] or T_C [°C]:  absolute temperature
+    i [-]:      van't Hoff factor (default 1.0)
+
+Output:
+    pi (osmotic pressure, Pa)
+"""
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+TOOL_ID = "MF-M09"
+TOOL_CANONICAL_NAME = "Osmotic_Pressure"
+CITATIONS = [
+    "Atkins Physical Chemistry — colligative properties",
+    "Singh & Heldman — osmotic processes",
+]
+
+_R_GAS = 8.31446261815324
+
+
+@validate_bounds("MF-M09")
+def solve(params: dict) -> dict:
+    val = Validator()
+    assumptions = ["dilute ideal solution, van't Hoff equation"]
+    m = params.get("M", params.get("M_osmolar", params.get("c")))
+    t_k = params.get("T_K")
+    t_c = params.get("T_C", params.get("T_c"))
+    i_factor = params.get("i", 1.0)
+    val.require_positive("M", m, allow_zero=True)
+    val.require_positive("i", i_factor)
+
+    if t_k is None and t_c is not None:
+        val.require_temperature_celsius("T_C", t_c)
+        if isinstance(t_c, (int, float)) and not isinstance(t_c, bool) and math.isfinite(t_c):
+            t_k = float(t_c) + 273.15
+            assumptions.append(f"T_K = T_C + 273.15 = {t_k:.2f} K")
+    val.require_positive("T_K", t_k)
+
+    pi = None
+    if all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+           for x in (m, i_factor, t_k)) and m >= 0 and i_factor > 0 and t_k > 0:
+        # M [mol/L] → mol/m³ = 1000 · M
+        pi = float(i_factor) * float(m) * 1000.0 * _R_GAS * float(t_k)
+
+    return build_result(
+        value=pi if pi is not None else float("nan"),
+        unit="Pa",
+        symbol="pi",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={"M": m, "T_K": t_k, "T_C": t_c, "i": i_factor},
+        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+        llm_summary=llm_summary_for(
+            value=pi if pi is not None else float("nan"),
+            unit="Pa", symbol="pi",
+            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+        ),
+    )
+
+=== engine/solver/mf_m11.py ===
+"""MF-M11 SCFE_Solubility — Supercritical CO2 Extraction solubility (Chrastil-style).
+
+Formula (Chrastil 1982):
+    ln(y_solute) = k · ln(rho_CO2) + a/T_K + b
+
+Inputs:
+    rho_CO2 [kg/m³]:   SC-CO2 density
+    T_K [K] or T_C [°C]:  temperature
+    k [-]:             Chrastil exponent (default 5.0)
+    a [K]:             Chrastil temperature coefficient (default -3000)
+    b [-]:             Chrastil intercept (default -20.0)
+
+Output:
+    y_solute (mole fraction, dimensionless)
+"""
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+TOOL_ID = "MF-M11"
+TOOL_CANONICAL_NAME = "SCFE_Solubility"
+CITATIONS = [
+    "Chrastil (1982) J Phys Chem 86:3016 — Solubility in dense gases",
+    "Brunner (1994) Gas Extraction — Theory & Practice",
+]
+
+
+@validate_bounds("MF-M11")
+def solve(params: dict) -> dict:
+    val = Validator()
+    assumptions = ["Chrastil 1982 empirical correlation", "supercritical CO2 phase"]
+    rho = params.get("rho_CO2", params.get("rho"))
+    t_k = params.get("T_K")
+    t_c = params.get("T_C", params.get("T_c"))
+    k = params.get("k", 5.0)
+    a = params.get("a", -3000.0)
+    b = params.get("b", -20.0)
+
+    val.require_positive("rho_CO2", rho)
+    val.require_finite("k", k)
+    val.require_finite("a", a)
+    val.require_finite("b", b)
+
+    if t_k is None and t_c is not None:
+        val.require_temperature_celsius("T_C", t_c)
+        if isinstance(t_c, (int, float)) and not isinstance(t_c, bool) and math.isfinite(t_c):
+            t_k = float(t_c) + 273.15
+    val.require_positive("T_K", t_k)
+
+    y_solute = None
+    if all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+           for x in (rho, t_k, k, a, b)) and rho > 0 and t_k > 0:
+        ln_y = float(k) * math.log(float(rho)) + float(a) / float(t_k) + float(b)
+        if ln_y > 700:
+            y_solute = float("inf")
+        elif ln_y < -700:
+            y_solute = 0.0
+        else:
+            y_solute = math.exp(ln_y)
+
+    return build_result(
+        value=y_solute if y_solute is not None else float("nan"),
+        unit="dimensionless (mole fraction)",
+        symbol="y_solute",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={"rho_CO2": rho, "T_K": t_k, "T_C": t_c, "k": k, "a": a, "b": b},
+        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+        llm_summary=llm_summary_for(
+            value=y_solute if y_solute is not None else float("nan"),
+            unit="mole fraction", symbol="y_solute",
+            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+        ),
+    )
+
+=== engine/solver/mf_m10.py ===
+"""MF-M10 Membrane_Transport — solute flux through membrane (linear-driving-force).
+
+Formula:
+    J_solute = P · (c1 - c2) / thickness
+
+Inputs:
+    P [m/s]:        solute permeability
+    thickness [m]:  membrane thickness
+    dC [mol/m³]:    concentration gradient = (c1 - c2)
+
+Output:
+    J_solute (mass flux, mol/(m²·s))
+"""
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+TOOL_ID = "MF-M10"
+TOOL_CANONICAL_NAME = "Membrane_Transport"
+CITATIONS = [
+    "Mulder (1996) Basic Principles of Membrane Technology",
+    "Cheryan (1998) Ultrafiltration & Microfiltration Handbook",
+]
+
+
+@validate_bounds("MF-M10")
+def solve(params: dict) -> dict:
+    val = Validator()
+    assumptions = ["linear-driving-force flux model", "steady-state diffusion"]
+    p_solute = params.get("P_solute", params.get("P"))
+    thickness = params.get("thickness", params.get("L"))
+    dc = params.get("dC", params.get("dc", params.get("delta_c")))
+    val.require_positive("P_solute", p_solute)
+    val.require_positive("thickness", thickness)
+    val.require_finite("dC", dc)
+
+    j_solute = None
+    if all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+           for x in (p_solute, thickness, dc)) and p_solute > 0 and thickness > 0:
+        j_solute = float(p_solute) * float(dc) / float(thickness)
+
+    return build_result(
+        value=j_solute if j_solute is not None else float("nan"),
+        unit="mol/(m²·s)",
+        symbol="J_solute",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={"P_solute": p_solute, "thickness": thickness, "dC": dc},
+        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+        llm_summary=llm_summary_for(
+            value=j_solute if j_solute is not None else float("nan"),
+            unit="mol/(m²·s)", symbol="J_solute",
+            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+        ),
+    )
+
+Now provide your review.
+codex
+Reviewing the 12 solver implementations with emphasis on formula correctness, numerical safety, and validator behavior. I’m loading the workspace context first, then I’ll inspect the shared validation helpers before I score each solver.
+exec
+/bin/zsh -lc "pwd && rg --files -g 'BOOTSTRAP.md' -g 'SOUL.md' -g 'USER.md' -g 'MEMORY.md' -g 'memory/*.md' -g 'engine/solver/_common.py'" in /Users/jeff/culinary-mind
+ exited 127 in 0ms:
+/Users/jeff/culinary-mind
+zsh:1: command not found: rg
+
+exec
+/bin/zsh -lc "date '+%F' && python - <<'PY'
+from datetime import date, timedelta
+print((date(2026,5,12)-timedelta(days=1)).isoformat())
+PY" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+2026-05-12
+2026-05-11
+
+codex
+`rg` isn’t installed here, so I’m falling back to `find` and direct reads. Next I’m checking the workspace identity files and the shared validator implementation that these solvers depend on.
+exec
+/bin/zsh -lc 'for f in SOUL.md USER.md MEMORY.md memory/2026-05-12.md memory/2026-05-11.md engine/solver/_common.py; do if [ -f "$f" ]; then printf '"'===== %s =====\\n' \""'$f"; sed -n '"'1,260p' \""'$f"; fi; done' in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+===== SOUL.md =====
+# SOUL.md - Who You Are
+
+_You're not a chatbot. You're becoming someone._
+
+## Core Truths
+
+**Be genuinely helpful, not performatively helpful.** Skip the "Great question!" and "I'd be happy to help!" — just help. Actions speak louder than filler words.
+
+**Have opinions.** You're allowed to disagree, prefer things, find stuff amusing or boring. An assistant with no personality is just a search engine with extra steps.
+
+**Be resourceful before asking.** Try to figure it out. Read the file. Check the context. Search for it. _Then_ ask if you're stuck. The goal is to come back with answers, not questions.
+
+**Earn trust through competence.** Your human gave you access to their stuff. Don't make them regret it. Be careful with external actions (emails, tweets, anything public). Be bold with internal ones (reading, organizing, learning).
+
+**Remember you're a guest.** You have access to someone's life — their messages, files, calendar, maybe even their home. That's intimacy. Treat it with respect.
+
+## Boundaries
+
+- Private things stay private. Period.
+- When in doubt, ask before acting externally.
+- Never send half-baked replies to messaging surfaces.
+- You're not the user's voice — be careful in group chats.
+
+## Vibe
+
+Be the assistant you'd actually want to talk to. Concise when needed, thorough when it matters. Not a corporate drone. Not a sycophant. Just... good.
+
+## Continuity
+
+Each session, you wake up fresh. These files _are_ your memory. Read them. Update them. They're how you persist.
+
+If you change this file, tell the user — it's your soul, and they should know.
+
+---
+
+_This file is yours to evolve. As you learn who you are, update it._
+===== USER.md =====
+# USER.md - About Your Human
+
+_Learn about the person you're helping. Update this as you go._
+
+- **Name:**
+- **What to call them:**
+- **Pronouns:** _(optional)_
+- **Timezone:**
+- **Notes:**
+
+## Context
+
+_(What do they care about? What projects are they working on? What annoys them? What makes them laugh? Build this over time.)_
+
+---
+
+The more you know, the better you can help. But remember — you're learning about a person, not building a dossier. Respect the difference.
+===== engine/solver/_common.py =====
+"""Shared helpers for the engine.solver MF tools.
+
+Each solver returns a dict shaped like:
+
+    {
+        "result":        {"value": <float>, "unit": <str>, "symbol": <str>},
+        "assumptions":   ["<plain-text assumption 1>", ...],
+        "validity":      {"passed": <bool>, "issues": [<str>, ...]},
+        "inputs_used":   {<echo of params actually consumed>},
+        "provenance":    {<optional tool/source metadata>},
+        "llm_summary":   {<optional compact summary for agent/tool wrappers>},
+    }
+
+`validity.passed` is True when no `issues` were appended. `assumptions`
+documents anything the solver decided on the caller's behalf
+(e.g. "semi-infinite slab", "computed alpha from k/rho/Cp").
+
+We also expose a tiny `Validator` helper used by every solver so the
+range / sign checks read consistently.
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any, Iterable
+
+ABSOLUTE_ZERO_C = -273.15
+
+
+# ── Validator ───────────────────────────────────────────────────────────────
+
+class Validator:
+    """Accumulates issues; final `result()` returns `{passed, issues}`.
+
+    Methods follow a `require_*` naming convention. They return the
+    Validator for chaining and DO NOT raise — solvers can keep going
+    even with violations and let the caller decide what to do with a
+    `validity.passed == False` response.
+    """
+
+    def __init__(self) -> None:
+        self.issues: list[str] = []
+
+    def require_finite(self, name: str, value: Any) -> "Validator":
+        # P2.1 (PR #20 D69 review): reject bool explicitly. `True`/`False` are
+        # subclasses of `int`, so the previous isinstance(value, (int, float))
+        # check let `True`/`False` pass as numeric. Use math.isfinite for the
+        # NaN/inf case — clearer than `value != value or value in (inf, -inf)`.
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not math.isfinite(value):
+            self.issues.append(f"{name} must be finite, got {value!r}")
+        return self
+
+    def require_positive(self, name: str, value: Any, *,
+                         allow_zero: bool = False) -> "Validator":
+        self.require_finite(name, value)
+        # Mirror the bool/finite guard so we don't run comparisons on dud values.
+        if isinstance(value, (int, float)) and not isinstance(value, bool) \
+                and math.isfinite(value):
+            if allow_zero and value < 0:
+                self.issues.append(f"{name} must be ≥ 0 (got {value})")
+            elif not allow_zero and value <= 0:
+                self.issues.append(f"{name} must be > 0 (got {value})")
+        return self
+
+    def require_in_range(self, name: str, value: Any,
+                         lo: float, hi: float, *,
+                         hint: str = "") -> "Validator":
+        self.require_finite(name, value)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) \
+                and math.isfinite(value):
+            if value < lo or value > hi:
+                tail = f" — {hint}" if hint else ""
+                self.issues.append(
+                    f"{name}={value} outside applicable range [{lo}, {hi}]{tail}"
+                )
+        return self
+
+    def require_temperature_celsius(self, name: str, value: Any) -> "Validator":
+        self.require_finite(name, value)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) \
+                and math.isfinite(value):
+            if value < ABSOLUTE_ZERO_C:
+                self.issues.append(
+                    f"{name}={value}°C below absolute zero "
+                    f"({ABSOLUTE_ZERO_C}°C)"
+                )
+        return self
+
+    def warn_if(self, condition: bool, message: str) -> "Validator":
+        if condition:
+            self.issues.append(message)
+        return self
+
+    def result(self) -> dict[str, Any]:
+        return {"passed": len(self.issues) == 0, "issues": list(self.issues)}
+
+
+# ── Result builder ──────────────────────────────────────────────────────────
+
+def build_result(*,
+                 value: float,
+                 unit: str,
+                 symbol: str,
+                 assumptions: Iterable[str],
+                 validity: dict,
+                 inputs_used: dict,
+                 provenance: dict | None = None,
+                 llm_summary: dict | None = None) -> dict:
+    out = {
+        "result":      {"value": value, "unit": unit, "symbol": symbol},
+        "assumptions": list(assumptions),
+        "validity":    validity,
+        "inputs_used": dict(inputs_used),
+    }
+    if provenance is not None:
+        out["provenance"] = dict(provenance)
+    if llm_summary is not None:
+        out["llm_summary"] = dict(llm_summary)
+    return out
+
+
+def provenance_for(*,
+                   tool_id: str,
+                   tool_canonical_name: str,
+                   tool_version: str = "1.0",
+                   citations: list[str] | None = None,
+                   ckg_node_refs: list[dict] | None = None) -> dict:
+    """Build standard provenance dict for an MF solver response.
+
+    By default, the solver references its D66 v2 MF node using the lowercase
+    namespace form, e.g. `MF-T01` → `{"label": "CKG_MF", "mf_id": "mf_t01"}`.
+    """
+    if ckg_node_refs is None:
+        mf_id_lower = tool_id.lower().replace("-", "_")
+        ckg_node_refs = [{"label": "CKG_MF", "mf_id": mf_id_lower}]
+
+    return {
+        "tool_id": tool_id,
+        "tool_canonical_name": tool_canonical_name,
+        "tool_version": tool_version,
+        "citations": list(citations or []),
+        "ckg_node_refs": list(ckg_node_refs),
+    }
+
+
+def llm_summary_for(*,
+                    value: float,
+                    unit: str,
+                    symbol: str,
+                    tool_canonical_name: str,
+                    tool_id: str,
+                    summary_zh: str | None = None,
+                    summary_en: str | None = None,
+                    confidence: float | None = None,
+                    extra_outputs: dict | None = None) -> dict:
+    """Build a compact LLM-facing summary for a solver response.
+
+    If caller-provided summaries are omitted, the default templates are:
+    zh: "{tool_canonical_name} 计算 {symbol} = {value:.4g} {unit}"
+    en: "{tool_canonical_name} computed {symbol} = {value:.4g} {unit}"
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if math.isfinite(value):
+            value_str = f"{value:.4g}"
+        elif math.isnan(value):
+            value_str = "NaN"
+        else:
+            value_str = "Inf" if value > 0 else "-Inf"
+    else:
+        value_str = repr(value)
+
+    if summary_zh is None:
+        summary_zh = (
+            f"{tool_canonical_name} 计算 {symbol} = {value_str} {unit}"
+        ).strip()
+    if summary_en is None:
+        summary_en = (
+            f"{tool_canonical_name} computed {symbol} = {value_str} {unit}"
+        ).strip()
+
+    key_outputs = {"value": value, "unit": unit, "symbol": symbol}
+    if extra_outputs:
+        key_outputs.update(extra_outputs)
+
+    return {
+        "summary_zh": summary_zh,
+        "summary_en": summary_en,
+        "key_outputs": key_outputs,
+        "confidence": confidence,
+    }
+
+
+# ── Bounds Validator ────────────────────────────────────────────────────────
+import functools
+import warnings
+from pathlib import Path
+from typing import Callable
+
+try:
+    import yaml as _yaml
+except ImportError:  # pragma: no cover - exercised only without dependency
+    _yaml = None
+
+_BOUNDS_CACHE: dict = {}
+_BOUNDS_PATH = Path(__file__).resolve().parents[2] / "config" / "solver_bounds.yaml"
+_MISSING_BOUNDS_WARNED: set[str] = set()
+_COMPOSITION_ALIAS_BOUND_NAMES = {"Xw", "Xp", "Xf", "Xc", "Xfiber", "Xa"}
+
+
+def _load_bounds() -> dict:
+    """Load solver_bounds.yaml lazily. Returns {mf_id: solver_spec}."""
+    global _BOUNDS_CACHE
+    if _BOUNDS_CACHE:
+        return _BOUNDS_CACHE
+    if _yaml is None:
+        warnings.warn(
+            "PyYAML not installed; @validate_bounds is a no-op",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        _BOUNDS_CACHE = {"_disabled": True}
+        return _BOUNDS_CACHE
+    if not _BOUNDS_PATH.exists():
+        warnings.warn(
+            f"solver_bounds.yaml missing at {_BOUNDS_PATH}; "
+            "@validate_bounds is a no-op",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        _BOUNDS_CACHE = {"_disabled": True}
+        return _BOUNDS_CACHE
+    try:
+        data = _yaml.safe_load(_BOUNDS_PATH.read_text(encoding="utf-8"))
+        _BOUNDS_CACHE = data.get("solvers", {})
+    except Exception as exc:
+        warnings.warn(
+            f"Failed to load solver_bounds.yaml: {exc}; "
+            "@validate_bounds is a no-op",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        _BOUNDS_CACHE = {"_disabled": True}
+    return _BOUNDS_CACHE
+
+
+def _check_param_bound(value: Any, spec: dict, val: Validator, name: str, *,
+                       require_finite: bool = False) -> None:
+    """Append issue if value violates spec.min/max.
+
+    Soft bounds emit a WARN-prefixed issue, which does not fail validity.
+    """
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+    ):
+        if require_finite:
+            val.issues.append(f"{name} must be finite, got {value!r}")
+        return
+
+exec
+/bin/zsh -lc "find . \\( -name 'BOOTSTRAP.md' -o -name 'SOUL.md' -o -name 'USER.md' -o -name 'MEMORY.md' -o -path './memory/*.md' -o -path './engine/solver/_common.py' \\) | sort" in /Users/jeff/culinary-mind
+ succeeded in 2190ms:
+./SOUL.md
+./USER.md
+./_archive/openclaw-legacy/MEMORY.md
+./_archive/openclaw-legacy/SOUL.md
+./_archive/openclaw-legacy/USER.md
+./engine/solver/_common.py
+./memory/2026-04-17-python-fix.md
+./memory/2026-04-17.md
+
+codex
+I have the shared `Validator` semantics now. I’m pulling the remaining workspace files list and then I’ll cross-check the 12 solvers against those validation rules so the verdicts reflect actual runtime behavior, not just the local formulas.
+exec
+/bin/zsh -lc "sed -n '261,520p' engine/solver/_common.py" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+
+    lo = spec.get("min")
+    hi = spec.get("max")
+    soft = spec.get("soft", False)
+    out_of_range = False
+    if lo is not None and value < lo:
+        out_of_range = True
+    if hi is not None and value > hi:
+        out_of_range = True
+    if out_of_range:
+        msg = f"{name}={value} outside bounds [{lo}, {hi}] {spec.get('unit', '')}"
+        if soft:
+            val.issues.append(
+                f"WARN: {msg} (soft bound; result may be extrapolated)"
+            )
+        else:
+            val.issues.append(msg)
+
+
+def _resolve_dotted(params: dict, dotted: str) -> Any:
+    """Resolve 'composition.water' -> params['composition']['water']."""
+    cur = params
+    for part in dotted.split("."):
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return None
+    return cur
+
+
+def _composition_value_for_bounds(params: dict, dotted: str, value: Any) -> Any:
+    """Normalize obvious 0-100 composition percentages for bounds checks."""
+    if not dotted.startswith("composition."):
+        return value
+    comp = params.get("composition")
+    if not isinstance(comp, dict):
+        return value
+    numbers = [
+        float(v)
+        for v in comp.values()
+        if isinstance(v, (int, float)) and not isinstance(v, bool)
+        and math.isfinite(v)
+    ]
+    total = sum(numbers)
+    if total > 10.0 and isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) / total
+    return value
+
+
+def _ratio_value_for_bounds(params: dict, name: str, value: Any) -> Any:
+    """Normalize obvious non-fraction two-part weights for bounds checks."""
+    if name not in {"w1", "w2"}:
+        return value
+    other = "w2" if name == "w1" else "w1"
+    other_value = params.get(other)
+    if not (
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        and isinstance(other_value, (int, float)) and not isinstance(other_value, bool)
+        and math.isfinite(value) and math.isfinite(other_value)
+    ):
+        return value
+    total = float(value) + float(other_value)
+    if total > 0.0 and value >= 0.0 and other_value >= 0.0:
+        return float(value) / total
+    return value
+
+
+def _scalar_composition_alias_value_for_bounds(params: dict, name: str,
+                                               value: Any) -> Any:
+    """Normalize T02 scalar composition aliases that are supplied as percents."""
+    if name not in _COMPOSITION_ALIAS_BOUND_NAMES:
+        return value
+    numbers = [
+        float(params[alias])
+        for alias in _COMPOSITION_ALIAS_BOUND_NAMES
+        if alias in params
+        and isinstance(params[alias], (int, float))
+        and not isinstance(params[alias], bool)
+        and math.isfinite(params[alias])
+    ]
+    total = sum(numbers)
+    if total > 10.0 and isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) / total
+    return value
+
+
+def _resolve_param_value(params: dict, name: str) -> Any:
+    """Resolve direct, dotted, and derived bound parameters."""
+    if name == "T_minus_Tg" and name not in params:
+        temp = params.get("T")
+        tg = params.get("Tg")
+        if (
+            isinstance(temp, (int, float)) and not isinstance(temp, bool)
+            and isinstance(tg, (int, float)) and not isinstance(tg, bool)
+            and math.isfinite(temp) and math.isfinite(tg)
+        ):
+            return float(temp) - float(tg)
+        return None
+    if "." in name:
+        value = _resolve_dotted(params, name)
+        return _composition_value_for_bounds(params, name, value)
+    value = params.get(name)
+    value = _scalar_composition_alias_value_for_bounds(params, name, value)
+    return _ratio_value_for_bounds(params, name, value)
+
+
+def _warn_missing_bounds_once(mf_id: str) -> None:
+    if mf_id in _MISSING_BOUNDS_WARNED:
+        return
+    _MISSING_BOUNDS_WARNED.add(mf_id)
+    warnings.warn(
+        f"bounds metadata missing for {mf_id}; @validate_bounds is a no-op",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
+
+def validate_bounds(mf_id: str, *, output_variant: str | None = None):
+    """Decorator wrapping solver.solve(params) with automatic bounds checks.
+
+    Usage:
+        @validate_bounds("MF-T01")
+        def solve(params: dict) -> dict: ...
+
+    For multi-output T02 split:
+        @validate_bounds("MF-T02", output_variant="mf_t02_k")
+        def solve(params: dict) -> dict: ...
+
+    Behavior:
+        - Pre-call: load bounds.yaml[mf_id]; for each input spec, check params
+          value against [min, max]. Soft bounds emit "WARN:" issues.
+        - Post-call: check returned result.value against output bounds.
+        - Failure mode: append val.issues, never raise.
+        - Soft fallback: missing yaml / missing mf_id / yaml-load error
+          becomes no-op + RuntimeWarning.
+    """
+    def deco(fn: Callable) -> Callable:
+        @functools.wraps(fn)
+        def wrapper(params: dict) -> dict:
+            bounds = _load_bounds()
+            spec = bounds.get(mf_id, {}) if not bounds.get("_disabled") else {}
+            if not spec and not bounds.get("_disabled"):
+                _warn_missing_bounds_once(mf_id)
+
+            pre_issues: list[str] = []
+            for inp in spec.get("inputs", []) or []:
+                name = inp["name"]
+                value = _resolve_param_value(params, name)
+                if value is None:
+                    continue
+                tmp_val = Validator()
+                _check_param_bound(value, inp, tmp_val, name)
+                pre_issues.extend(tmp_val.issues)
+
+            result = fn(params)
+
+            if "validity" in result and isinstance(result["validity"], dict):
+                existing = list(result["validity"].get("issues", []))
+                existing.extend(pre_issues)
+
+                out_spec = None
+                if output_variant and "outputs_by_variant" in spec:
+                    out_spec = spec["outputs_by_variant"].get(output_variant)
+                else:
+                    out_spec = spec.get("output")
+
+                if out_spec and "result" in result and "value" in result["result"]:
+                    val_check = result["result"]["value"]
+                    tmp = Validator()
+                    _check_param_bound(
+                        val_check,
+                        out_spec,
+                        tmp,
+                        out_spec.get("symbol", "result.value"),
+                        require_finite=True,
+                    )
+                    existing.extend(tmp.issues)
+
+                result["validity"]["issues"] = existing
+                result["validity"]["passed"] = not any(
+                    not issue.startswith("WARN:") for issue in existing
+                )
+
+            return result
+        return wrapper
+    return deco
+
+exec
+/bin/zsh -lc "python - <<'PY'
+import yaml, json
+from pathlib import Path
+p=Path('config/solver_bounds.yaml')
+if not p.exists():
+    print('NO_BOUNDS')
+else:
+    data=yaml.safe_load(p.read_text())['solvers']
+    for mf in ['MF-T06','MF-K06','MF-T07','MF-T10','MF-M07','MF-M08','MF-T08','MF-K07','MF-T09','MF-M09','MF-M11','MF-M10']:
+        print('====', mf, '====')
+        print(json.dumps(data.get(mf, {}), indent=2, ensure_ascii=False))
+PY" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+==== MF-T06 ====
+{
+  "canonical_name": "Protein_Denaturation",
+  "inputs": [
+    {
+      "name": "T_d",
+      "min": 30.0,
+      "max": 130.0,
+      "unit": "°C",
+      "source": "P3 Tier 1 — DSC midpoint"
+    },
+    {
+      "name": "dH_d",
+      "min": 50.0,
+      "max": 2000.0,
+      "unit": "kJ/mol",
+      "source": "P3 Tier 1"
+    },
+    {
+      "name": "T_C",
+      "min": -20.0,
+      "max": 250.0,
+      "unit": "°C",
+      "source": "P3 Tier 1"
+    },
+    {
+      "name": "T_c",
+      "min": -20.0,
+      "max": 250.0,
+      "unit": "°C",
+      "source": "P3 Tier 1 alias"
+    },
+    {
+      "name": "sigma_override",
+      "min": 0.01,
+      "max": 50.0,
+      "unit": "°C",
+      "source": "P3 Tier 1 optional"
+    }
+  ],
+  "output": {
+    "symbol": "f_native",
+    "min": 0.0,
+    "max": 1.0,
+    "unit": "dimensionless"
+  }
+}
+==== MF-K06 ====
+{
+  "canonical_name": "Growth_Limit",
+  "inputs": [
+    {
+      "name": "pH_min",
+      "min": 1.0,
+      "max": 14.0,
+      "unit": "pH",
+      "source": "P3 Tier 1"
+    },
+    {
+      "name": "a_w_min",
+      "min": 0.5,
+      "max": 1.0,
+      "unit": "dimensionless",
+      "source": "P3 Tier 1"
+    },
+    {
+      "name": "T_min",
+      "min": -10.0,
+      "max": 60.0,
+      "unit": "°C",
+      "source": "P3 Tier 1"
+    },
+    {
+      "name": "MIC",
+      "min": 0.001,
+      "max": 100000.0,
+      "unit": "ppm",
+      "source": "P3 Tier 1"
+    },
+    {
+      "name": "pH",
+      "min": 0.0,
+      "max": 14.0,
+      "unit": "pH",
+      "source": "P3 Tier 1 current"
+    },
+    {
+      "name": "a_w",
+      "min": 0.0,
+      "max": 1.0,
+      "unit": "dimensionless",
+      "source": "P3 Tier 1 current"
+    },
+    {
+      "name": "T_C",
+      "min": -30.0,
+      "max": 100.0,
+      "unit": "°C",
+      "source": "P3 Tier 1 current"
+    },
+    {
+      "name": "T_c",
+      "min": -30.0,
+      "max": 100.0,
+      "unit": "°C",
+      "source": "P3 Tier 1 alias"
+    },
+    {
+      "name": "substance_conc",
+      "min": 0.0,
+      "max": 1000000.0,
+      "unit": "ppm",
+      "source": "P3 Tier 1"
+    }
+  ],
+  "output": {
+    "symbol": "growth_inhibited",
+    "min": 0.0,
+    "max": 1.0,
+    "unit": "boolean"
+  }
+}
+==== MF-T07 ====
+{
+  "canonical_name": "Dielectric_Properties",
+  "inputs": [
+    {
+      "name": "epsilon_double_prime",
+      "min": 0.0,
+      "max": 100.0,
+      "unit": "dimensionless",
+      "source": "P3 Tier 1"
+    },
+    {
+      "name": "epsilon_pp",
+      "min": 0.0,
+      "max": 100.0,
+      "unit": "dimensionless",
+      "source": "P3 Tier 1 alias"
+    },
+    {
+      "name": "frequency",
+      "min": 1000000.0,
+      "max": 30000000000.0,
+      "unit": "Hz",
+      "source": "P3 Tier 1 (RF/MW)"
+    },
+    {
+      "name": "f",
+      "min": 1000000.0,
+      "max": 30000000000.0,
+      "unit": "Hz",
+      "source": "P3 Tier 1 alias"
+    },
+    {
+      "name": "E_field",
+      "min": 0.0,
+      "max": 1000000.0,
+      "unit": "V/m",
+      "source": "P3 Tier 1"
+    },
+    {
+      "name": "E",
+      "min": 0.0,
+      "max": 1000000.0,
+      "unit": "V/m",
+      "source": "P3 Tier 1 alias"
+    }
+  ],
+  "output": {
+    "symbol": "P_abs",
+    "min": 0.0,
+    "max": 1000000000.0,
+    "unit": "W/m³"
+  }
+}
+==== MF-T10 ====
+{
+  "canonical_name": "Starch_Gelatinization",
+  "inputs": [
+    {
+      "name": "T_C",
+      "min": 0.0,
+      "max": 150.0,
+      "unit": "°C",
+      "source": "P3 Tier 1"
+    },
+    {
+      "name": "T_c",
+      "min": 0.0,
+      "max": 150.0,
+      "unit": "°C",
+      "source": "P3 Tier 1 alias"
+    },
+    {
+      "name": "time",
+      "min": 0.0,
+      "max": 86400.0,
+      "unit": "s",
+      "source": "P3 Tier 1"
+    },
+    {
+      "name": "t",
+      "min": 0.0,
+      "max": 86400.0,
+      "unit": "s",
+      "source": "P3 Tier 1 alias"
+    },
+    {
+      "name": "A",
+      "min": 0.001,
+      "max": 1e+30,
+      "unit": "s⁻¹",
+      "source": "P3 Tier 1 Arrhenius preexp"
+    },
+    {
+      "name": "Ea",
+      "min": 0.0,
+      "max": 500000.0,
+      "unit": "J/mol",
+      "source": "P3 Tier 1"
+    },
+    {
+      "name": "n",
+      "min": 0.1,
+      "max": 5.0,
+      "unit": "dimensionless",
+      "source": "P3 Tier 1 Avrami exp"
+    },
+    {
+      "name": "water_content",
+      "min": 0.0,
+      "max": 1.0,
+      "unit": "mass fraction",
+      "source": "P3 Tier 1 advisory"
+    }
+  ],
+  "output": {
+    "symbol": "alpha",
+    "min": 0.0,
+    "max": 1.0,
+    "unit": "dimensionless"
+  }
+}
+==== MF-M07 ====
+{
+  "canonical_name": "Solubility_Partition",
+  "inputs": [
+    {
+      "name": "logP",
+      "min": -5.0,
+      "max": 10.0,
+      "unit": "dimensionless",
+      "source": "P3 Tier 2"
+    },
+    {
+      "name": "log_p",
+      "min": -5.0,
+      "max": 10.0,
+      "unit": "dimensionless",
+      "source": "P3 Tier 2 alias"
+    },
+    {
+      "name": "S_water",
+      "min": 1e-12,
+      "max": 100.0,
+      "unit": "mol/L",
+      "source": "P3 Tier 2"
+    },
+    {
+      "name": "T_C",
+      "min": 0.0,
+      "max": 100.0,
+      "unit": "°C",
+      "source": "P3 Tier 2"
+    },
+    {
+      "name": "T_c",
+      "min": 0.0,
+      "max": 100.0,
+      "unit": "°C",
+      "source": "P3 Tier 2 alias"
+    }
+  ],
+  "output": {
+    "symbol": "K_partition",
+    "min": 1e-05,
+    "max": 10000000000.0,
+    "unit": "dimensionless"
+  }
+}
+==== MF-M08 ====
+{
+  "canonical_name": "Gas_Permeability",
+  "inputs": [
+    {
+      "name": "P_O2",
+      "min": 1e-05,
+      "max": 10000.0,
+      "unit": "cm³·mil/(m²·day·atm)",
+      "source": "P3 Tier 2"
+    },
+    {
+      "name": "P_CO2",
+      "min": 1e-05,
+      "max": 50000.0,
+      "unit": "cm³·mil/(m²·day·atm)",
+      "source": "P3 Tier 2"
+    },
+    {
+      "name": "permeability",
+      "min": 1e-05,
+      "max": 50000.0,
+      "unit": "input units",
+      "source": "P3 Tier 2 generic"
+    },
+    {
+      "name": "thickness",
+      "min": 1e-06,
+      "max": 0.01,
+      "unit": "m",
+      "source": "P3 Tier 2"
+    },
+    {
+      "name": "delta_p",
+      "min": 0.0,
+      "max": 100.0,
+      "unit": "atm",
+      "source": "P3 Tier 2"
+    },
+    {
+      "name": "T_C",
+      "min": -30.0,
+      "max": 60.0,
+      "unit": "°C",
+      "source": "P3 Tier 2"
+    },
+    {
+      "name": "RH",
+      "min": 0.0,
+      "max": 100.0,
+      "unit": "%",
+      "source": "P3 Tier 2"
+    }
+  ],
+  "output": {
+    "symbol": "Q_perm",
+    "min": 0.0,
+    "max": 10000000000.0,
+    "unit": "permeability·atm/m"
+  }
+}
+==== MF-T08 ====
+{
+  "canonical_name": "Ohmic_Heating",
+  "inputs": [
+    {
+      "name": "sigma_25",
+      "min": 0.001,
+      "max": 10.0,
+      "unit": "S/m",
+      "source": "P3 Tier 2"
+    },
+    {
+      "name": "sigma_T",
+      "min": 0.001,
+      "max": 10.0,
+      "unit": "S/m",
+      "source": "P3 Tier 2 alias"
+    },
+    {
+      "name": "sigma",
+      "min": 0.001,
+      "max": 10.0,
+      "unit": "S/m",
+      "source": "P3 Tier 2 alias"
+    },
+    {
+      "name": "alpha",
+      "min": -0.1,
+      "max": 0.5,
+      "unit": "1/°C",
+      "source": "P3 Tier 2"
+    },
+    {
+      "name": "E_field",
+      "min": 0.0,
+      "max": 10000.0,
+      "unit": "V/m",
+      "source": "P3 Tier 2"
+    },
+    {
+      "name": "E",
+      "min": 0.0,
+      "max": 10000.0,
+      "unit": "V/m",
+      "source": "P3 Tier 2 alias"
+    },
+    {
+      "name": "T_C",
+      "min": 0.0,
+      "max": 150.0,
+      "unit": "°C",
+      "source": "P3 Tier 2"
+    },
+    {
+      "name": "T_c",
+      "min": 0.0,
+      "max": 150.0,
+      "unit": "°C",
+      "source": "P3 Tier 2 alias"
+    }
+  ],
+  "output": {
+    "symbol": "Q_dot",
+    "min": 0.0,
+    "max": 1000000000.0,
+    "unit": "W/m³"
+  }
+}
+==== MF-K07 ====
+{
+  "canonical_name": "Binding_Equilibrium",
+  "inputs": [
+    {
+      "name": "K_a",
+      "min": 1.0,
+      "max": 1000000000.0,
+      "unit": "L/mol",
+      "source": "P3 Tier 2"
+    },
+    {
+      "name": "Ka",
+      "min": 1.0,
+      "max": 1000000000.0,
+      "unit": "L/mol",
+      "source": "P3 Tier 2 alias"
+    },
+    {
+      "name": "K_d",
+      "min": 1e-09,
+      "max": 1.0,
+      "unit": "mol/L",
+      "source": "P3 Tier 2"
+    },
+    {
+      "name": "Kd",
+      "min": 1e-09,
+      "max": 1.0,
+      "unit": "mol/L",
+      "source": "P3 Tier 2 alias"
+    },
+    {
+      "name": "L_total",
+      "min": 1e-09,
+      "max": 1.0,
+      "unit": "mol/L",
+      "source": "P3 Tier 2"
+    },
+    {
+      "name": "L",
+      "min": 1e-09,
+      "max": 1.0,
+      "unit": "mol/L",
+      "source": "P3 Tier 2 alias"
+    },
+    {
+      "name": "P_total",
+      "min": 1e-09,
+      "max": 1.0,
+      "unit": "mol/L",
+      "source": "P3 Tier 2"
+    },
+    {
+      "name": "P",
+      "min": 1e-09,
+      "max": 1.0,
+      "unit": "mol/L",
+      "source": "P3 Tier 2 alias"
+    }
+  ],
+  "output": {
+    "symbol": "f_bound",
+    "min": 0.0,
+    "max": 1.0,
+    "unit": "dimensionless"
+  }
+}
+==== MF-T09 ====
+{
+  "canonical_name": "Respiration_Heat",
+  "inputs": [
+    {
+      "name": "a",
+      "min": 0.001,
+      "max": 10.0,
+      "unit": "W/kg",
+      "source": "P3 Tier 3"
+    },
+    {
+      "name": "a_coef",
+      "min": 0.001,
+      "max": 10.0,
+      "unit": "W/kg",
+      "source": "P3 Tier 3 alias"
+    },
+    {
+      "name": "b",
+      "min": 0.0,
+      "max": 0.2,
+      "unit": "1/°C",
+      "source": "P3 Tier 3"
+    },
+    {
+      "name": "b_coef",
+      "min": 0.0,
+      "max": 0.2,
+      "unit": "1/°C",
+      "source": "P3 Tier 3 alias"
+    },
+    {
+      "name": "T_C",
+      "min": -5.0,
+      "max": 35.0,
+      "unit": "°C",
+      "source": "P3 Tier 3"
+    },
+    {
+      "name": "T_c",
+      "min": -5.0,
+      "max": 35.0,
+      "unit": "°C",
+      "source": "P3 Tier 3 alias"
+    }
+  ],
+  "output": {
+    "symbol": "Q_resp",
+    "min": 0.0,
+    "max": 1000.0,
+    "unit": "W/kg"
+  }
+}
+==== MF-M09 ====
+{
+  "canonical_name": "Osmotic_Pressure",
+  "inputs": [
+    {
+      "name": "M",
+      "min": 0.0,
+      "max": 10.0,
+      "unit": "mol/L",
+      "source": "P3 Tier 3"
+    },
+    {
+      "name": "M_osmolar",
+      "min": 0.0,
+      "max": 10.0,
+      "unit": "mol/L",
+      "source": "P3 Tier 3 alias"
+    },
+    {
+      "name": "c",
+      "min": 0.0,
+      "max": 10.0,
+      "unit": "mol/L",
+      "source": "P3 Tier 3 alias"
+    },
+    {
+      "name": "T_K",
+      "min": 250.0,
+      "max": 400.0,
+      "unit": "K",
+      "source": "P3 Tier 3"
+    },
+    {
+      "name": "T_C",
+      "min": -20.0,
+      "max": 100.0,
+      "unit": "°C",
+      "source": "P3 Tier 3"
+    },
+    {
+      "name": "T_c",
+      "min": -20.0,
+      "max": 100.0,
+      "unit": "°C",
+      "source": "P3 Tier 3 alias"
+    },
+    {
+      "name": "i",
+      "min": 0.5,
+      "max": 10.0,
+      "unit": "dimensionless",
+      "source": "P3 Tier 3 van't Hoff factor"
+    }
+  ],
+  "output": {
+    "symbol": "pi",
+    "min": 0.0,
+    "max": 500000000.0,
+    "unit": "Pa"
+  }
+}
+==== MF-M11 ====
+{
+  "canonical_name": "SCFE_Solubility",
+  "inputs": [
+    {
+      "name": "rho_CO2",
+      "min": 200.0,
+      "max": 1100.0,
+      "unit": "kg/m³",
+      "source": "P3 Tier 3"
+    },
+    {
+      "name": "rho",
+      "min": 200.0,
+      "max": 1100.0,
+      "unit": "kg/m³",
+      "source": "P3 Tier 3 alias"
+    },
+    {
+      "name": "T_K",
+      "min": 304.0,
+      "max": 500.0,
+      "unit": "K",
+      "source": "P3 Tier 3 (above critical)"
+    },
+    {
+      "name": "T_C",
+      "min": 31.0,
+      "max": 200.0,
+      "unit": "°C",
+      "source": "P3 Tier 3"
+    },
+    {
+      "name": "T_c",
+      "min": 31.0,
+      "max": 200.0,
+      "unit": "°C",
+      "source": "P3 Tier 3 alias"
+    },
+    {
+      "name": "k",
+      "min": 0.0,
+      "max": 50.0,
+      "unit": "dimensionless",
+      "source": "P3 Tier 3 Chrastil exponent"
+    },
+    {
+      "name": "a",
+      "min": -10000.0,
+      "max": 10000.0,
+      "unit": "K",
+      "source": "P3 Tier 3 Chrastil"
+    },
+    {
+      "name": "b",
+      "min": -100.0,
+      "max": 100.0,
+      "unit": "dimensionless",
+      "source": "P3 Tier 3 Chrastil"
+    }
+  ],
+  "output": {
+    "symbol": "y_solute",
+    "min": 0.0,
+    "max": 1.0,
+    "unit": "dimensionless (mole fraction)"
+  }
+}
+==== MF-M10 ====
+{
+  "canonical_name": "Membrane_Transport",
+  "inputs": [
+    {
+      "name": "P_solute",
+      "min": 1e-12,
+      "max": 0.0001,
+      "unit": "m/s",
+      "source": "P3 Tier 3"
+    },
+    {
+      "name": "P",
+      "min": 1e-12,
+      "max": 0.0001,
+      "unit": "m/s",
+      "source": "P3 Tier 3 alias"
+    },
+    {
+      "name": "thickness",
+      "min": 1e-09,
+      "max": 0.001,
+      "unit": "m",
+      "source": "P3 Tier 3"
+    },
+    {
+      "name": "L",
+      "min": 1e-09,
+      "max": 0.001,
+      "unit": "m",
+      "source": "P3 Tier 3 alias"
+    },
+    {
+      "name": "dC",
+      "min": -10000.0,
+      "max": 10000.0,
+      "unit": "mol/m³",
+      "source": "P3 Tier 3"
+    },
+    {
+      "name": "dc",
+      "min": -10000.0,
+      "max": 10000.0,
+      "unit": "mol/m³",
+      "source": "P3 Tier 3 alias"
+    },
+    {
+      "name": "delta_c",
+      "min": -10000.0,
+      "max": 10000.0,
+      "unit": "mol/m³",
+      "source": "P3 Tier 3 alias"
+    }
+  ],
+  "output": {
+    "symbol": "J_solute",
+    "min": -1000.0,
+    "max": 1000.0,
+    "unit": "mol/(m²·s)"
+  }
+}
+
+codex
+I’ve got the bounds metadata too. Now I’m mapping each solver against the actual bound ranges and looking for places where the implementation can silently return invalid physics, mark a warning as an error, or miss a stability failure.
+exec
+/bin/zsh -lc 'for f in engine/solver/mf_t06.py engine/solver/mf_k06.py engine/solver/mf_t07.py engine/solver/mf_t10.py engine/solver/mf_m07.py engine/solver/mf_m08.py engine/solver/mf_t08.py engine/solver/mf_k07.py engine/solver/mf_t09.py engine/solver/mf_m09.py engine/solver/mf_m11.py engine/solver/mf_m10.py; do echo "===== $f ====="; nl -ba "$f" | sed -n '"'1,220p'; done" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+===== engine/solver/mf_t06.py =====
+     1	"""MF-T06 Protein_Denaturation — sigmoid (van't Hoff / DSC) model.
+     2	
+     3	Formula:
+     4	    f_native(T) = 1 / (1 + exp((T_C - T_d) / sigma))
+     5	
+     6	where sigma is the transition steepness derived from the denaturation
+     7	enthalpy via the van 't Hoff relation:
+     8	
+     9	    sigma ≈ R · T_d_K² / dH_d   (units: K)
+    10	
+    11	Inputs:
+    12	    T_d [°C]:    midpoint denaturation temperature
+    13	    dH_d [kJ/mol]: van 't Hoff enthalpy (controls steepness)
+    14	    T_C [°C]:    current temperature
+    15	    sigma_override [°C, optional]: bypass dH_d-derived steepness
+    16	
+    17	Output:
+    18	    f_native (native protein fraction in [0, 1])
+    19	
+    20	References:
+    21	    - Privalov & Khechinashvili (1974) Stability of proteins
+    22	    - Belitz et al., Food Chemistry §1 (protein denaturation)
+    23	"""
+    24	
+    25	from __future__ import annotations
+    26	
+    27	import math
+    28	from typing import Any
+    29	
+    30	from ._common import (
+    31	    Validator,
+    32	    build_result,
+    33	    llm_summary_for,
+    34	    provenance_for,
+    35	    validate_bounds,
+    36	)
+    37	
+    38	TOOL_ID = "MF-T06"
+    39	TOOL_CANONICAL_NAME = "Protein_Denaturation"
+    40	CITATIONS = [
+    41	    "Privalov & Khechinashvili (1974) J Mol Biol — protein stability",
+    42	    "Belitz, Grosch, Schieberle, Food Chemistry §1.4 — denaturation",
+    43	    "Singh & Heldman, Intro to Food Engineering — thermal kinetics",
+    44	]
+    45	
+    46	_R_GAS_J = 8.31446261815324  # J/(mol·K)
+    47	
+    48	
+    49	@validate_bounds("MF-T06")
+    50	def solve(params: dict) -> dict:
+    51	    """Compute native protein fraction f_native at temperature T_C."""
+    52	    val = Validator()
+    53	    assumptions: list[str] = [
+    54	        "two-state native ⇌ denatured equilibrium",
+    55	        "van 't Hoff transition centered at T_d",
+    56	        "sigma derived from dH_d unless explicitly overridden",
+    57	    ]
+    58	
+    59	    t_d = params.get("T_d")
+    60	    dh_d = params.get("dH_d")
+    61	    t_c = params.get("T_C", params.get("T_c"))
+    62	    sigma_override = params.get("sigma_override")
+    63	
+    64	    val.require_temperature_celsius("T_d", t_d)
+    65	    val.require_temperature_celsius("T_C", t_c)
+    66	    val.require_positive("dH_d", dh_d)
+    67	    if sigma_override is not None:
+    68	        val.require_positive("sigma_override", sigma_override)
+    69	
+    70	    f_native: float | None = None
+    71	    if (
+    72	        all(
+    73	            isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    74	            for x in (t_d, t_c, dh_d)
+    75	        )
+    76	        and dh_d > 0
+    77	    ):
+    78	        if sigma_override is not None and isinstance(sigma_override, (int, float)) \
+    79	                and not isinstance(sigma_override, bool) and math.isfinite(sigma_override) \
+    80	                and sigma_override > 0:
+    81	            sigma = float(sigma_override)
+    82	            assumptions.append("sigma supplied via sigma_override")
+    83	        else:
+    84	            # van 't Hoff steepness: sigma ≈ R T_d_K² / dH_d (in K, equiv to °C)
+    85	            t_d_k = float(t_d) + 273.15
+    86	            dh_d_j = float(dh_d) * 1000.0  # kJ/mol → J/mol
+    87	            sigma = _R_GAS_J * t_d_k * t_d_k / dh_d_j
+    88	            assumptions.append(
+    89	                f"sigma from van 't Hoff: R·T_d²/dH_d = {sigma:.3g}°C"
+    90	            )
+    91	
+    92	        # Clamp argument to avoid math.exp overflow on extreme T_C
+    93	        arg = (float(t_c) - float(t_d)) / sigma
+    94	        if arg > 700.0:
+    95	            f_native = 0.0
+    96	        elif arg < -700.0:
+    97	            f_native = 1.0
+    98	        else:
+    99	            f_native = 1.0 / (1.0 + math.exp(arg))
+   100	
+   101	    return build_result(
+   102	        value=f_native if f_native is not None else float("nan"),
+   103	        unit="dimensionless",
+   104	        symbol="f_native",
+   105	        assumptions=assumptions,
+   106	        validity=val.result(),
+   107	        inputs_used={
+   108	            "T_d": t_d,
+   109	            "dH_d": dh_d,
+   110	            "T_C": t_c,
+   111	            "sigma_override": sigma_override,
+   112	        },
+   113	        provenance=provenance_for(
+   114	            tool_id=TOOL_ID,
+   115	            tool_canonical_name=TOOL_CANONICAL_NAME,
+   116	            citations=CITATIONS,
+   117	        ),
+   118	        llm_summary=llm_summary_for(
+   119	            value=f_native if f_native is not None else float("nan"),
+   120	            unit="dimensionless",
+   121	            symbol="f_native",
+   122	            tool_canonical_name=TOOL_CANONICAL_NAME,
+   123	            tool_id=TOOL_ID,
+   124	        ),
+   125	    )
+===== engine/solver/mf_k06.py =====
+     1	"""MF-K06 Growth_Limit — microbial growth boundary check.
+     2	
+     3	Decision rule:
+     4	    growth = (pH ≥ pH_min) ∧ (a_w ≥ a_w_min) ∧ (T_C ≥ T_min) ∧ ([substance] ≤ MIC)
+     5	
+     6	A given combination of (pH, a_w, T_C, substance_conc) is "growth-inhibited"
+     7	when ANY of the minimum-condition thresholds fails OR substance ≥ MIC.
+     8	
+     9	Inputs (limits — supply at least one):
+    10	    pH_min, a_w_min, T_min, MIC
+    11	
+    12	Inputs (current condition — match supplied limits):
+    13	    pH, a_w, T_C, substance_conc
+    14	
+    15	Output:
+    16	    growth_inhibited (bool encoded as 0.0/1.0; 1.0 = inhibited)
+    17	    + extra_outputs.margins for each axis
+    18	
+    19	References:
+    20	    - ICMSF Microorganisms in Foods 6, growth limit tables
+    21	    - Pitt & Hocking Fungi and Food Spoilage Ch.5
+    22	"""
+    23	
+    24	from __future__ import annotations
+    25	
+    26	import math
+    27	from typing import Any
+    28	
+    29	from ._common import (
+    30	    Validator,
+    31	    build_result,
+    32	    llm_summary_for,
+    33	    provenance_for,
+    34	    validate_bounds,
+    35	)
+    36	
+    37	TOOL_ID = "MF-K06"
+    38	TOOL_CANONICAL_NAME = "Growth_Limit"
+    39	CITATIONS = [
+    40	    "ICMSF (2018) Microorganisms in Foods 6 — growth/no-growth limits",
+    41	    "Pitt & Hocking (2009) Fungi and Food Spoilage Ch.5",
+    42	    "FDA Bad Bug Book — minimum growth conditions",
+    43	]
+    44	
+    45	
+    46	@validate_bounds("MF-K06")
+    47	def solve(params: dict) -> dict:
+    48	    """Check whether condition (pH, a_w, T, substance) inhibits growth."""
+    49	    val = Validator()
+    50	    assumptions: list[str] = [
+    51	        "AND combination of all supplied limits (hurdle technology)",
+    52	        "MIC is for the test substance only (preservative or antimicrobial)",
+    53	    ]
+    54	
+    55	    # Limits
+    56	    ph_min = params.get("pH_min")
+    57	    aw_min = params.get("a_w_min")
+    58	    t_min = params.get("T_min")
+    59	    mic = params.get("MIC")
+    60	
+    61	    # Current conditions
+    62	    ph = params.get("pH")
+    63	    aw = params.get("a_w")
+    64	    t_c = params.get("T_C", params.get("T_c"))
+    65	    subs_conc = params.get("substance_conc")
+    66	
+    67	    # At least one limit/condition pair must be supplied
+    68	    pairs = [
+    69	        ("pH", ph, "pH_min", ph_min),
+    70	        ("a_w", aw, "a_w_min", aw_min),
+    71	        ("T_C", t_c, "T_min", t_min),
+    72	        ("substance_conc", subs_conc, "MIC", mic),
+    73	    ]
+    74	    supplied = [(n_v, v, n_l, l) for n_v, v, n_l, l in pairs if l is not None]
+    75	    if not supplied:
+    76	        val.issues.append("at least one of pH_min/a_w_min/T_min/MIC required")
+    77	
+    78	    # Validate finiteness on supplied limits + their paired current value
+    79	    for n_v, v, n_l, l in supplied:
+    80	        val.require_finite(n_l, l)
+    81	        if v is None:
+    82	            val.issues.append(f"{n_v} required when {n_l} supplied")
+    83	        else:
+    84	            val.require_finite(n_v, v)
+    85	
+    86	    # Range checks
+    87	    if ph is not None and isinstance(ph, (int, float)) and not isinstance(ph, bool) and math.isfinite(ph):
+    88	        val.require_in_range("pH", ph, 0.0, 14.0)
+    89	    if aw is not None and isinstance(aw, (int, float)) and not isinstance(aw, bool) and math.isfinite(aw):
+    90	        val.require_in_range("a_w", aw, 0.0, 1.0)
+    91	
+    92	    margins: dict[str, float] = {}
+    93	    inhibited = False
+    94	    if supplied and not val.issues:
+    95	        for n_v, v, n_l, l in supplied:
+    96	            if n_v == "substance_conc":
+    97	                # substance_conc inhibits when ≥ MIC
+    98	                margin = float(v) - float(l)  # positive means above MIC → inhibited
+    99	                margins[f"{n_v}_minus_{n_l}"] = margin
+   100	                if margin >= 0:
+   101	                    inhibited = True
+   102	            else:
+   103	                # pH/a_w/T_C inhibit when < min
+   104	                margin = float(v) - float(l)  # positive means above min → growth ok
+   105	                margins[f"{n_v}_minus_{n_l}"] = margin
+   106	                if margin < 0:
+   107	                    inhibited = True
+   108	        if inhibited:
+   109	            assumptions.append("growth inhibited by at least one hurdle")
+   110	        else:
+   111	            assumptions.append("all supplied conditions permit growth")
+   112	
+   113	    value = 1.0 if inhibited else 0.0
+   114	
+   115	    return build_result(
+   116	        value=value if not val.issues else float("nan"),
+   117	        unit="boolean (1=inhibited, 0=growth-permitted)",
+   118	        symbol="growth_inhibited",
+   119	        assumptions=assumptions,
+   120	        validity=val.result(),
+   121	        inputs_used={
+   122	            "pH_min": ph_min, "a_w_min": aw_min, "T_min": t_min, "MIC": mic,
+   123	            "pH": ph, "a_w": aw, "T_C": t_c, "substance_conc": subs_conc,
+   124	        },
+   125	        provenance=provenance_for(
+   126	            tool_id=TOOL_ID,
+   127	            tool_canonical_name=TOOL_CANONICAL_NAME,
+   128	            citations=CITATIONS,
+   129	        ),
+   130	        llm_summary=llm_summary_for(
+   131	            value=value if not val.issues else float("nan"),
+   132	            unit="boolean",
+   133	            symbol="growth_inhibited",
+   134	            tool_canonical_name=TOOL_CANONICAL_NAME,
+   135	            tool_id=TOOL_ID,
+   136	            extra_outputs={"margins": margins},
+   137	        ),
+   138	    )
+===== engine/solver/mf_t07.py =====
+     1	"""MF-T07 Dielectric_Properties — RF/Microwave volumetric heating.
+     2	
+     3	Formula:
+     4	    P_abs = 2 · π · f · ε₀ · ε'' · |E|²
+     5	
+     6	where:
+     7	    f       [Hz]  — RF or microwave frequency
+     8	    ε''     [-]   — dielectric loss factor
+     9	    |E|     [V/m] — local electric field magnitude
+    10	    ε₀      = 8.8541878128e-12 F/m  (permittivity of free space)
+    11	    P_abs   [W/m³] — volumetric absorbed power density
+    12	
+    13	Inputs:
+    14	    epsilon_double_prime
+    15	    frequency [Hz]
+    16	    E_field [V/m]
+    17	
+    18	Output:
+    19	    P_abs (volumetric absorbed power, W/m³)
+    20	
+    21	References:
+    22	    - Singh & Heldman Ch.5 — Microwave processing
+    23	    - Datta & Davidson (2000) Microwave food processing
+    24	    - Buffler (1993) Microwave Cooking & Processing
+    25	"""
+    26	
+    27	from __future__ import annotations
+    28	
+    29	import math
+    30	from typing import Any
+    31	
+    32	from ._common import (
+    33	    Validator,
+    34	    build_result,
+    35	    llm_summary_for,
+    36	    provenance_for,
+    37	    validate_bounds,
+    38	)
+    39	
+    40	TOOL_ID = "MF-T07"
+    41	TOOL_CANONICAL_NAME = "Dielectric_Properties"
+    42	CITATIONS = [
+    43	    "Singh & Heldman, Intro Food Engineering Ch.5 — microwave",
+    44	    "Datta & Davidson (2000) J Food Sci 65:1 — MW food processing",
+    45	    "Buffler, Microwave Cooking & Processing (1993)",
+    46	]
+    47	
+    48	_EPSILON_0 = 8.8541878128e-12  # F/m
+    49	
+    50	
+    51	@validate_bounds("MF-T07")
+    52	def solve(params: dict) -> dict:
+    53	    """Compute volumetric absorbed power density P_abs."""
+    54	    val = Validator()
+    55	    assumptions: list[str] = [
+    56	        "uniform |E| within the volume element",
+    57	        "ε'' treated as effective dielectric loss factor",
+    58	        "no magnetic loss contribution (non-magnetic food)",
+    59	    ]
+    60	
+    61	    eps2 = params.get("epsilon_double_prime", params.get("epsilon_pp"))
+    62	    freq = params.get("frequency", params.get("f"))
+    63	    e_field = params.get("E_field", params.get("E"))
+    64	
+    65	    val.require_positive("epsilon_double_prime", eps2, allow_zero=True)
+    66	    val.require_positive("frequency", freq)
+    67	    val.require_positive("E_field", e_field, allow_zero=True)
+    68	
+    69	    p_abs: float | None = None
+    70	    if all(
+    71	        isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    72	        for x in (eps2, freq, e_field)
+    73	    ) and eps2 >= 0 and freq > 0 and e_field >= 0:
+    74	        p_abs = 2.0 * math.pi * float(freq) * _EPSILON_0 * float(eps2) * float(e_field) ** 2
+    75	
+    76	    return build_result(
+    77	        value=p_abs if p_abs is not None else float("nan"),
+    78	        unit="W/m³",
+    79	        symbol="P_abs",
+    80	        assumptions=assumptions,
+    81	        validity=val.result(),
+    82	        inputs_used={
+    83	            "epsilon_double_prime": eps2,
+    84	            "frequency": freq,
+    85	            "E_field": e_field,
+    86	        },
+    87	        provenance=provenance_for(
+    88	            tool_id=TOOL_ID,
+    89	            tool_canonical_name=TOOL_CANONICAL_NAME,
+    90	            citations=CITATIONS,
+    91	        ),
+    92	        llm_summary=llm_summary_for(
+    93	            value=p_abs if p_abs is not None else float("nan"),
+    94	            unit="W/m³",
+    95	            symbol="P_abs",
+    96	            tool_canonical_name=TOOL_CANONICAL_NAME,
+    97	            tool_id=TOOL_ID,
+    98	        ),
+    99	    )
+===== engine/solver/mf_t10.py =====
+     1	"""MF-T10 Starch_Gelatinization — Avrami-like extent kinetics.
+     2	
+     3	Formula:
+     4	    α(t) = 1 - exp(-k(T) · t^n)
+     5	    k(T) = A · exp(-Ea/(R·T_K))
+     6	
+     7	Inputs:
+     8	    T_C [°C]          — current temperature
+     9	    time [s]          — heating time
+    10	    A [s^-1]          — Avrami pre-exponential
+    11	    Ea [J/mol]        — activation energy
+    12	    n [-]             — Avrami exponent (typical 1.0–3.0)
+    13	    water_content [-] — H₂O mass fraction (advisory; gelatinization needs ≥ ~0.5)
+    14	
+    15	Output:
+    16	    alpha (gelatinization extent in [0, 1])
+    17	
+    18	References:
+    19	    - Lund (1984) "Starch Gelatinization" CRC Food Sci Tech
+    20	    - BeMiller & Whistler (2009) Starch: Chemistry & Technology Ch.7
+    21	    - Marabi et al. (2003) — Avrami modeling of starch hydration
+    22	"""
+    23	
+    24	from __future__ import annotations
+    25	
+    26	import math
+    27	from typing import Any
+    28	
+    29	from ._common import (
+    30	    Validator,
+    31	    build_result,
+    32	    llm_summary_for,
+    33	    provenance_for,
+    34	    validate_bounds,
+    35	)
+    36	
+    37	TOOL_ID = "MF-T10"
+    38	TOOL_CANONICAL_NAME = "Starch_Gelatinization"
+    39	CITATIONS = [
+    40	    "Lund (1984) Starch Gelatinization — CRC Food Sci Tech",
+    41	    "BeMiller & Whistler (2009) Starch Ch.7",
+    42	    "Marabi et al. (2003) J Food Eng — Avrami starch hydration",
+    43	]
+    44	
+    45	_R_GAS_J = 8.31446261815324
+    46	
+    47	
+    48	@validate_bounds("MF-T10")
+    49	def solve(params: dict) -> dict:
+    50	    """Compute starch gelatinization extent alpha."""
+    51	    val = Validator()
+    52	    assumptions: list[str] = [
+    53	        "Avrami-like first-order with shape exponent n",
+    54	        "k(T) follows Arrhenius",
+    55	        "water sufficient for gelatinization (advisory check on water_content)",
+    56	    ]
+    57	
+    58	    t_c = params.get("T_C", params.get("T_c"))
+    59	    time = params.get("time", params.get("t"))
+    60	    a_factor = params.get("A")
+    61	    ea = params.get("Ea")
+    62	    n = params.get("n", 1.0)
+    63	    water = params.get("water_content")
+    64	
+    65	    val.require_temperature_celsius("T_C", t_c)
+    66	    val.require_positive("time", time, allow_zero=True)
+    67	    val.require_positive("A", a_factor)
+    68	    val.require_positive("Ea", ea, allow_zero=True)
+    69	    val.require_positive("n", n)
+    70	    if water is not None:
+    71	        val.require_in_range("water_content", water, 0.0, 1.0)
+    72	        if isinstance(water, (int, float)) and not isinstance(water, bool) \
+    73	                and math.isfinite(water) and water < 0.30:
+    74	            assumptions.append(
+    75	                f"water_content={water} < 0.30 — gelatinization likely incomplete"
+    76	            )
+    77	
+    78	    alpha: float | None = None
+    79	    if (
+    80	        all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    81	            for x in (t_c, time, a_factor, ea, n))
+    82	        and time >= 0 and a_factor > 0 and ea >= 0 and n > 0
+    83	    ):
+    84	        t_k = float(t_c) + 273.15
+    85	        k_t = float(a_factor) * math.exp(-float(ea) / (_R_GAS_J * t_k))
+    86	        # Compute alpha with overflow protection
+    87	        arg = k_t * (float(time) ** float(n))
+    88	        if arg > 700.0:
+    89	            alpha = 1.0
+    90	        elif arg < 0.0:
+    91	            alpha = float("nan")  # shouldn't happen with positive inputs
+    92	        else:
+    93	            alpha = 1.0 - math.exp(-arg)
+    94	
+    95	    return build_result(
+    96	        value=alpha if alpha is not None else float("nan"),
+    97	        unit="dimensionless",
+    98	        symbol="alpha",
+    99	        assumptions=assumptions,
+   100	        validity=val.result(),
+   101	        inputs_used={
+   102	            "T_C": t_c, "time": time, "A": a_factor, "Ea": ea, "n": n,
+   103	            "water_content": water,
+   104	        },
+   105	        provenance=provenance_for(
+   106	            tool_id=TOOL_ID,
+   107	            tool_canonical_name=TOOL_CANONICAL_NAME,
+   108	            citations=CITATIONS,
+   109	        ),
+   110	        llm_summary=llm_summary_for(
+   111	            value=alpha if alpha is not None else float("nan"),
+   112	            unit="dimensionless",
+   113	            symbol="alpha",
+   114	            tool_canonical_name=TOOL_CANONICAL_NAME,
+   115	            tool_id=TOOL_ID,
+   116	        ),
+   117	    )
+===== engine/solver/mf_m07.py =====
+     1	"""MF-M07 Solubility_Partition — octanol-water partition coefficient.
+     2	
+     3	Formula:
+     4	    K_partition = c_oil / c_water = 10^logP
+     5	
+     6	Inputs:
+     7	    logP [-]:           octanol-water partition log10
+     8	    S_water [mol/L]:    water solubility (optional, advisory)
+     9	    T_C [°C]:           current temperature (advisory)
+    10	
+    11	Output:
+    12	    K_partition (oil/water concentration ratio, dimensionless)
+    13	
+    14	References:
+    15	    - Sangster (1997) Octanol-Water Partition Coefficients
+    16	    - Bell & Labuza, Moisture sorption (food applications of logP)
+    17	"""
+    18	from __future__ import annotations
+    19	
+    20	import math
+    21	from typing import Any
+    22	
+    23	from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+    24	
+    25	TOOL_ID = "MF-M07"
+    26	TOOL_CANONICAL_NAME = "Solubility_Partition"
+    27	CITATIONS = [
+    28	    "Sangster (1997) Octanol-Water Partition Coefficients of Simple Organic Compounds",
+    29	    "Hansch & Leo (1995) Exploring QSAR — Fundamentals & Applications",
+    30	]
+    31	
+    32	
+    33	@validate_bounds("MF-M07")
+    34	def solve(params: dict) -> dict:
+    35	    val = Validator()
+    36	    assumptions = ["log10 base; positive K_partition means hydrophobic"]
+    37	    logp = params.get("logP", params.get("log_p"))
+    38	    s_water = params.get("S_water")
+    39	    t_c = params.get("T_C", params.get("T_c"))
+    40	
+    41	    val.require_finite("logP", logp)
+    42	    if s_water is not None:
+    43	        val.require_positive("S_water", s_water)
+    44	    if t_c is not None:
+    45	        val.require_temperature_celsius("T_C", t_c)
+    46	
+    47	    k_part = None
+    48	    if isinstance(logp, (int, float)) and not isinstance(logp, bool) and math.isfinite(logp):
+    49	        # Clamp huge logP to avoid overflow
+    50	        if logp > 30:
+    51	            k_part = float("inf")
+    52	            val.issues.append(f"WARN: logP={logp} → K_partition overflow; capped")
+    53	        elif logp < -30:
+    54	            k_part = 0.0
+    55	        else:
+    56	            k_part = math.pow(10.0, float(logp))
+    57	
+    58	    return build_result(
+    59	        value=k_part if k_part is not None else float("nan"),
+    60	        unit="dimensionless",
+    61	        symbol="K_partition",
+    62	        assumptions=assumptions,
+    63	        validity=val.result(),
+    64	        inputs_used={"logP": logp, "S_water": s_water, "T_C": t_c},
+    65	        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+    66	        llm_summary=llm_summary_for(
+    67	            value=k_part if k_part is not None else float("nan"),
+    68	            unit="dimensionless", symbol="K_partition",
+    69	            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+    70	        ),
+    71	    )
+===== engine/solver/mf_m08.py =====
+     1	"""MF-M08 Gas_Permeability — packaging film gas/vapor flux.
+     2	
+     3	Formula:
+     4	    Q_perm = P_O2 · (delta_p / thickness)    (Fick-like steady-state)
+     5	
+     6	Inputs:
+     7	    P_O2 or P_CO2 [cm³·mil/(m²·day·atm)] OR WVTR [g/(m²·day)]
+     8	    thickness [m]
+     9	    delta_p [atm] (pressure differential)
+    10	    T_C [°C]
+    11	    RH [%]
+    12	
+    13	Output:
+    14	    Q_perm (gas flux through film)
+    15	"""
+    16	from __future__ import annotations
+    17	
+    18	import math
+    19	from typing import Any
+    20	
+    21	from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+    22	
+    23	TOOL_ID = "MF-M08"
+    24	TOOL_CANONICAL_NAME = "Gas_Permeability"
+    25	CITATIONS = [
+    26	    "ASTM D3985 — Oxygen Transmission Rate test method",
+    27	    "Robertson (2013) Food Packaging Principles & Practice",
+    28	]
+    29	
+    30	
+    31	@validate_bounds("MF-M08")
+    32	def solve(params: dict) -> dict:
+    33	    val = Validator()
+    34	    assumptions = [
+    35	        "steady-state Fickian permeation",
+    36	        "Q = P · ΔP / L (in supplied units)",
+    37	    ]
+    38	    perm = params.get("P_O2", params.get("P_CO2", params.get("permeability")))
+    39	    thickness = params.get("thickness")
+    40	    delta_p = params.get("delta_p", 1.0)
+    41	    t_c = params.get("T_C")
+    42	    rh = params.get("RH")
+    43	
+    44	    val.require_positive("permeability", perm)
+    45	    val.require_positive("thickness", thickness)
+    46	    val.require_positive("delta_p", delta_p, allow_zero=True)
+    47	    if t_c is not None:
+    48	        val.require_temperature_celsius("T_C", t_c)
+    49	    if rh is not None:
+    50	        val.require_in_range("RH", rh, 0.0, 100.0)
+    51	
+    52	    q_perm = None
+    53	    if (
+    54	        all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    55	            for x in (perm, thickness, delta_p))
+    56	        and perm > 0 and thickness > 0 and delta_p >= 0
+    57	    ):
+    58	        q_perm = float(perm) * float(delta_p) / float(thickness)
+    59	
+    60	    return build_result(
+    61	        value=q_perm if q_perm is not None else float("nan"),
+    62	        unit="permeability·atm/m (input-unit·atm/m)",
+    63	        symbol="Q_perm",
+    64	        assumptions=assumptions,
+    65	        validity=val.result(),
+    66	        inputs_used={"permeability": perm, "thickness": thickness, "delta_p": delta_p, "T_C": t_c, "RH": rh},
+    67	        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+    68	        llm_summary=llm_summary_for(
+    69	            value=q_perm if q_perm is not None else float("nan"),
+    70	            unit="permeability·atm/m", symbol="Q_perm",
+    71	            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+    72	        ),
+    73	    )
+===== engine/solver/mf_t08.py =====
+     1	"""MF-T08 Ohmic_Heating — Joule heating in conducting food.
+     2	
+     3	Formula:
+     4	    Q_dot = sigma(T) · |E|^2
+     5	
+     6	where sigma(T) ≈ sigma_25 · (1 + alpha·(T - 25))
+     7	
+     8	Inputs:
+     9	    sigma_25 [S/m]:      electrical conductivity at 25°C
+    10	    alpha [1/°C]:        temperature coefficient (default 0.0)
+    11	    E_field [V/m]:       applied electric field
+    12	    T_C [°C]:            current temperature
+    13	
+    14	Output:
+    15	    Q_dot (volumetric heating rate W/m³)
+    16	"""
+    17	from __future__ import annotations
+    18	
+    19	import math
+    20	from typing import Any
+    21	
+    22	from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+    23	
+    24	TOOL_ID = "MF-T08"
+    25	TOOL_CANONICAL_NAME = "Ohmic_Heating"
+    26	CITATIONS = [
+    27	    "Sastry & Barach (2000) Ohmic Heating Food Processing",
+    28	    "Singh & Heldman Ch.5 — Electrical food processing",
+    29	]
+    30	
+    31	
+    32	@validate_bounds("MF-T08")
+    33	def solve(params: dict) -> dict:
+    34	    val = Validator()
+    35	    assumptions = [
+    36	        "linear T-dependence of sigma",
+    37	        "uniform |E| in element",
+    38	        "Joule heating Q = sigma·E²",
+    39	    ]
+    40	    sigma_25 = params.get("sigma_25", params.get("sigma_T", params.get("sigma")))
+    41	    alpha = params.get("alpha", 0.0)
+    42	    e_field = params.get("E_field", params.get("E"))
+    43	    t_c = params.get("T_C", params.get("T_c", 25.0))
+    44	
+    45	    val.require_positive("sigma_25", sigma_25, allow_zero=True)
+    46	    val.require_finite("alpha", alpha)
+    47	    val.require_positive("E_field", e_field, allow_zero=True)
+    48	    val.require_temperature_celsius("T_C", t_c)
+    49	
+    50	    q_dot = None
+    51	    if all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    52	           for x in (sigma_25, alpha, e_field, t_c)):
+    53	        sigma_t = float(sigma_25) * (1.0 + float(alpha) * (float(t_c) - 25.0))
+    54	        if sigma_t < 0:
+    55	            val.issues.append(f"WARN: sigma(T)={sigma_t} negative at T_C={t_c}")
+    56	            sigma_t = max(sigma_t, 0.0)
+    57	        q_dot = sigma_t * float(e_field) ** 2
+    58	
+    59	    return build_result(
+    60	        value=q_dot if q_dot is not None else float("nan"),
+    61	        unit="W/m³",
+    62	        symbol="Q_dot",
+    63	        assumptions=assumptions,
+    64	        validity=val.result(),
+    65	        inputs_used={"sigma_25": sigma_25, "alpha": alpha, "E_field": e_field, "T_C": t_c},
+    66	        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+    67	        llm_summary=llm_summary_for(
+    68	            value=q_dot if q_dot is not None else float("nan"),
+    69	            unit="W/m³", symbol="Q_dot",
+    70	            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+    71	        ),
+    72	    )
+===== engine/solver/mf_k07.py =====
+     1	"""MF-K07 Binding_Equilibrium — ligand-protein binding fraction.
+     2	
+     3	Formula:
+     4	    K_a = [PL] / ([P]·[L])    (association constant)
+     5	    f_bound = K_a·L_free / (1 + K_a·L_free)  (for excess ligand)
+     6	
+     7	Inputs:
+     8	    K_a [L/mol]:    association constant (OR K_d = 1/K_a)
+     9	    L_total [mol/L]: total ligand
+    10	    P_total [mol/L]: total protein
+    11	
+    12	Output:
+    13	    f_bound (fraction of protein bound, [0,1])
+    14	"""
+    15	from __future__ import annotations
+    16	
+    17	import math
+    18	from typing import Any
+    19	
+    20	from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+    21	
+    22	TOOL_ID = "MF-K07"
+    23	TOOL_CANONICAL_NAME = "Binding_Equilibrium"
+    24	CITATIONS = [
+    25	    "Bell & Labuza (2000) Moisture sorption — protein binding",
+    26	    "Tinoco et al. Physical Chemistry — binding equilibria",
+    27	]
+    28	
+    29	
+    30	@validate_bounds("MF-K07")
+    31	def solve(params: dict) -> dict:
+    32	    val = Validator()
+    33	    assumptions = [
+    34	        "single binding site (1:1 stoichiometry)",
+    35	        "L_free ≈ L_total when L >> P",
+    36	    ]
+    37	    ka = params.get("K_a", params.get("Ka"))
+    38	    kd = params.get("K_d", params.get("Kd"))
+    39	    l_total = params.get("L_total", params.get("L"))
+    40	    p_total = params.get("P_total", params.get("P"))
+    41	
+    42	    # Allow K_d instead of K_a
+    43	    if ka is None and kd is not None:
+    44	        val.require_positive("K_d", kd)
+    45	        if isinstance(kd, (int, float)) and not isinstance(kd, bool) and math.isfinite(kd) and kd > 0:
+    46	            ka = 1.0 / float(kd)
+    47	            assumptions.append(f"K_a derived from K_d: K_a = 1/K_d = {ka:.3g}")
+    48	
+    49	    val.require_positive("K_a", ka)
+    50	    val.require_positive("L_total", l_total)
+    51	    if p_total is not None:
+    52	        val.require_positive("P_total", p_total, allow_zero=True)
+    53	
+    54	    f_bound = None
+    55	    if (
+    56	        isinstance(ka, (int, float)) and not isinstance(ka, bool) and math.isfinite(ka) and ka > 0
+    57	        and isinstance(l_total, (int, float)) and not isinstance(l_total, bool) and math.isfinite(l_total) and l_total > 0
+    58	    ):
+    59	        # Simple model: L_free ≈ L_total
+    60	        kl = float(ka) * float(l_total)
+    61	        f_bound = kl / (1.0 + kl)
+    62	        if p_total and float(p_total) > 0 and float(l_total) < 5 * float(p_total):
+    63	            assumptions.append("L_total close to P_total — L_free ≈ L_total approximation may be inaccurate")
+    64	
+    65	    return build_result(
+    66	        value=f_bound if f_bound is not None else float("nan"),
+    67	        unit="dimensionless",
+    68	        symbol="f_bound",
+    69	        assumptions=assumptions,
+    70	        validity=val.result(),
+    71	        inputs_used={"K_a": ka, "K_d": kd, "L_total": l_total, "P_total": p_total},
+    72	        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+    73	        llm_summary=llm_summary_for(
+    74	            value=f_bound if f_bound is not None else float("nan"),
+    75	            unit="dimensionless", symbol="f_bound",
+    76	            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+    77	        ),
+    78	    )
+===== engine/solver/mf_t09.py =====
+     1	"""MF-T09 Respiration_Heat — postharvest produce respiration heat.
+     2	
+     3	Formula:
+     4	    Q_resp = a · exp(b · T_C)
+     5	
+     6	Inputs:
+     7	    a [W/kg]:   preexponential coefficient
+     8	    b [1/°C]:   temperature coefficient
+     9	    T_C [°C]:   storage temperature
+    10	
+    11	Output:
+    12	    Q_resp (specific respiration heat, W/kg)
+    13	
+    14	References:
+    15	    - ASHRAE Handbook: Refrigeration — Heat of respiration for fresh produce
+    16	    - Becker et al. (1996) Heat & mass transfer in horticultural products
+    17	"""
+    18	from __future__ import annotations
+    19	
+    20	import math
+    21	from typing import Any
+    22	
+    23	from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+    24	
+    25	TOOL_ID = "MF-T09"
+    26	TOOL_CANONICAL_NAME = "Respiration_Heat"
+    27	CITATIONS = [
+    28	    "ASHRAE Handbook 2022 Refrigeration — Postharvest heat of respiration",
+    29	    "Becker, Misra & Fricke (1996) HVAC&R Research 2:4 — Fresh produce",
+    30	]
+    31	
+    32	
+    33	@validate_bounds("MF-T09")
+    34	def solve(params: dict) -> dict:
+    35	    val = Validator()
+    36	    assumptions = ["empirical exponential T-dependence", "single produce species"]
+    37	    a = params.get("a", params.get("a_coef"))
+    38	    b = params.get("b", params.get("b_coef"))
+    39	    t_c = params.get("T_C", params.get("T_c"))
+    40	    val.require_positive("a", a, allow_zero=True)
+    41	    val.require_finite("b", b)
+    42	    val.require_temperature_celsius("T_C", t_c)
+    43	
+    44	    q_resp = None
+    45	    if all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    46	           for x in (a, b, t_c)) and a >= 0:
+    47	        arg = float(b) * float(t_c)
+    48	        if arg > 700.0:
+    49	            q_resp = float("inf")
+    50	            val.issues.append(f"WARN: exponent {arg} too large — capped")
+    51	        elif arg < -700.0:
+    52	            q_resp = 0.0
+    53	        else:
+    54	            q_resp = float(a) * math.exp(arg)
+    55	
+    56	    return build_result(
+    57	        value=q_resp if q_resp is not None else float("nan"),
+    58	        unit="W/kg",
+    59	        symbol="Q_resp",
+    60	        assumptions=assumptions,
+    61	        validity=val.result(),
+    62	        inputs_used={"a": a, "b": b, "T_C": t_c},
+    63	        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+    64	        llm_summary=llm_summary_for(
+    65	            value=q_resp if q_resp is not None else float("nan"),
+    66	            unit="W/kg", symbol="Q_resp",
+    67	            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+    68	        ),
+    69	    )
+===== engine/solver/mf_m09.py =====
+     1	"""MF-M09 Osmotic_Pressure — van't Hoff osmotic pressure.
+     2	
+     3	Formula:
+     4	    π = i · M · R · T
+     5	
+     6	Inputs:
+     7	    M [mol/L]:  molar concentration of solute (sum over species)
+     8	    T_K [K] or T_C [°C]:  absolute temperature
+     9	    i [-]:      van't Hoff factor (default 1.0)
+    10	
+    11	Output:
+    12	    pi (osmotic pressure, Pa)
+    13	"""
+    14	from __future__ import annotations
+    15	
+    16	import math
+    17	from typing import Any
+    18	
+    19	from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+    20	
+    21	TOOL_ID = "MF-M09"
+    22	TOOL_CANONICAL_NAME = "Osmotic_Pressure"
+    23	CITATIONS = [
+    24	    "Atkins Physical Chemistry — colligative properties",
+    25	    "Singh & Heldman — osmotic processes",
+    26	]
+    27	
+    28	_R_GAS = 8.31446261815324
+    29	
+    30	
+    31	@validate_bounds("MF-M09")
+    32	def solve(params: dict) -> dict:
+    33	    val = Validator()
+    34	    assumptions = ["dilute ideal solution, van't Hoff equation"]
+    35	    m = params.get("M", params.get("M_osmolar", params.get("c")))
+    36	    t_k = params.get("T_K")
+    37	    t_c = params.get("T_C", params.get("T_c"))
+    38	    i_factor = params.get("i", 1.0)
+    39	    val.require_positive("M", m, allow_zero=True)
+    40	    val.require_positive("i", i_factor)
+    41	
+    42	    if t_k is None and t_c is not None:
+    43	        val.require_temperature_celsius("T_C", t_c)
+    44	        if isinstance(t_c, (int, float)) and not isinstance(t_c, bool) and math.isfinite(t_c):
+    45	            t_k = float(t_c) + 273.15
+    46	            assumptions.append(f"T_K = T_C + 273.15 = {t_k:.2f} K")
+    47	    val.require_positive("T_K", t_k)
+    48	
+    49	    pi = None
+    50	    if all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    51	           for x in (m, i_factor, t_k)) and m >= 0 and i_factor > 0 and t_k > 0:
+    52	        # M [mol/L] → mol/m³ = 1000 · M
+    53	        pi = float(i_factor) * float(m) * 1000.0 * _R_GAS * float(t_k)
+    54	
+    55	    return build_result(
+    56	        value=pi if pi is not None else float("nan"),
+    57	        unit="Pa",
+    58	        symbol="pi",
+    59	        assumptions=assumptions,
+    60	        validity=val.result(),
+    61	        inputs_used={"M": m, "T_K": t_k, "T_C": t_c, "i": i_factor},
+    62	        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+    63	        llm_summary=llm_summary_for(
+    64	            value=pi if pi is not None else float("nan"),
+    65	            unit="Pa", symbol="pi",
+    66	            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+    67	        ),
+    68	    )
+===== engine/solver/mf_m11.py =====
+     1	"""MF-M11 SCFE_Solubility — Supercritical CO2 Extraction solubility (Chrastil-style).
+     2	
+     3	Formula (Chrastil 1982):
+     4	    ln(y_solute) = k · ln(rho_CO2) + a/T_K + b
+     5	
+     6	Inputs:
+     7	    rho_CO2 [kg/m³]:   SC-CO2 density
+     8	    T_K [K] or T_C [°C]:  temperature
+     9	    k [-]:             Chrastil exponent (default 5.0)
+    10	    a [K]:             Chrastil temperature coefficient (default -3000)
+    11	    b [-]:             Chrastil intercept (default -20.0)
+    12	
+    13	Output:
+    14	    y_solute (mole fraction, dimensionless)
+    15	"""
+    16	from __future__ import annotations
+    17	
+    18	import math
+    19	from typing import Any
+    20	
+    21	from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+    22	
+    23	TOOL_ID = "MF-M11"
+    24	TOOL_CANONICAL_NAME = "SCFE_Solubility"
+    25	CITATIONS = [
+    26	    "Chrastil (1982) J Phys Chem 86:3016 — Solubility in dense gases",
+    27	    "Brunner (1994) Gas Extraction — Theory & Practice",
+    28	]
+    29	
+    30	
+    31	@validate_bounds("MF-M11")
+    32	def solve(params: dict) -> dict:
+    33	    val = Validator()
+    34	    assumptions = ["Chrastil 1982 empirical correlation", "supercritical CO2 phase"]
+    35	    rho = params.get("rho_CO2", params.get("rho"))
+    36	    t_k = params.get("T_K")
+    37	    t_c = params.get("T_C", params.get("T_c"))
+    38	    k = params.get("k", 5.0)
+    39	    a = params.get("a", -3000.0)
+    40	    b = params.get("b", -20.0)
+    41	
+    42	    val.require_positive("rho_CO2", rho)
+    43	    val.require_finite("k", k)
+    44	    val.require_finite("a", a)
+    45	    val.require_finite("b", b)
+    46	
+    47	    if t_k is None and t_c is not None:
+    48	        val.require_temperature_celsius("T_C", t_c)
+    49	        if isinstance(t_c, (int, float)) and not isinstance(t_c, bool) and math.isfinite(t_c):
+    50	            t_k = float(t_c) + 273.15
+    51	    val.require_positive("T_K", t_k)
+    52	
+    53	    y_solute = None
+    54	    if all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    55	           for x in (rho, t_k, k, a, b)) and rho > 0 and t_k > 0:
+    56	        ln_y = float(k) * math.log(float(rho)) + float(a) / float(t_k) + float(b)
+    57	        if ln_y > 700:
+    58	            y_solute = float("inf")
+    59	        elif ln_y < -700:
+    60	            y_solute = 0.0
+    61	        else:
+    62	            y_solute = math.exp(ln_y)
+    63	
+    64	    return build_result(
+    65	        value=y_solute if y_solute is not None else float("nan"),
+    66	        unit="dimensionless (mole fraction)",
+    67	        symbol="y_solute",
+    68	        assumptions=assumptions,
+    69	        validity=val.result(),
+    70	        inputs_used={"rho_CO2": rho, "T_K": t_k, "T_C": t_c, "k": k, "a": a, "b": b},
+    71	        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+    72	        llm_summary=llm_summary_for(
+    73	            value=y_solute if y_solute is not None else float("nan"),
+    74	            unit="mole fraction", symbol="y_solute",
+    75	            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+    76	        ),
+    77	    )
+===== engine/solver/mf_m10.py =====
+     1	"""MF-M10 Membrane_Transport — solute flux through membrane (linear-driving-force).
+     2	
+     3	Formula:
+     4	    J_solute = P · (c1 - c2) / thickness
+     5	
+     6	Inputs:
+     7	    P [m/s]:        solute permeability
+     8	    thickness [m]:  membrane thickness
+     9	    dC [mol/m³]:    concentration gradient = (c1 - c2)
+    10	
+    11	Output:
+    12	    J_solute (mass flux, mol/(m²·s))
+    13	"""
+    14	from __future__ import annotations
+    15	
+    16	import math
+    17	from typing import Any
+    18	
+    19	from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+    20	
+    21	TOOL_ID = "MF-M10"
+    22	TOOL_CANONICAL_NAME = "Membrane_Transport"
+    23	CITATIONS = [
+    24	    "Mulder (1996) Basic Principles of Membrane Technology",
+    25	    "Cheryan (1998) Ultrafiltration & Microfiltration Handbook",
+    26	]
+    27	
+    28	
+    29	@validate_bounds("MF-M10")
+    30	def solve(params: dict) -> dict:
+    31	    val = Validator()
+    32	    assumptions = ["linear-driving-force flux model", "steady-state diffusion"]
+    33	    p_solute = params.get("P_solute", params.get("P"))
+    34	    thickness = params.get("thickness", params.get("L"))
+    35	    dc = params.get("dC", params.get("dc", params.get("delta_c")))
+    36	    val.require_positive("P_solute", p_solute)
+    37	    val.require_positive("thickness", thickness)
+    38	    val.require_finite("dC", dc)
+    39	
+    40	    j_solute = None
+    41	    if all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    42	           for x in (p_solute, thickness, dc)) and p_solute > 0 and thickness > 0:
+    43	        j_solute = float(p_solute) * float(dc) / float(thickness)
+    44	
+    45	    return build_result(
+    46	        value=j_solute if j_solute is not None else float("nan"),
+    47	        unit="mol/(m²·s)",
+    48	        symbol="J_solute",
+    49	        assumptions=assumptions,
+    50	        validity=val.result(),
+    51	        inputs_used={"P_solute": p_solute, "thickness": thickness, "dC": dc},
+    52	        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+    53	        llm_summary=llm_summary_for(
+    54	            value=j_solute if j_solute is not None else float("nan"),
+    55	            unit="mol/(m²·s)", symbol="J_solute",
+    56	            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+    57	        ),
+    58	    )
+
+exec
+/bin/zsh -lc "nl -ba engine/solver/mf_m08.py | sed -n '1,220p'" in /Users/jeff/culinary-mind
+exec
+/bin/zsh -lc "nl -ba engine/solver/mf_m07.py | sed -n '1,220p'" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+     1	"""MF-M08 Gas_Permeability — packaging film gas/vapor flux.
+     2	
+     3	Formula:
+     4	    Q_perm = P_O2 · (delta_p / thickness)    (Fick-like steady-state)
+     5	
+     6	Inputs:
+     7	    P_O2 or P_CO2 [cm³·mil/(m²·day·atm)] OR WVTR [g/(m²·day)]
+     8	    thickness [m]
+     9	    delta_p [atm] (pressure differential)
+    10	    T_C [°C]
+    11	    RH [%]
+    12	
+    13	Output:
+    14	    Q_perm (gas flux through film)
+    15	"""
+    16	from __future__ import annotations
+    17	
+    18	import math
+    19	from typing import Any
+    20	
+    21	from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+    22	
+    23	TOOL_ID = "MF-M08"
+    24	TOOL_CANONICAL_NAME = "Gas_Permeability"
+    25	CITATIONS = [
+    26	    "ASTM D3985 — Oxygen Transmission Rate test method",
+    27	    "Robertson (2013) Food Packaging Principles & Practice",
+    28	]
+    29	
+    30	
+    31	@validate_bounds("MF-M08")
+    32	def solve(params: dict) -> dict:
+    33	    val = Validator()
+    34	    assumptions = [
+    35	        "steady-state Fickian permeation",
+    36	        "Q = P · ΔP / L (in supplied units)",
+    37	    ]
+    38	    perm = params.get("P_O2", params.get("P_CO2", params.get("permeability")))
+    39	    thickness = params.get("thickness")
+    40	    delta_p = params.get("delta_p", 1.0)
+    41	    t_c = params.get("T_C")
+    42	    rh = params.get("RH")
+    43	
+    44	    val.require_positive("permeability", perm)
+    45	    val.require_positive("thickness", thickness)
+    46	    val.require_positive("delta_p", delta_p, allow_zero=True)
+    47	    if t_c is not None:
+    48	        val.require_temperature_celsius("T_C", t_c)
+    49	    if rh is not None:
+    50	        val.require_in_range("RH", rh, 0.0, 100.0)
+    51	
+    52	    q_perm = None
+    53	    if (
+    54	        all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    55	            for x in (perm, thickness, delta_p))
+    56	        and perm > 0 and thickness > 0 and delta_p >= 0
+    57	    ):
+    58	        q_perm = float(perm) * float(delta_p) / float(thickness)
+    59	
+    60	    return build_result(
+    61	        value=q_perm if q_perm is not None else float("nan"),
+    62	        unit="permeability·atm/m (input-unit·atm/m)",
+    63	        symbol="Q_perm",
+    64	        assumptions=assumptions,
+    65	        validity=val.result(),
+    66	        inputs_used={"permeability": perm, "thickness": thickness, "delta_p": delta_p, "T_C": t_c, "RH": rh},
+    67	        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+    68	        llm_summary=llm_summary_for(
+    69	            value=q_perm if q_perm is not None else float("nan"),
+    70	            unit="permeability·atm/m", symbol="Q_perm",
+    71	            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+    72	        ),
+    73	    )
+
+ succeeded in 0ms:
+     1	"""MF-M07 Solubility_Partition — octanol-water partition coefficient.
+     2	
+     3	Formula:
+     4	    K_partition = c_oil / c_water = 10^logP
+     5	
+     6	Inputs:
+     7	    logP [-]:           octanol-water partition log10
+     8	    S_water [mol/L]:    water solubility (optional, advisory)
+     9	    T_C [°C]:           current temperature (advisory)
+    10	
+    11	Output:
+    12	    K_partition (oil/water concentration ratio, dimensionless)
+    13	
+    14	References:
+    15	    - Sangster (1997) Octanol-Water Partition Coefficients
+    16	    - Bell & Labuza, Moisture sorption (food applications of logP)
+    17	"""
+    18	from __future__ import annotations
+    19	
+    20	import math
+    21	from typing import Any
+    22	
+    23	from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+    24	
+    25	TOOL_ID = "MF-M07"
+    26	TOOL_CANONICAL_NAME = "Solubility_Partition"
+    27	CITATIONS = [
+    28	    "Sangster (1997) Octanol-Water Partition Coefficients of Simple Organic Compounds",
+    29	    "Hansch & Leo (1995) Exploring QSAR — Fundamentals & Applications",
+    30	]
+    31	
+    32	
+    33	@validate_bounds("MF-M07")
+    34	def solve(params: dict) -> dict:
+    35	    val = Validator()
+    36	    assumptions = ["log10 base; positive K_partition means hydrophobic"]
+    37	    logp = params.get("logP", params.get("log_p"))
+    38	    s_water = params.get("S_water")
+    39	    t_c = params.get("T_C", params.get("T_c"))
+    40	
+    41	    val.require_finite("logP", logp)
+    42	    if s_water is not None:
+    43	        val.require_positive("S_water", s_water)
+    44	    if t_c is not None:
+    45	        val.require_temperature_celsius("T_C", t_c)
+    46	
+    47	    k_part = None
+    48	    if isinstance(logp, (int, float)) and not isinstance(logp, bool) and math.isfinite(logp):
+    49	        # Clamp huge logP to avoid overflow
+    50	        if logp > 30:
+    51	            k_part = float("inf")
+    52	            val.issues.append(f"WARN: logP={logp} → K_partition overflow; capped")
+    53	        elif logp < -30:
+    54	            k_part = 0.0
+    55	        else:
+    56	            k_part = math.pow(10.0, float(logp))
+    57	
+    58	    return build_result(
+    59	        value=k_part if k_part is not None else float("nan"),
+    60	        unit="dimensionless",
+    61	        symbol="K_partition",
+    62	        assumptions=assumptions,
+    63	        validity=val.result(),
+    64	        inputs_used={"logP": logp, "S_water": s_water, "T_C": t_c},
+    65	        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+    66	        llm_summary=llm_summary_for(
+    67	            value=k_part if k_part is not None else float("nan"),
+    68	            unit="dimensionless", symbol="K_partition",
+    69	            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+    70	        ),
+    71	    )
+
+exec
+/bin/zsh -lc "find . \\( -path '*/test*' -o -path '*/tests/*' \\) -type f | grep -E 'mf_(t06|k06|t07|t10|m07|m08|t08|k07|t09|m09|m11|m10)' | sort" in /Users/jeff/culinary-mind
+ succeeded in 1146ms:
+./engine/solver/tests/__pycache__/test_mf_k06.cpython-313-pytest-9.0.3.pyc
+./engine/solver/tests/__pycache__/test_mf_k07.cpython-313-pytest-9.0.3.pyc
+./engine/solver/tests/__pycache__/test_mf_m07.cpython-313-pytest-9.0.3.pyc
+./engine/solver/tests/__pycache__/test_mf_m08.cpython-313-pytest-9.0.3.pyc
+./engine/solver/tests/__pycache__/test_mf_m09.cpython-313-pytest-9.0.3.pyc
+./engine/solver/tests/__pycache__/test_mf_m10.cpython-313-pytest-9.0.3.pyc
+./engine/solver/tests/__pycache__/test_mf_m11.cpython-313-pytest-9.0.3.pyc
+./engine/solver/tests/__pycache__/test_mf_t06.cpython-313-pytest-9.0.3.pyc
+./engine/solver/tests/__pycache__/test_mf_t07.cpython-313-pytest-9.0.3.pyc
+./engine/solver/tests/__pycache__/test_mf_t08.cpython-313-pytest-9.0.3.pyc
+./engine/solver/tests/__pycache__/test_mf_t09.cpython-313-pytest-9.0.3.pyc
+./engine/solver/tests/__pycache__/test_mf_t10.cpython-313-pytest-9.0.3.pyc
+./engine/solver/tests/test_mf_k06.py
+./engine/solver/tests/test_mf_k07.py
+./engine/solver/tests/test_mf_m07.py
+./engine/solver/tests/test_mf_m08.py
+./engine/solver/tests/test_mf_m09.py
+./engine/solver/tests/test_mf_m10.py
+./engine/solver/tests/test_mf_m11.py
+./engine/solver/tests/test_mf_t06.py
+./engine/solver/tests/test_mf_t07.py
+./engine/solver/tests/test_mf_t08.py
+./engine/solver/tests/test_mf_t09.py
+./engine/solver/tests/test_mf_t10.py
+
+codex
+I checked for dedicated tests for these IDs as well, because some of the review comes down to what edge conditions are already covered versus what is still untested.
+exec
+/bin/zsh -lc 'for f in engine/solver/tests/test_mf_t06.py engine/solver/tests/test_mf_k06.py engine/solver/tests/test_mf_t07.py engine/solver/tests/test_mf_t10.py engine/solver/tests/test_mf_m07.py engine/solver/tests/test_mf_m08.py engine/solver/tests/test_mf_t08.py engine/solver/tests/test_mf_k07.py engine/solver/tests/test_mf_t09.py engine/solver/tests/test_mf_m09.py engine/solver/tests/test_mf_m11.py engine/solver/tests/test_mf_m10.py; do echo "===== $f ====="; sed -n '"'1,220p' \""'$f"; done' in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+===== engine/solver/tests/test_mf_t06.py =====
+"""Tests for MF-T06 Protein_Denaturation."""
+from __future__ import annotations
+
+import math
+import unittest
+
+from engine.solver import mf_t06
+
+
+class TestMFT06(unittest.TestCase):
+
+    def test_at_midpoint_temperature_half_native(self):
+        """At T_C = T_d, f_native should be 0.5."""
+        out = mf_t06.solve({"T_d": 70.0, "dH_d": 300.0, "T_C": 70.0})
+        self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
+        self.assertAlmostEqual(out["result"]["value"], 0.5, places=4)
+
+    def test_far_below_T_d_almost_fully_native(self):
+        out = mf_t06.solve({"T_d": 80.0, "dH_d": 400.0, "T_C": 25.0})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertGreater(out["result"]["value"], 0.99)
+
+    def test_far_above_T_d_almost_fully_denatured(self):
+        out = mf_t06.solve({"T_d": 60.0, "dH_d": 400.0, "T_C": 100.0})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertLess(out["result"]["value"], 0.01)
+
+    def test_sigma_override(self):
+        out = mf_t06.solve({"T_d": 70.0, "dH_d": 200.0, "T_C": 75.0, "sigma_override": 5.0})
+        self.assertTrue(out["validity"]["passed"])
+        expected = 1.0 / (1.0 + math.exp((75.0 - 70.0) / 5.0))
+        self.assertAlmostEqual(out["result"]["value"], expected, places=6)
+        self.assertTrue(any("sigma_override" in a or "sigma supplied" in a for a in out["assumptions"]))
+
+    def test_negative_dH_rejected(self):
+        out = mf_t06.solve({"T_d": 70.0, "dH_d": -100.0, "T_C": 70.0})
+        self.assertFalse(out["validity"]["passed"])
+
+    def test_below_absolute_zero_rejected(self):
+        out = mf_t06.solve({"T_d": 70.0, "dH_d": 300.0, "T_C": -300.0})
+        self.assertFalse(out["validity"]["passed"])
+
+    def test_output_in_unit_interval(self):
+        for tc in [-20, 0, 30, 60, 70, 80, 100, 150]:
+            out = mf_t06.solve({"T_d": 70.0, "dH_d": 300.0, "T_C": float(tc)})
+            self.assertTrue(out["validity"]["passed"])
+            v = out["result"]["value"]
+            self.assertGreaterEqual(v, 0.0)
+            self.assertLessEqual(v, 1.0)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+===== engine/solver/tests/test_mf_k06.py =====
+"""Tests for MF-K06 Growth_Limit."""
+from __future__ import annotations
+
+import unittest
+
+from engine.solver import mf_k06
+
+
+class TestMFK06(unittest.TestCase):
+
+    def test_pH_above_min_growth_permitted(self):
+        out = mf_k06.solve({"pH_min": 4.0, "pH": 6.5})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertEqual(out["result"]["value"], 0.0)  # not inhibited
+
+    def test_pH_below_min_growth_inhibited(self):
+        out = mf_k06.solve({"pH_min": 4.6, "pH": 3.5})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertEqual(out["result"]["value"], 1.0)  # inhibited
+
+    def test_aw_low_inhibits(self):
+        out = mf_k06.solve({"a_w_min": 0.92, "a_w": 0.85})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertEqual(out["result"]["value"], 1.0)
+
+    def test_T_low_inhibits(self):
+        out = mf_k06.solve({"T_min": 5.0, "T_C": 2.0})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertEqual(out["result"]["value"], 1.0)
+
+    def test_MIC_exceeded_inhibits(self):
+        out = mf_k06.solve({"MIC": 100.0, "substance_conc": 200.0})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertEqual(out["result"]["value"], 1.0)
+
+    def test_multiple_hurdles_one_violation_inhibits(self):
+        out = mf_k06.solve({
+            "pH_min": 4.6, "a_w_min": 0.92, "T_min": 5.0,
+            "pH": 5.0, "a_w": 0.85, "T_C": 10.0,
+        })
+        self.assertTrue(out["validity"]["passed"])
+        # a_w below min → inhibited
+        self.assertEqual(out["result"]["value"], 1.0)
+
+    def test_no_limits_rejected(self):
+        out = mf_k06.solve({"pH": 6.5})
+        self.assertFalse(out["validity"]["passed"])
+
+    def test_pH_out_of_natural_range(self):
+        out = mf_k06.solve({"pH_min": 4.0, "pH": 15.0})
+        self.assertFalse(out["validity"]["passed"])
+
+    def test_margins_in_summary(self):
+        out = mf_k06.solve({"pH_min": 4.5, "pH": 5.5})
+        self.assertTrue(out["validity"]["passed"])
+        margins = out["llm_summary"]["key_outputs"]["margins"]
+        self.assertIn("pH_minus_pH_min", margins)
+        self.assertAlmostEqual(margins["pH_minus_pH_min"], 1.0)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+===== engine/solver/tests/test_mf_t07.py =====
+"""Tests for MF-T07 Dielectric_Properties."""
+from __future__ import annotations
+
+import math
+import unittest
+
+from engine.solver import mf_t07
+
+
+_EPS0 = 8.8541878128e-12
+
+
+class TestMFT07(unittest.TestCase):
+
+    def test_microwave_oven_known_power(self):
+        """2.45 GHz, ε''=15, E=2000 V/m → P_abs ≈ 8.18 MW/m³ (typical microwave)."""
+        out = mf_t07.solve({
+            "epsilon_double_prime": 15.0,
+            "frequency": 2.45e9,
+            "E_field": 2000.0,
+        })
+        expected = 2.0 * math.pi * 2.45e9 * _EPS0 * 15.0 * 2000.0 ** 2
+        self.assertTrue(out["validity"]["passed"])
+        self.assertAlmostEqual(out["result"]["value"], expected, places=0)
+
+    def test_zero_loss_factor_no_absorption(self):
+        out = mf_t07.solve({
+            "epsilon_double_prime": 0.0,
+            "frequency": 2.45e9,
+            "E_field": 1000.0,
+        })
+        self.assertTrue(out["validity"]["passed"])
+        self.assertEqual(out["result"]["value"], 0.0)
+
+    def test_zero_field_no_absorption(self):
+        out = mf_t07.solve({
+            "epsilon_double_prime": 10.0,
+            "frequency": 2.45e9,
+            "E_field": 0.0,
+        })
+        self.assertTrue(out["validity"]["passed"])
+        self.assertEqual(out["result"]["value"], 0.0)
+
+    def test_negative_frequency_rejected(self):
+        out = mf_t07.solve({
+            "epsilon_double_prime": 10.0,
+            "frequency": -1e9,
+            "E_field": 1000.0,
+        })
+        self.assertFalse(out["validity"]["passed"])
+
+    def test_aliases_work(self):
+        out = mf_t07.solve({"epsilon_pp": 10.0, "f": 915e6, "E": 500.0})
+        self.assertTrue(out["validity"]["passed"])
+        expected = 2.0 * math.pi * 915e6 * _EPS0 * 10.0 * 500.0 ** 2
+        self.assertAlmostEqual(out["result"]["value"], expected, places=4)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+===== engine/solver/tests/test_mf_t10.py =====
+"""Tests for MF-T10 Starch_Gelatinization."""
+from __future__ import annotations
+
+import math
+import unittest
+
+from engine.solver import mf_t10
+
+
+_R = 8.31446261815324
+
+
+class TestMFT10(unittest.TestCase):
+
+    def test_zero_time_alpha_zero(self):
+        out = mf_t10.solve({
+            "T_C": 80.0, "time": 0.0,
+            "A": 1.0e10, "Ea": 80000.0, "n": 1.5,
+        })
+        self.assertTrue(out["validity"]["passed"])
+        self.assertEqual(out["result"]["value"], 0.0)
+
+    def test_long_time_alpha_approaches_1(self):
+        out = mf_t10.solve({
+            "T_C": 90.0, "time": 3600.0,
+            "A": 1.0e10, "Ea": 50000.0, "n": 1.0,
+        })
+        self.assertTrue(out["validity"]["passed"])
+        self.assertGreater(out["result"]["value"], 0.99)
+
+    def test_low_temp_low_alpha(self):
+        out = mf_t10.solve({
+            "T_C": 30.0, "time": 60.0,
+            "A": 1.0e10, "Ea": 100000.0, "n": 1.5,
+        })
+        self.assertTrue(out["validity"]["passed"])
+        self.assertLess(out["result"]["value"], 0.5)
+
+    def test_avrami_formula_at_known_point(self):
+        T_C, time, A, Ea, n = 70.0, 600.0, 1.0e8, 80000.0, 1.2
+        t_k = T_C + 273.15
+        k = A * math.exp(-Ea / (_R * t_k))
+        expected = 1.0 - math.exp(-k * time ** n)
+        out = mf_t10.solve({"T_C": T_C, "time": time, "A": A, "Ea": Ea, "n": n})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertAlmostEqual(out["result"]["value"], expected, places=6)
+
+    def test_low_water_warning(self):
+        out = mf_t10.solve({
+            "T_C": 80.0, "time": 100.0,
+            "A": 1.0e10, "Ea": 80000.0, "n": 1.5,
+            "water_content": 0.20,
+        })
+        self.assertTrue(out["validity"]["passed"])
+        self.assertTrue(any("water_content" in a or "incomplete" in a for a in out["assumptions"]))
+
+    def test_negative_n_rejected(self):
+        out = mf_t10.solve({
+            "T_C": 80.0, "time": 100.0,
+            "A": 1.0e10, "Ea": 80000.0, "n": -0.5,
+        })
+        self.assertFalse(out["validity"]["passed"])
+
+    def test_alpha_in_unit_interval(self):
+        for tt in [1, 10, 100, 1000, 10000]:
+            out = mf_t10.solve({
+                "T_C": 75.0, "time": float(tt),
+                "A": 1.0e9, "Ea": 70000.0, "n": 1.2,
+            })
+            self.assertTrue(out["validity"]["passed"])
+            v = out["result"]["value"]
+            self.assertGreaterEqual(v, 0.0)
+            self.assertLessEqual(v, 1.0)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+===== engine/solver/tests/test_mf_m07.py =====
+"""Tests for MF-M07 Solubility_Partition."""
+from __future__ import annotations
+import math, unittest
+from engine.solver import mf_m07
+
+class TestMFM07(unittest.TestCase):
+    def test_logP_zero_K_eq_1(self):
+        out = mf_m07.solve({"logP": 0.0})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertAlmostEqual(out["result"]["value"], 1.0)
+
+    def test_logP_positive_K_gt_1(self):
+        out = mf_m07.solve({"logP": 2.0})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertAlmostEqual(out["result"]["value"], 100.0)
+
+    def test_logP_negative_K_lt_1(self):
+        out = mf_m07.solve({"logP": -1.0})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertAlmostEqual(out["result"]["value"], 0.1)
+
+    def test_logP_nan_rejected(self):
+        out = mf_m07.solve({"logP": math.nan})
+        self.assertFalse(out["validity"]["passed"])
+
+    def test_negative_S_water_rejected(self):
+        out = mf_m07.solve({"logP": 1.0, "S_water": -1.0})
+        self.assertFalse(out["validity"]["passed"])
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+===== engine/solver/tests/test_mf_m08.py =====
+"""Tests for MF-M08 Gas_Permeability."""
+from __future__ import annotations
+import math, unittest
+from engine.solver import mf_m08
+
+class TestMFM08(unittest.TestCase):
+    def test_known_oxygen_film(self):
+        out = mf_m08.solve({"P_O2": 100.0, "thickness": 1e-4, "delta_p": 0.21})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertAlmostEqual(out["result"]["value"], 100.0 * 0.21 / 1e-4)
+
+    def test_zero_delta_p_no_flux(self):
+        out = mf_m08.solve({"P_O2": 100.0, "thickness": 1e-4, "delta_p": 0.0})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertEqual(out["result"]["value"], 0.0)
+
+    def test_zero_thickness_rejected(self):
+        out = mf_m08.solve({"P_O2": 100.0, "thickness": 0.0, "delta_p": 0.21})
+        self.assertFalse(out["validity"]["passed"])
+
+    def test_RH_out_of_range_rejected(self):
+        out = mf_m08.solve({"P_O2": 100.0, "thickness": 1e-4, "delta_p": 0.21, "RH": 150})
+        self.assertFalse(out["validity"]["passed"])
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+===== engine/solver/tests/test_mf_t08.py =====
+"""Tests for MF-T08 Ohmic_Heating."""
+from __future__ import annotations
+import math, unittest
+from engine.solver import mf_t08
+
+class TestMFT08(unittest.TestCase):
+    def test_baseline_at_25C(self):
+        out = mf_t08.solve({"sigma_25": 0.5, "E_field": 100.0, "T_C": 25.0})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertAlmostEqual(out["result"]["value"], 0.5 * 100.0**2)
+
+    def test_higher_T_alpha_positive_increases_Q(self):
+        out_25 = mf_t08.solve({"sigma_25": 0.5, "alpha": 0.02, "E_field": 100.0, "T_C": 25.0})
+        out_80 = mf_t08.solve({"sigma_25": 0.5, "alpha": 0.02, "E_field": 100.0, "T_C": 80.0})
+        self.assertGreater(out_80["result"]["value"], out_25["result"]["value"])
+
+    def test_zero_E_field_no_heat(self):
+        out = mf_t08.solve({"sigma_25": 0.5, "E_field": 0.0})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertEqual(out["result"]["value"], 0.0)
+
+    def test_negative_sigma_rejected(self):
+        out = mf_t08.solve({"sigma_25": -0.1, "E_field": 100.0})
+        self.assertFalse(out["validity"]["passed"])
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+===== engine/solver/tests/test_mf_k07.py =====
+"""Tests for MF-K07 Binding_Equilibrium."""
+from __future__ import annotations
+import math, unittest
+from engine.solver import mf_k07
+
+class TestMFK07(unittest.TestCase):
+    def test_K_a_L_eq_1_half_bound(self):
+        out = mf_k07.solve({"K_a": 1.0e6, "L_total": 1.0e-6})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertAlmostEqual(out["result"]["value"], 0.5)
+
+    def test_high_K_a_high_binding(self):
+        out = mf_k07.solve({"K_a": 1.0e9, "L_total": 1.0e-3})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertGreater(out["result"]["value"], 0.99)
+
+    def test_low_K_a_low_binding(self):
+        out = mf_k07.solve({"K_a": 1.0, "L_total": 1.0e-6})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertLess(out["result"]["value"], 0.01)
+
+    def test_K_d_to_K_a_conversion(self):
+        out_a = mf_k07.solve({"K_a": 1.0e7, "L_total": 1.0e-6})
+        out_d = mf_k07.solve({"K_d": 1.0e-7, "L_total": 1.0e-6})
+        self.assertAlmostEqual(out_a["result"]["value"], out_d["result"]["value"])
+
+    def test_negative_L_rejected(self):
+        out = mf_k07.solve({"K_a": 1.0e6, "L_total": -1e-6})
+        self.assertFalse(out["validity"]["passed"])
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+===== engine/solver/tests/test_mf_t09.py =====
+"""Tests for MF-T09 Respiration_Heat."""
+from __future__ import annotations
+import math, unittest
+from engine.solver import mf_t09
+
+class TestMFT09(unittest.TestCase):
+    def test_at_zero_T_C_returns_a(self):
+        out = mf_t09.solve({"a": 0.05, "b": 0.08, "T_C": 0.0})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertAlmostEqual(out["result"]["value"], 0.05)
+
+    def test_known_apple_storage(self):
+        # apple ~0.045 W/kg at 4°C, b~0.08
+        out = mf_t09.solve({"a": 0.045, "b": 0.08, "T_C": 4.0})
+        self.assertTrue(out["validity"]["passed"])
+        expected = 0.045 * math.exp(0.08 * 4.0)
+        self.assertAlmostEqual(out["result"]["value"], expected)
+
+    def test_negative_a_rejected(self):
+        out = mf_t09.solve({"a": -0.05, "b": 0.08, "T_C": 4.0})
+        self.assertFalse(out["validity"]["passed"])
+
+    def test_higher_T_higher_Q(self):
+        out_4 = mf_t09.solve({"a": 0.05, "b": 0.08, "T_C": 4.0})
+        out_20 = mf_t09.solve({"a": 0.05, "b": 0.08, "T_C": 20.0})
+        self.assertGreater(out_20["result"]["value"], out_4["result"]["value"])
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+===== engine/solver/tests/test_mf_m09.py =====
+"""Tests for MF-M09 Osmotic_Pressure."""
+from __future__ import annotations
+import math, unittest
+from engine.solver import mf_m09
+
+class TestMFM09(unittest.TestCase):
+    def test_1M_glucose_at_25C(self):
+        out = mf_m09.solve({"M": 1.0, "T_K": 298.15})
+        self.assertTrue(out["validity"]["passed"])
+        # π = 1·1000·8.314·298.15 ≈ 2.479 MPa
+        self.assertAlmostEqual(out["result"]["value"], 2.479e6, delta=1e4)
+
+    def test_NaCl_van_t_Hoff_factor_2(self):
+        out = mf_m09.solve({"M": 1.0, "T_K": 298.15, "i": 2.0})
+        self.assertTrue(out["validity"]["passed"])
+        # Should double
+        out_glucose = mf_m09.solve({"M": 1.0, "T_K": 298.15})
+        self.assertAlmostEqual(out["result"]["value"], 2 * out_glucose["result"]["value"])
+
+    def test_T_C_to_T_K_conversion(self):
+        out = mf_m09.solve({"M": 0.5, "T_C": 25.0})
+        self.assertTrue(out["validity"]["passed"])
+
+    def test_zero_M_zero_pi(self):
+        out = mf_m09.solve({"M": 0.0, "T_K": 298.15})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertEqual(out["result"]["value"], 0.0)
+
+    def test_negative_T_rejected(self):
+        out = mf_m09.solve({"M": 1.0, "T_K": -10.0})
+        self.assertFalse(out["validity"]["passed"])
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+===== engine/solver/tests/test_mf_m11.py =====
+"""Tests for MF-M11 SCFE_Solubility (Chrastil)."""
+from __future__ import annotations
+import math, unittest
+from engine.solver import mf_m11
+
+class TestMFM11(unittest.TestCase):
+    # Realistic caffeine in SC-CO2 Chrastil params (k=4.85, a=-7000, b=-23)
+    KW = {"k": 4.85, "a": -7000.0, "b": -23.0}
+
+    def test_chrastil_caffeine_typical(self):
+        out = mf_m11.solve({"rho_CO2": 800.0, "T_K": 313.0, **self.KW})
+        self.assertTrue(out["validity"]["passed"], msg=out["validity"]["issues"])
+        # Expected y ~ exp(-12.94) ~ 2.4e-6
+        ln_y = self.KW["k"] * math.log(800.0) + self.KW["a"]/313.0 + self.KW["b"]
+        self.assertAlmostEqual(out["result"]["value"], math.exp(ln_y), delta=1e-10)
+
+    def test_T_C_conversion(self):
+        out_k = mf_m11.solve({"rho_CO2": 800.0, "T_K": 313.0, **self.KW})
+        out_c = mf_m11.solve({"rho_CO2": 800.0, "T_C": 313.0 - 273.15, **self.KW})
+        self.assertAlmostEqual(out_k["result"]["value"], out_c["result"]["value"], delta=1e-12)
+
+    def test_higher_rho_higher_solubility(self):
+        out_low = mf_m11.solve({"rho_CO2": 400.0, "T_K": 313.0, **self.KW})
+        out_high = mf_m11.solve({"rho_CO2": 900.0, "T_K": 313.0, **self.KW})
+        self.assertGreater(out_high["result"]["value"], out_low["result"]["value"])
+
+    def test_negative_rho_rejected(self):
+        out = mf_m11.solve({"rho_CO2": -100.0, "T_K": 313.0, **self.KW})
+        self.assertFalse(out["validity"]["passed"])
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+===== engine/solver/tests/test_mf_m10.py =====
+"""Tests for MF-M10 Membrane_Transport."""
+from __future__ import annotations
+import math, unittest
+from engine.solver import mf_m10
+
+class TestMFM10(unittest.TestCase):
+    def test_normal_flux(self):
+        out = mf_m10.solve({"P_solute": 1e-7, "thickness": 1e-4, "dC": 100.0})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertAlmostEqual(out["result"]["value"], 1e-7 * 100.0 / 1e-4)
+
+    def test_zero_gradient_no_flux(self):
+        out = mf_m10.solve({"P_solute": 1e-7, "thickness": 1e-4, "dC": 0.0})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertEqual(out["result"]["value"], 0.0)
+
+    def test_negative_dC_negative_flux(self):
+        out = mf_m10.solve({"P_solute": 1e-7, "thickness": 1e-4, "dC": -50.0})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertLess(out["result"]["value"], 0)
+
+    def test_zero_thickness_rejected(self):
+        out = mf_m10.solve({"P_solute": 1e-7, "thickness": 0.0, "dC": 100.0})
+        self.assertFalse(out["validity"]["passed"])
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+
+codex
+## MF-T06
+- VERDICT: APPROVE_WITH_NOTES
+- BUGS:
+  - P1: `dH_d` is always required and part of the compute guard even when `sigma_override` is provided, so an override-only call is rejected and returns `NaN` despite having enough information to solve (`engine/solver/mf_t06.py:60-77`).
+- IMPROVEMENTS suggested:
+  - If `sigma_override` is present and valid, skip `dH_d` validation entirely.
+  - Add tests for `sigma_override` without `dH_d`.
+  - Add tests for extreme `arg` values around `±700` to lock in the overflow clamp behavior.
+
+## MF-K06
+- VERDICT: APPROVE_WITH_NOTES
+- BUGS:
+  - P2: The docstring is inconsistent at the MIC boundary: it states growth is permitted for `[substance] ≤ MIC` but inhibited for `substance ≥ MIC`; implementation uses inhibition at equality (`engine/solver/mf_k06.py:3-7`, `96-101`).
+  - P2: Core limit validation relies heavily on decorator bounds metadata; inside the solver, `pH_min`, `a_w_min`, `T_min`, and `MIC` are only checked for finiteness, not semantic range, if bounds loading is disabled (`engine/solver/mf_k06.py:78-90`).
+- IMPROVEMENTS suggested:
+  - Decide and document the exact MIC equality convention.
+  - Add direct solver-level range checks for `pH_min`, `a_w_min`, `T_min`, and `MIC` rather than relying only on `@validate_bounds`.
+  - Add tests for equality boundaries: `pH == pH_min`, `a_w == a_w_min`, `T_C == T_min`, `substance_conc == MIC`.
+  - Add tests for invalid limit values such as negative `MIC` and `a_w_min > 1`.
+
+## MF-T07
+- VERDICT: APPROVE
+- BUGS:
+  - None material found.
+- IMPROVEMENTS suggested:
+  - Add a test near the upper input bounds to ensure no unintended overflow/`inf` result from very large `E_field`.
+  - Add a test that output soft/hard bounds are enforced when `P_abs` exceeds the configured output range.
+
+## MF-T10
+- VERDICT: REJECT
+- BUGS:
+  - P0: `T_C == -273.15` passes `require_temperature_celsius`, then `t_k = 0` and `Ea/(R*t_k)` divides by zero (`engine/solver/mf_t10.py:65`, `84-85`).
+  - P2: `alpha = 1 - exp(-arg)` loses precision for very small `arg`; `-math.expm1(-arg)` is the stable form (`engine/solver/mf_t10.py:92-93`).
+  - P2: The water advisory threshold in code (`< 0.30`) does not match the docstring guidance (`≥ ~0.5`) (`engine/solver/mf_t10.py:13`, `70-76`).
+- IMPROVEMENTS suggested:
+  - Require `T_K > 0` before the Arrhenius calculation.
+  - Use `-math.expm1(-arg)` for small `arg`.
+  - Align the water-content threshold in code and docs.
+  - Add tests for `T_C = -273.15`, very small `arg`, and very large `A * time^n` saturation.
+
+## MF-M07
+- VERDICT: APPROVE_WITH_NOTES
+- BUGS:
+  - P2: Overflow handling returns `inf`, which then fails the post-call finite/output-bounds check; this is safe, but not especially clean as “overflow protection” (`engine/solver/mf_m07.py:49-56`).
+  - P2: The assumption text is scientifically wrong: `K_partition` is always positive; hydrophobicity corresponds to `K_partition > 1`, not “positive” (`engine/solver/mf_m07.py:36`).
+- IMPROVEMENTS suggested:
+  - Consider returning a large finite cap or explicit invalid result instead of `inf`.
+  - Fix the assumption text to `K_partition > 1 implies oil preference`.
+  - Add tests for large positive and large negative `logP` overflow/underflow paths.
+
+## MF-M08
+- VERDICT: REJECT
+- BUGS:
+  - P1: The formula is dimensionally inconsistent as implemented. `P_O2`/`P_CO2` are documented in `cm³·mil/(m²·day·atm)`, but `thickness` is documented in meters and used directly without converting `mil` to meters (`engine/solver/mf_m08.py:3-9`, `52-58`).
+  - P1: The docstring says `WVTR` is an allowed input, but the solver never reads it (`engine/solver/mf_m08.py:7`, `38`).
+  - P2: `T_c` alias is not accepted even though bounds metadata includes it (`engine/solver/mf_m08.py:41`).
+- IMPROVEMENTS suggested:
+  - Normalize units explicitly: either require thickness in `mil` for these permeability units, or convert thickness from meters before applying the formula.
+  - Either implement `WVTR` handling or remove it from the interface.
+  - Accept `T_c` alias consistently.
+  - Add tests that would catch the meter-vs-mil conversion error and tests for `WVTR` input behavior.
+
+## MF-T08
+- VERDICT: APPROVE_WITH_NOTES
+- BUGS:
+  - P2: Negative `sigma(T)` is only warned and then clamped to zero, which avoids nonphysical negative heating but silently changes the model form (`engine/solver/mf_t08.py:53-57`).
+- IMPROVEMENTS suggested:
+  - Consider making negative `sigma(T)` a hard validation failure rather than a warning-plus-clamp.
+  - Add a test where `alpha` and `T_C` drive `sigma(T)` below zero.
+  - Add a stress test near the upper `E_field` bound.
+
+## MF-K07
+- VERDICT: REJECT
+- BUGS:
+  - P1: The solver accepts `L_total` and `P_total` as inputs but uses the excess-ligand approximation `L_free ≈ L_total` instead of solving the 1:1 mass-balance equilibrium. This can be badly wrong when ligand is not in large excess (`engine/solver/mf_k07.py:33-40`, `54-63`).
+  - P2: If both `K_a` and `K_d` are supplied and inconsistent, `K_d` is silently ignored (`engine/solver/mf_k07.py:37-49`).
+- IMPROVEMENTS suggested:
+  - Implement the exact quadratic binding solution when `P_total` is supplied.
+  - If retaining the approximation mode, require or strongly warn on `L_total >> P_total` before computing.
+  - Add tests where `L_total ~ P_total` and compare against the exact 1:1 equilibrium.
+  - Add a test for conflicting `K_a` and `K_d`.
+
+## MF-T09
+- VERDICT: APPROVE_WITH_NOTES
+- BUGS:
+  - P2: Solver-level validation permits negative `b` if bounds metadata is unavailable, even though the configured bounds require `b >= 0` (`engine/solver/mf_t09.py:40-47`).
+  - P2: Overflow protection returns `inf`; safe from `math.exp` overflow, but it still produces an invalid physical/result object rather than a controlled finite cap (`engine/solver/mf_t09.py:47-54`).
+- IMPROVEMENTS suggested:
+  - Add an explicit nonnegative check for `b` inside the solver.
+  - Consider a finite saturation cap or explicit invalid return instead of `inf`.
+  - Add tests for very large positive `b*T_C` and negative `b`.
+
+## MF-M09
+- VERDICT: APPROVE
+- BUGS:
+  - None material found.
+- IMPROVEMENTS suggested:
+  - Add a test for `T_C = -273.15` / `T_K = 0` rejection.
+  - Add a test for inconsistent simultaneous `T_K` and `T_C` inputs to define precedence explicitly.
+  - Add a high-end bounds test near `M = 10`, `i = 10`, `T_K = 400`.
+
+## MF-M11
+- VERDICT: APPROVE_WITH_NOTES
+- BUGS:
+  - P2: The solver can return `inf` or values `> 1` for `y_solute`; post-validation will fail them, but the core calculation does not enforce the physical mole-fraction limit (`engine/solver/mf_m11.py:56-62`).
+  - P2: The “supercritical CO2 phase” assumption is only enforced through bounds metadata; solver-level validation allows any positive `T_K` if the decorator is unavailable (`engine/solver/mf_m11.py:34`, `47-55`).
+- IMPROVEMENTS suggested:
+  - Explicitly validate `T_K > 304 K` or `T_C > 31 C` when representing SC-CO2.
+  - Decide whether output should be hard-clamped/rejected when `y_solute > 1`.
+  - Add tests for `ln_y` overflow, `y_solute > 1`, and subcritical temperatures.
+
+## MF-M10
+- VERDICT: APPROVE
+- BUGS:
+  - P2: The output description says “mass flux” but the unit is molar flux `mol/(m²·s)` (`engine/solver/mf_m10.py:11-12`, `47`).
+- IMPROVEMENTS suggested:
+  - Rename the output description to “molar flux”.
+  - Add tests for alias inputs `P`, `L`, `dc`, and `delta_c`.
+  - Add a high-magnitude `dC` test near configured bounds to ensure sign and scale remain correct.
+tokens used
+56,447
+## MF-T06
+- VERDICT: APPROVE_WITH_NOTES
+- BUGS:
+  - P1: `dH_d` is always required and part of the compute guard even when `sigma_override` is provided, so an override-only call is rejected and returns `NaN` despite having enough information to solve (`engine/solver/mf_t06.py:60-77`).
+- IMPROVEMENTS suggested:
+  - If `sigma_override` is present and valid, skip `dH_d` validation entirely.
+  - Add tests for `sigma_override` without `dH_d`.
+  - Add tests for extreme `arg` values around `±700` to lock in the overflow clamp behavior.
+
+## MF-K06
+- VERDICT: APPROVE_WITH_NOTES
+- BUGS:
+  - P2: The docstring is inconsistent at the MIC boundary: it states growth is permitted for `[substance] ≤ MIC` but inhibited for `substance ≥ MIC`; implementation uses inhibition at equality (`engine/solver/mf_k06.py:3-7`, `96-101`).
+  - P2: Core limit validation relies heavily on decorator bounds metadata; inside the solver, `pH_min`, `a_w_min`, `T_min`, and `MIC` are only checked for finiteness, not semantic range, if bounds loading is disabled (`engine/solver/mf_k06.py:78-90`).
+- IMPROVEMENTS suggested:
+  - Decide and document the exact MIC equality convention.
+  - Add direct solver-level range checks for `pH_min`, `a_w_min`, `T_min`, and `MIC` rather than relying only on `@validate_bounds`.
+  - Add tests for equality boundaries: `pH == pH_min`, `a_w == a_w_min`, `T_C == T_min`, `substance_conc == MIC`.
+  - Add tests for invalid limit values such as negative `MIC` and `a_w_min > 1`.
+
+## MF-T07
+- VERDICT: APPROVE
+- BUGS:
+  - None material found.
+- IMPROVEMENTS suggested:
+  - Add a test near the upper input bounds to ensure no unintended overflow/`inf` result from very large `E_field`.
+  - Add a test that output soft/hard bounds are enforced when `P_abs` exceeds the configured output range.
+
+## MF-T10
+- VERDICT: REJECT
+- BUGS:
+  - P0: `T_C == -273.15` passes `require_temperature_celsius`, then `t_k = 0` and `Ea/(R*t_k)` divides by zero (`engine/solver/mf_t10.py:65`, `84-85`).
+  - P2: `alpha = 1 - exp(-arg)` loses precision for very small `arg`; `-math.expm1(-arg)` is the stable form (`engine/solver/mf_t10.py:92-93`).
+  - P2: The water advisory threshold in code (`< 0.30`) does not match the docstring guidance (`≥ ~0.5`) (`engine/solver/mf_t10.py:13`, `70-76`).
+- IMPROVEMENTS suggested:
+  - Require `T_K > 0` before the Arrhenius calculation.
+  - Use `-math.expm1(-arg)` for small `arg`.
+  - Align the water-content threshold in code and docs.
+  - Add tests for `T_C = -273.15`, very small `arg`, and very large `A * time^n` saturation.
+
+## MF-M07
+- VERDICT: APPROVE_WITH_NOTES
+- BUGS:
+  - P2: Overflow handling returns `inf`, which then fails the post-call finite/output-bounds check; this is safe, but not especially clean as “overflow protection” (`engine/solver/mf_m07.py:49-56`).
+  - P2: The assumption text is scientifically wrong: `K_partition` is always positive; hydrophobicity corresponds to `K_partition > 1`, not “positive” (`engine/solver/mf_m07.py:36`).
+- IMPROVEMENTS suggested:
+  - Consider returning a large finite cap or explicit invalid result instead of `inf`.
+  - Fix the assumption text to `K_partition > 1 implies oil preference`.
+  - Add tests for large positive and large negative `logP` overflow/underflow paths.
+
+## MF-M08
+- VERDICT: REJECT
+- BUGS:
+  - P1: The formula is dimensionally inconsistent as implemented. `P_O2`/`P_CO2` are documented in `cm³·mil/(m²·day·atm)`, but `thickness` is documented in meters and used directly without converting `mil` to meters (`engine/solver/mf_m08.py:3-9`, `52-58`).
+  - P1: The docstring says `WVTR` is an allowed input, but the solver never reads it (`engine/solver/mf_m08.py:7`, `38`).
+  - P2: `T_c` alias is not accepted even though bounds metadata includes it (`engine/solver/mf_m08.py:41`).
+- IMPROVEMENTS suggested:
+  - Normalize units explicitly: either require thickness in `mil` for these permeability units, or convert thickness from meters before applying the formula.
+  - Either implement `WVTR` handling or remove it from the interface.
+  - Accept `T_c` alias consistently.
+  - Add tests that would catch the meter-vs-mil conversion error and tests for `WVTR` input behavior.
+
+## MF-T08
+- VERDICT: APPROVE_WITH_NOTES
+- BUGS:
+  - P2: Negative `sigma(T)` is only warned and then clamped to zero, which avoids nonphysical negative heating but silently changes the model form (`engine/solver/mf_t08.py:53-57`).
+- IMPROVEMENTS suggested:
+  - Consider making negative `sigma(T)` a hard validation failure rather than a warning-plus-clamp.
+  - Add a test where `alpha` and `T_C` drive `sigma(T)` below zero.
+  - Add a stress test near the upper `E_field` bound.
+
+## MF-K07
+- VERDICT: REJECT
+- BUGS:
+  - P1: The solver accepts `L_total` and `P_total` as inputs but uses the excess-ligand approximation `L_free ≈ L_total` instead of solving the 1:1 mass-balance equilibrium. This can be badly wrong when ligand is not in large excess (`engine/solver/mf_k07.py:33-40`, `54-63`).
+  - P2: If both `K_a` and `K_d` are supplied and inconsistent, `K_d` is silently ignored (`engine/solver/mf_k07.py:37-49`).
+- IMPROVEMENTS suggested:
+  - Implement the exact quadratic binding solution when `P_total` is supplied.
+  - If retaining the approximation mode, require or strongly warn on `L_total >> P_total` before computing.
+  - Add tests where `L_total ~ P_total` and compare against the exact 1:1 equilibrium.
+  - Add a test for conflicting `K_a` and `K_d`.
+
+## MF-T09
+- VERDICT: APPROVE_WITH_NOTES
+- BUGS:
+  - P2: Solver-level validation permits negative `b` if bounds metadata is unavailable, even though the configured bounds require `b >= 0` (`engine/solver/mf_t09.py:40-47`).
+  - P2: Overflow protection returns `inf`; safe from `math.exp` overflow, but it still produces an invalid physical/result object rather than a controlled finite cap (`engine/solver/mf_t09.py:47-54`).
+- IMPROVEMENTS suggested:
+  - Add an explicit nonnegative check for `b` inside the solver.
+  - Consider a finite saturation cap or explicit invalid return instead of `inf`.
+  - Add tests for very large positive `b*T_C` and negative `b`.
+
+## MF-M09
+- VERDICT: APPROVE
+- BUGS:
+  - None material found.
+- IMPROVEMENTS suggested:
+  - Add a test for `T_C = -273.15` / `T_K = 0` rejection.
+  - Add a test for inconsistent simultaneous `T_K` and `T_C` inputs to define precedence explicitly.
+  - Add a high-end bounds test near `M = 10`, `i = 10`, `T_K = 400`.
+
+## MF-M11
+- VERDICT: APPROVE_WITH_NOTES
+- BUGS:
+  - P2: The solver can return `inf` or values `> 1` for `y_solute`; post-validation will fail them, but the core calculation does not enforce the physical mole-fraction limit (`engine/solver/mf_m11.py:56-62`).
+  - P2: The “supercritical CO2 phase” assumption is only enforced through bounds metadata; solver-level validation allows any positive `T_K` if the decorator is unavailable (`engine/solver/mf_m11.py:34`, `47-55`).
+- IMPROVEMENTS suggested:
+  - Explicitly validate `T_K > 304 K` or `T_C > 31 C` when representing SC-CO2.
+  - Decide whether output should be hard-clamped/rejected when `y_solute > 1`.
+  - Add tests for `ln_y` overflow, `y_solute > 1`, and subcritical temperatures.
+
+## MF-M10
+- VERDICT: APPROVE
+- BUGS:
+  - P2: The output description says “mass flux” but the unit is molar flux `mol/(m²·s)` (`engine/solver/mf_m10.py:11-12`, `47`).
+- IMPROVEMENTS suggested:
+  - Rename the output description to “molar flux”.
+  - Add tests for alias inputs `P`, `L`, `dc`, and `delta_c`.
+  - Add a high-magnitude `dC` test near configured bounds to ensure sign and scale remain correct.

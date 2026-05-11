@@ -63,27 +63,35 @@ def solve(params: dict) -> dict:
 
     val.require_temperature_celsius("T_d", t_d)
     val.require_temperature_celsius("T_C", t_c)
-    val.require_positive("dH_d", dh_d)
+    # P1 fix (cross-review): allow sigma_override WITHOUT dH_d
     if sigma_override is not None:
         val.require_positive("sigma_override", sigma_override)
+    else:
+        val.require_positive("dH_d", dh_d)
 
     f_native: float | None = None
-    if (
-        all(
-            isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
-            for x in (t_d, t_c, dh_d)
-        )
-        and dh_d > 0
-    ):
-        if sigma_override is not None and isinstance(sigma_override, (int, float)) \
-                and not isinstance(sigma_override, bool) and math.isfinite(sigma_override) \
-                and sigma_override > 0:
+    # Compute path depends on whether sigma_override is supplied
+    have_override = (
+        sigma_override is not None
+        and isinstance(sigma_override, (int, float)) and not isinstance(sigma_override, bool)
+        and math.isfinite(sigma_override) and sigma_override > 0
+    )
+    have_dh = (
+        isinstance(dh_d, (int, float)) and not isinstance(dh_d, bool)
+        and math.isfinite(dh_d) and dh_d > 0
+    )
+    can_compute = (
+        isinstance(t_d, (int, float)) and not isinstance(t_d, bool) and math.isfinite(t_d)
+        and isinstance(t_c, (int, float)) and not isinstance(t_c, bool) and math.isfinite(t_c)
+        and (have_override or have_dh)
+    )
+    if can_compute:
+        if have_override:
             sigma = float(sigma_override)
             assumptions.append("sigma supplied via sigma_override")
         else:
-            # van 't Hoff steepness: sigma ≈ R T_d_K² / dH_d (in K, equiv to °C)
             t_d_k = float(t_d) + 273.15
-            dh_d_j = float(dh_d) * 1000.0  # kJ/mol → J/mol
+            dh_d_j = float(dh_d) * 1000.0
             sigma = _R_GAS_J * t_d_k * t_d_k / dh_d_j
             assumptions.append(
                 f"sigma from van 't Hoff: R·T_d²/dH_d = {sigma:.3g}°C"

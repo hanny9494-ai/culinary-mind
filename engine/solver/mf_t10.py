@@ -52,7 +52,7 @@ def solve(params: dict) -> dict:
     assumptions: list[str] = [
         "Avrami-like first-order with shape exponent n",
         "k(T) follows Arrhenius",
-        "water sufficient for gelatinization (advisory check on water_content)",
+        "water sufficient for gelatinization (advisory: <0.30 likely incomplete)",
     ]
 
     t_c = params.get("T_C", params.get("T_c"))
@@ -82,15 +82,19 @@ def solve(params: dict) -> dict:
         and time >= 0 and a_factor > 0 and ea >= 0 and n > 0
     ):
         t_k = float(t_c) + 273.15
-        k_t = float(a_factor) * math.exp(-float(ea) / (_R_GAS_J * t_k))
-        # Compute alpha with overflow protection
-        arg = k_t * (float(time) ** float(n))
-        if arg > 700.0:
-            alpha = 1.0
-        elif arg < 0.0:
-            alpha = float("nan")  # shouldn't happen with positive inputs
+        if t_k <= 0:
+            val.issues.append(f"T_K={t_k} ≤ 0 (T_C={t_c}°C below absolute zero)")
+            alpha = None
         else:
-            alpha = 1.0 - math.exp(-arg)
+            k_t = float(a_factor) * math.exp(-float(ea) / (_R_GAS_J * t_k))
+            # Compute alpha with overflow protection; use expm1 for small arg stability
+            arg = k_t * (float(time) ** float(n))
+            if arg > 700.0:
+                alpha = 1.0
+            elif arg < 0.0:
+                alpha = float("nan")
+            else:
+                alpha = -math.expm1(-arg)
 
     return build_result(
         value=alpha if alpha is not None else float("nan"),

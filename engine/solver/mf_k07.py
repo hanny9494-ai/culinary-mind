@@ -56,11 +56,25 @@ def solve(params: dict) -> dict:
         isinstance(ka, (int, float)) and not isinstance(ka, bool) and math.isfinite(ka) and ka > 0
         and isinstance(l_total, (int, float)) and not isinstance(l_total, bool) and math.isfinite(l_total) and l_total > 0
     ):
-        # Simple model: L_free ≈ L_total
-        kl = float(ka) * float(l_total)
-        f_bound = kl / (1.0 + kl)
-        if p_total and float(p_total) > 0 and float(l_total) < 5 * float(p_total):
-            assumptions.append("L_total close to P_total — L_free ≈ L_total approximation may be inaccurate")
+        ka_f = float(ka)
+        L_t = float(l_total)
+        if isinstance(p_total, (int, float)) and not isinstance(p_total, bool) and math.isfinite(p_total) and p_total > 0:
+            # Exact 1:1 binding mass balance:
+            #   [PL] = (1/2)·{(P + L + 1/Ka) - sqrt[(P + L + 1/Ka)² - 4PL]}
+            #   f_bound = [PL]/P_total
+            P_t = float(p_total)
+            sum_t = P_t + L_t + 1.0 / ka_f
+            disc = sum_t * sum_t - 4.0 * P_t * L_t
+            if disc < 0:
+                disc = 0.0  # numerical guard; should not be < 0 mathematically
+            pl_conc = 0.5 * (sum_t - math.sqrt(disc))
+            f_bound = pl_conc / P_t
+            assumptions.append("exact 1:1 binding mass-balance solved (no L_free approx)")
+        else:
+            # Excess-ligand approximation
+            kl = ka_f * L_t
+            f_bound = kl / (1.0 + kl)
+            assumptions.append("excess-ligand approx (no P_total supplied)")
 
     return build_result(
         value=f_bound if f_bound is not None else float("nan"),

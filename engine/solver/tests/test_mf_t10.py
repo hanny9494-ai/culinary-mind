@@ -75,3 +75,11 @@ class TestMFT10(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestMFT10AbsoluteZero(unittest.TestCase):
+    def test_T_C_negative_273_15_rejected(self):
+        """P0 fix from cross-review: T_K=0 should not produce NaN by division."""
+        out = mf_t10.solve({"T_C": -273.15, "time": 100.0, "A": 1e10, "Ea": 80000.0, "n": 1.5})
+        self.assertFalse(out["validity"]["passed"])
+        self.assertTrue(any("absolute zero" in i.lower() or "T_K" in i for i in out["validity"]["issues"]))

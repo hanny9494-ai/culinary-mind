@@ -82,17 +82,22 @@ def main():
     for (mf, field), recs in sorted(by_mf_field.items()):
         stats = by_mf_stats[mf]
         stats["total_records"] += len(recs)
+        # MF-T02 is parent_only; route to T02-K/-CP/-RHO children based on field
+        # For benchmark purposes we test each record against MF-T02-CP (most common: composition fields)
         if mf == "MF-T02":
-            stats["no_solver"] += len(recs)
-            continue
-        mod_name = f"engine.solver.{mf.lower().replace('-', '_')}"
+            # Route to MF-T02-CP as default child for parent records (cp uses all composition + T_C)
+            mf_for_solve = "MF-T02-CP"
+            mod_name = "engine.solver.mf_t02_cp"
+        else:
+            mf_for_solve = mf
+            mod_name = f"engine.solver.{mf.lower().replace('-', '_')}"
         try:
             solver_mod = importlib.import_module(mod_name)
         except ModuleNotFoundError:
             stats["no_solver"] += len(recs); continue
         if not hasattr(solver_mod, "solve"):
             stats["no_solver"] += len(recs); continue
-        defaults = DEFAULTS.get(mf)
+        defaults = DEFAULTS.get(mf_for_solve, DEFAULTS.get(mf))
         if defaults is None:
             stats["no_default"] += len(recs); continue
 
