@@ -212,15 +212,19 @@ def main():
         "mf_field_database": db,
     }
     OUT_DB.parent.mkdir(parents=True, exist_ok=True)
-    OUT_DB.write_text(yaml.safe_dump(output_db, allow_unicode=True, sort_keys=False))
+    tmp_db = OUT_DB.with_suffix(".tmp")
+    tmp_db.write_text(yaml.safe_dump(output_db, allow_unicode=True, sort_keys=False))
+    tmp_db.rename(OUT_DB)
     print(f"✅ Wrote MF value database: {OUT_DB}")
 
     # Write record-level jsonl
-    with open(OUT_RECORDS, "w", encoding="utf-8") as f:
+    tmp_rec = OUT_RECORDS.with_suffix(".tmp")
+    with open(tmp_rec, "w", encoding="utf-8") as f:
         for (mf, field), recs in sorted(field_records.items()):
             for r in recs:
                 r["mf_field_key"] = f"{mf}.{field}"
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    tmp_rec.rename(OUT_RECORDS)
     print(f"✅ Wrote record-level jsonl: {OUT_RECORDS} ({matched} records)")
 
     # QC report
@@ -238,7 +242,9 @@ def main():
             "any_field_with_extreme_stdev": [(mf, f, v["distribution_si"]["stdev"]) for mf, fields in db.items() for f, v in fields.items() if v["distribution_si"].get("stdev", 0) > 1e6][:10],
         },
     }
-    OUT_QC.write_text(yaml.safe_dump(qc, allow_unicode=True, sort_keys=False))
+    tmp_qc = OUT_QC.with_suffix(".tmp")
+    tmp_qc.write_text(yaml.safe_dump(qc, allow_unicode=True, sort_keys=False))
+    tmp_qc.rename(OUT_QC)
     print(f"✅ Wrote QC report: {OUT_QC}")
 
     print()

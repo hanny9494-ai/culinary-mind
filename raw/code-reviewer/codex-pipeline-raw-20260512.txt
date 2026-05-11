@@ -1,0 +1,3348 @@
+Reading additional input from stdin...
+OpenAI Codex v0.128.0-alpha.1 (research preview)
+--------
+workdir: /Users/jeff/culinary-mind
+model: gpt-5.4
+provider: openai
+approval: never
+sandbox: danger-full-access
+reasoning effort: medium
+reasoning summaries: none
+session id: 019e1817-6b14-76d0-842f-8df0fe8d9618
+--------
+user
+You are a code reviewer for an ETL pipeline. Review these scripts focusing on:
+
+1. **Correctness of data flow** (do records flow through stages without loss?)
+2. **Error handling** (Codex CLI failures, rate limits, malformed JSON)
+3. **Atomic writes** (no partial files)
+4. **Idempotency / resume** (re-runs don't corrupt state)
+5. **Performance issues** (silly O(n²) etc)
+6. **Real bugs** vs nit-picks
+
+Output strict markdown, NO prose preamble. Start with `## extract_unique_pairs.py`, etc.
+
+For each script:
+- VERDICT: APPROVE / APPROVE_WITH_NOTES / REJECT
+- BUGS (P0/P1/P2) with line numbers if possible
+- Key concerns
+
+---
+
+
+=== scripts/skill_a/etl/rescue_backlog_to_new_fields.py ===
+#!/usr/bin/env python3
+"""P2-Sa1.2: Rule-based rescue of backlog records → new MF schema fields.
+
+For each new MF schema field, define keyword/unit rules to map from
+new_mf_candidates_v2.jsonl items.
+
+Output:
+  - Augment param_ontology_map_v2.json → param_ontology_map_v3.json
+  - Re-emit MF value database with rescued records
+"""
+import json
+import re
+import yaml
+from pathlib import Path
+from collections import defaultdict
+
+ROOT = Path("/Users/jeff/culinary-mind")
+MAP_V2 = ROOT / "output/skill_a/param_ontology_map_v2.json"
+NEW_MF_FILE = ROOT / "output/skill_a/new_mf_candidates_v2.jsonl"
+MAP_V3 = ROOT / "output/skill_a/param_ontology_map_v3.json"
+
+# Rule-based rescue: (target_mf, target_field, [label_patterns], [optional_unit_filter])
+# Match if any pattern matches candidate_label
+RULES = [
+    # G1 一阶降解 → MF-T03.observed_k
+    ("MF-T03", "observed_k", [
+        r"first[ -]order.*degradation.*rate",
+        r"first[ -]order.*kinetics.*rate",
+        r"thermal degradation rate const",
+        r"nutrient degradation rate",
+        r"arrhenius response.*k",
+        r"degradation rate const.*specified temp",
+        r"reaction kinetics.*rate const",
+        r"temperature[ -]specific reaction rate const",
+        r"apparent reaction rate const",
+        r"reaction/degradation rate const",
+        r"\bk\(T\)",
+        r"degradation kinetics.*rate const",
+    ], None),
+    # G1 一阶降解 → MF-T03.reaction_order (含 "reaction order" 字眼)
+    ("MF-T03", "reaction_order", [
+        r"\breaction[ -]order\b",
+        r"nth[ -]order kinetics",
+        r"order kinetics exponent",
+    ], None),
+    # G1 半衰期 → MF-T03.observed_k (转换: k = ln(2)/half_life，仍归 observed_k slot)
+    ("MF-T03", "observed_k", [
+        r"degradation.*half[ -]life",
+        r"\bhalf[ -]life\b.*degradation",
+        r"\bt½\b",
+    ], None),
+    # G2 辐照灭菌 → MF-K02.D_radiation_kGy
+    ("MF-K02", "D_radiation_kGy", [
+        r"radiation resistance",
+        r"radiation dose",
+        r"radiation[ -]induced",
+        r"irradiation",
+        r"gamma irradiation",
+        r"\bD10\b",
+    ], None),
+    # G6 酶活最适 pH → MF-K01.pH_opt
+    ("MF-K01", "pH_opt", [
+        r"enzyme.*pH optimum",
+        r"optimum pH",
+        r"optimal pH",
+    ], None),
+    # G6 酶活最适温度 → MF-K01.T_opt
+    ("MF-K01", "T_opt", [
+        r"enzyme.*temperature optimum",
+        r"optimum temperature.*enzyme",
+        r"optimal temperature.*enzyme",
+        r"enzyme activity.*optimum",
+    ], None),
+    # G11 等温吸湿热 → MF-M02.Q_iso
+    ("MF-M02", "Q_iso", [
+        r"isosteric heat",
+        r"sorption.*binding energy",
+        r"heat of sorption",
+        r"adsorption enthalpy",
+        r"\bQ_iso\b",
+        r"\bQst\b",
+        r"norrish.*water[ -]activity",
+        r"moisture sorption.*binding",
+    ], None),
+    # G14 食品成分 → MF-T02.composition.salt/sugar/alcohol
+    ("MF-T02", "composition.salt", [
+        r"\bsalt content\b",
+        r"NaCl content",
+        r"sodium chloride content",
+    ], None),
+    ("MF-T02", "composition.sugar", [
+        r"\bsugar content\b",
+        r"sucrose content",
+        r"glucose content.*compos",
+        r"fructose content.*compos",
+    ], None),
+    ("MF-T02", "composition.alcohol", [
+        r"\balcohol content\b",
+        r"ethanol fraction",
+        r"\bethanol content\b",
+    ], None),
+    # G17 pKa → MF-M04.pKa1/2/3
+    ("MF-M04", "pKa1", [
+        r"\bpKa1\b",
+        r"first pKa",
+        r"first dissociation",
+        r"\bpK1\b",
+    ], None),
+    ("MF-M04", "pKa2", [
+        r"\bpKa2\b",
+        r"second pKa",
+        r"second dissociation",
+        r"\bpK2\b",
+    ], None),
+    ("MF-M04", "pKa3", [
+        r"\bpKa3\b",
+        r"third pKa",
+        r"\bpK3\b",
+    ], None),
+    # G8 二阶反应 → MF-T03 (we don't have a dedicated 2nd-order field; flag as needs_review + new schema later)
+    # not in current 6-MF schema extension
+    # G28 比热多项式 → MF-T02.Cp (just goes to existing Cp slot at midpoint; better leave for now)
+]
+
+# Compile patterns
+compiled_rules = [(mf, field, [re.compile(p, re.IGNORECASE) for p in patterns], unit_filter)
+                  for mf, field, patterns, unit_filter in RULES]
+
+def match_rule(label):
+    for mf, field, pats, unit_filter in compiled_rules:
+        if any(p.search(label) for p in pats):
+            return (mf, field)
+    return None
+
+def main():
+    # Load v2 mapping
+    v2 = json.load(open(MAP_V2))
+    mappings = v2["mappings"]
+
+    # Build provenance lookup: which (mf, pn) entries are already in mappings
+    already = set()
+    for mf, params in mappings.items():
+        for pn in params:
+            already.add((mf, pn))
+
+    # Load new_mf_candidates
+    candidates = []
+    with open(NEW_MF_FILE) as f:
+        for line in f:
+            candidates.append(json.loads(line))
+
+    rescued = []
+    skipped_already = 0
+    no_match = 0
+
+    for c in candidates:
+        label = c["candidate_label"]
+        pn = c["parameter_name"]
+        m = match_rule(label)
+        if not m:
+            no_match += 1
+            continue
+        target_mf, target_field = m
+        if (target_mf, pn) in already:
+            skipped_already += 1
+            continue
+        # Add to mappings
+        mappings.setdefault(target_mf, {})[pn] = {
+            "canonical_field": target_field,
+            "confidence": 0.85,  # rule-based, mark as 0.85 (auto-accepted floor)
+            "source": "v3_rule_rescued",
+            "original_mf": c["original_mf"],
+            "candidate_label": label,
+            "occurrence_count": c["occurrence_count"],
+            "sample_value": c.get("sample_value"),
+            "sample_unit": c.get("sample_unit"),
+            "reason": f"Rule-based: candidate_label '{label[:50]}...' matched → {target_mf}.{target_field}",
+        }
+        already.add((target_mf, pn))
+        rescued.append({
+            "original_mf": c["original_mf"],
+            "parameter_name": pn,
+            "best_mf": target_mf,
+            "canonical_field": target_field,
+            "occurrence_count": c["occurrence_count"],
+        })
+
+    # Save v3
+    v3 = {
+        "version": "3.0",
+        "generated_at": "2026-05-11",
+        "source": "v1 within-MF + v2 cross-MF + v3 rule-based rescue to new schema fields",
+        "stats_summary": v2.get("stats_summary", {}),
+        "v3_rescued_pairs": len(rescued),
+        "v3_rescued_records": sum(r["occurrence_count"] for r in rescued),
+        "mappings": mappings,
+    }
+    MAP_V3.write_text(json.dumps(v3, ensure_ascii=False, indent=2))
+
+    # Stats
+    rescued_records = sum(r["occurrence_count"] for r in rescued)
+    by_target = defaultdict(int)
+    for r in rescued:
+        by_target[f'{r["best_mf"]}.{r["canonical_field"]}'] += r["occurrence_count"]
+
+    print(f"=== V3 Rule-based Rescue Results ===")
+    print(f"Total candidates scanned: {len(candidates):,}")
+    print(f"Rescued pairs: {len(rescued):,}")
+    print(f"Rescued records: {rescued_records:,}")
+    print(f"Already in map (skipped): {skipped_already:,}")
+    print(f"No rule match: {no_match:,}")
+    print()
+    print("By target field (records):")
+    for k, v in sorted(by_target.items(), key=lambda x: -x[1]):
+        print(f"  {k:<32}: {v:>4}")
+
+if __name__ == "__main__":
+    main()
+
+=== scripts/skill_a/etl/p2_sa2_outlier_cleaning.py ===
+#!/usr/bin/env python3
+"""P2-Sa2 Phase 1: Automated outlier cleaning of MF value database.
+
+Cleans:
+1. Negative D_eff (log scale errors)
+2. Metal-range conductivity / density wrongly assigned to food
+3. Out-of-physical-bound values
+
+Output:
+- output/skill_a/mf_parameter_value_database_clean.yaml
+- output/skill_a/p2_sa2_outlier_report.yaml
+"""
+import json
+import yaml
+from collections import defaultdict
+from pathlib import Path
+
+ROOT = Path("/Users/jeff/culinary-mind")
+DB_FILE = ROOT / "output/skill_a/mf_parameter_value_database.yaml"
+CLEAN_FILE = ROOT / "output/skill_a/mf_parameter_value_database_clean.yaml"
+REPORT_FILE = ROOT / "output/skill_a/p2_sa2_outlier_report.yaml"
+RECORDS_FILE = ROOT / "output/skill_a/mf_parameter_records.jsonl"
+CLEAN_RECORDS_FILE = ROOT / "output/skill_a/mf_parameter_records_clean.jsonl"
+
+# Physical sanity rules per (mf, field)
+CLEAN_RULES = {
+    ("MF-M01", "D_eff"): {"min": 1e-15, "max": 1e-5, "reason": "diffusion coefficient must be > 0 and < bulk water D (~2e-9)"},
+    ("MF-M01", "D"): {"min": 1e-15, "max": 1e-5, "reason": "diffusion coefficient sanity"},
+    ("MF-T01", "k"): {"min": 0.05, "max": 5.0, "reason": "food thermal conductivity (metals 10-400 excluded)"},
+    ("MF-T01", "rho"): {"min": 100.0, "max": 2500.0, "reason": "food density (metals 5000-10000 excluded)"},
+    ("MF-T01", "Cp"): {"min": 0.5, "max": 5000.0, "reason": "food Cp in J/(kg·K) or kJ/(kg·°C)"},
+    ("MF-T02", "T_C"): {"min": -100.0, "max": 250.0, "reason": "food processing temperature range"},
+    ("MF-T05", "T_m"): {"min": -50.0, "max": 100.0, "reason": "food melting point (water-based)"},
+    ("MF-R05", "Tg"): {"min": -100.0, "max": 300.0, "reason": "glass transition temperature"},
+    ("MF-M02", "a_w"): {"min": 0.0, "max": 1.0, "reason": "water activity by definition"},
+    ("MF-M04", "pKa"): {"min": -3.0, "max": 16.0, "reason": "pKa physical range"},
+}
+
+def main():
+    print(f"Loading database: {DB_FILE}")
+    db = yaml.safe_load(open(DB_FILE))
+    
+    # Load records jsonl
+    records = []
+    with open(RECORDS_FILE) as f:
+        for line in f:
+            records.append(json.loads(line))
+    print(f"Loaded {len(records):,} records")
+
+    # Apply cleaning rules to records
+    cleaned_records = []
+    dropped = defaultdict(list)
+    by_rule = defaultdict(int)
+
+    for r in records:
+        key = (r["best_mf"], r["canonical_field"])
+        rule = CLEAN_RULES.get(key)
+        if rule is None:
+            cleaned_records.append(r)
+            continue
+        v = r.get("value_si")
+        if v is None or not isinstance(v, (int, float)):
+            cleaned_records.append(r)  # parse already failed; not an outlier issue
+            continue
+        if v < rule["min"] or v > rule["max"]:
+            dropped[f"{key[0]}.{key[1]}"].append({
+                "value": v, "unit": r.get("unit_si"),
+                "book": r["book"], "page": r.get("page"),
+                "parameter_name": r["parameter_name"][:80],
+                "reason": rule["reason"],
+            })
+            by_rule[f"{key[0]}.{key[1]}"] += 1
+        else:
+            cleaned_records.append(r)
+
+    # Write cleaned records
+    with open(CLEAN_RECORDS_FILE, "w") as f:
+        for r in cleaned_records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    # Rebuild value DB from cleaned records
+    import statistics
+    new_db = {}
+    by_field = defaultdict(list)
+    for r in cleaned_records:
+        by_field[(r["best_mf"], r["canonical_field"])].append(r)
+
+    def percentiles(values, qs):
+        if not values: return {q: None for q in qs}
+        s = sorted(values)
+        n = len(s)
+        return {q: s[max(0, min(n-1, int(q * n / 100)))] for q in qs}
+
+    for (mf, field), recs in sorted(by_field.items()):
+        nums = [r["value_si"] for r in recs if isinstance(r.get("value_si"), (int, float))]
+        units = [r["unit_si"] for r in recs if r.get("unit_si")]
+        unit = max(set(units), key=units.count) if units else "?"
+        books = set(r["book"] for r in recs)
+        dist = {}
+        if nums:
+            ps = percentiles(nums, [5, 25, 50, 75, 95])
+            dist = {
+                "n_numeric": len(nums),
+                "min": float(min(nums)),
+                "p5": float(ps[5]) if ps[5] is not None else None,
+                "p25": float(ps[25]) if ps[25] is not None else None,
+                "median": float(ps[50]) if ps[50] is not None else None,
+                "p75": float(ps[75]) if ps[75] is not None else None,
+                "p95": float(ps[95]) if ps[95] is not None else None,
+                "max": float(max(nums)),
+                "mean": float(statistics.mean(nums)),
+                "stdev": float(statistics.stdev(nums)) if len(nums) > 1 else 0.0,
+            }
+        new_db.setdefault(mf, {})[field] = {
+            "n_records": len(recs),
+            "n_books": len(books),
+            "typical_unit_si": unit,
+            "distribution_si": dist,
+            "sample_records_first_5": [{
+                "book": r["book"], "page": r.get("page"), "value": r.get("value"), "unit": r.get("unit"),
+                "value_si": r.get("value_si"),
+            } for r in recs[:5]],
+        }
+
+    output_db = {
+        "version": "2.0_clean",
+        "generated_at": "2026-05-11",
+        "source": "P2-Sa2 outlier-cleaned database (rules-based)",
+        "stats": {
+            "input_records": len(records),
+            "output_records": len(cleaned_records),
+            "dropped_records": len(records) - len(cleaned_records),
+            "n_mf": len(new_db),
+            "n_pairs": sum(len(v) for v in new_db.values()),
+        },
+        "mf_field_database": new_db,
+    }
+    CLEAN_FILE.write_text(yaml.safe_dump(output_db, allow_unicode=True, sort_keys=False))
+
+    report = {
+        "version": "1.0",
+        "rules_applied": {f"{k[0]}.{k[1]}": v for k, v in CLEAN_RULES.items()},
+        "summary": {
+            "input_records": len(records),
+            "output_records_clean": len(cleaned_records),
+            "dropped_total": len(records) - len(cleaned_records),
+            "dropped_by_rule": dict(by_rule),
+        },
+        "dropped_samples_by_field": {k: v[:5] for k, v in dropped.items()},
+    }
+    REPORT_FILE.write_text(yaml.safe_dump(report, allow_unicode=True, sort_keys=False))
+
+    print(f"\n✅ Cleaned: {len(cleaned_records):,} records ({len(records) - len(cleaned_records)} dropped)")
+    print(f"✅ Wrote {CLEAN_FILE}")
+    print(f"✅ Wrote {REPORT_FILE}")
+    print()
+    print("Dropped by rule:")
+    for k, v in sorted(by_rule.items(), key=lambda x: -x[1]):
+        print(f"  {k}: {v} records")
+
+if __name__ == "__main__":
+    main()
+
+=== scripts/skill_a/etl/build_mf_value_database.py ===
+#!/usr/bin/env python3
+"""P2-Sa1: Skill A ETL — 9,153 mapped records → per-MF value distribution database.
+
+Reads:
+  - output/skill_a/param_ontology_map_v2.json (v1+v2 mapping: pn → (best_mf, canonical_field))
+  - output/*/skill_a/results.jsonl × 94 books (raw Skill A records)
+
+Writes:
+  - output/skill_a/mf_parameter_value_database.yaml  (distribution stats per (mf, field))
+  - output/skill_a/mf_parameter_records.jsonl       (full record-level provenance)
+  - output/skill_a/p2_sa1_qc_report.yaml           (QC summary)
+"""
+import json
+import re
+import statistics
+import yaml
+from collections import defaultdict
+from pathlib import Path
+
+ROOT = Path("/Users/jeff/culinary-mind")
+MAP_FILE = ROOT / "output/skill_a/param_ontology_map_v3.json"
+
+OUT_DB = ROOT / "output/skill_a/mf_parameter_value_database.yaml"
+OUT_RECORDS = ROOT / "output/skill_a/mf_parameter_records.jsonl"
+OUT_QC = ROOT / "output/skill_a/p2_sa1_qc_report.yaml"
+
+# Simple unit normalization (subset of D44 rules from P1-21c)
+UNIT_NORMALIZERS = {
+    # temperature → °C
+    ("K", "kelvin"): lambda v: v - 273.15 if isinstance(v, (int, float)) else None,
+    ("°F", "F", "fahrenheit"): lambda v: (v - 32) * 5/9 if isinstance(v, (int, float)) else None,
+    # pressure → Pa
+    ("kPa",): lambda v: v * 1000 if isinstance(v, (int, float)) else None,
+    ("MPa",): lambda v: v * 1e6 if isinstance(v, (int, float)) else None,
+    ("bar",): lambda v: v * 1e5 if isinstance(v, (int, float)) else None,
+    ("psi",): lambda v: v * 6894.76 if isinstance(v, (int, float)) else None,
+    # viscosity → Pa·s
+    ("cP", "centipoise", "mPa·s"): lambda v: v / 1000 if isinstance(v, (int, float)) else None,
+    # time → s
+    ("min", "minute", "minutes"): lambda v: v * 60 if isinstance(v, (int, float)) else None,
+    ("h", "hr", "hour", "hours"): lambda v: v * 3600 if isinstance(v, (int, float)) else None,
+    ("day", "days"): lambda v: v * 86400 if isinstance(v, (int, float)) else None,
+    # mass fraction
+    ("%", "percent"): lambda v: v / 100 if isinstance(v, (int, float)) else None,
+}
+
+def normalize_unit_value(value, unit):
+    """Best-effort numeric + unit normalization. Returns (value_si, unit_si, ok)."""
+    if value is None: return None, unit, False
+    # Try parse scalar
+    if isinstance(value, str):
+        s = value.strip()
+        m = re.match(r"^[-+]?\d+(\.\d+)?([eE][-+]?\d+)?$", s)
+        if m:
+            value = float(s)
+        else:
+            # try range like "30-40" or "[30, 40]"
+            m = re.match(r"^\[?\s*([-+]?\d+(?:\.\d+)?)\s*[,\-~–]\s*([-+]?\d+(?:\.\d+)?)\s*\]?$", s)
+            if m:
+                value = (float(m.group(1)) + float(m.group(2))) / 2
+            else:
+                return None, unit, False
+    if not isinstance(value, (int, float)): return None, unit, False
+    if unit:
+        u = unit.strip()
+        for keys, fn in UNIT_NORMALIZERS.items():
+            if u in keys:
+                try:
+                    out = fn(value)
+                    if out is not None:
+                        # Return canonical unit
+                        canonical = {
+                            "K": "°C", "°F": "°C", "F": "°C", "fahrenheit": "°C", "kelvin": "°C",
+                            "kPa": "Pa", "MPa": "Pa", "bar": "Pa", "psi": "Pa",
+                            "cP": "Pa·s", "centipoise": "Pa·s", "mPa·s": "Pa·s",
+                            "min": "s", "minute": "s", "minutes": "s",
+                            "h": "s", "hr": "s", "hour": "s", "hours": "s",
+                            "day": "s", "days": "s",
+                            "%": "fraction", "percent": "fraction",
+                        }.get(u, u)
+                        return out, canonical, True
+                except: pass
+    return value, unit, True
+
+def percentiles(values, qs):
+    """nearest-rank percentile."""
+    if not values: return {q: None for q in qs}
+    s = sorted(values)
+    n = len(s)
+    return {q: s[max(0, min(n-1, int(q * n / 100)))] for q in qs}
+
+def main():
+    # Load mapping (from v2 result: best_mf 已存在 mappings 结构中)
+    map_data = json.load(open(MAP_FILE))
+    # mappings: best_mf → {parameter_name: meta}; meta has canonical_field, source (v1_auto/v2_rescued), original_mf, occurrence_count
+    
+    # Build lookup: (original_mf or any source_mf, parameter_name) → (best_mf, canonical_field)
+    pn_lookup = {}  # (some_mf_for_v1_or_v2, parameter_name) → (best_mf, canonical_field, source)
+    for best_mf, params in map_data["mappings"].items():
+        for pn, meta in params.items():
+            cf = meta["canonical_field"]
+            src = meta.get("source", "v1_auto")
+            # v1_auto: best_mf == original_mf (same key). v2_rescued: original_mf saved in meta
+            if src == "v1_auto":
+                pn_lookup[(best_mf, pn)] = (best_mf, cf, "v1_auto")
+            elif src in ("v2_rescued", "v3_rule_rescued"):
+                orig = meta.get("original_mf")
+                if orig:
+                    pn_lookup[(orig, pn)] = (best_mf, cf, "v2_rescued")
+
+    print(f"Mapping lookup size: {len(pn_lookup):,}")
+
+    # Now walk Skill A records
+    field_records = defaultdict(list)  # (best_mf, canonical_field) → [{value, unit, value_si, unit_si, book, page, ingredient, ...}]
+    total_records = 0
+    matched = 0
+    unmatched = 0
+    no_value = 0
+
+    for results_file in sorted(ROOT.glob("output/*/skill_a/results.jsonl")):
+        book = results_file.parents[1].name
+        with open(results_file, encoding="utf-8") as f:
+            for line in f:
+                try: r = json.loads(line)
+                except: continue
+                if r.get("_filtered"): continue
+                fid = r.get("formula_id")
+                pn = (r.get("parameter_name") or "").strip()
+                if not (fid and pn): continue
+                total_records += 1
+
+                key = (fid, pn)
+                if key not in pn_lookup:
+                    unmatched += 1
+                    continue
+                best_mf, canonical_field, source = pn_lookup[key]
+                if canonical_field == "no_match": continue  # shouldn't happen since we filter
+                matched += 1
+                value = r.get("value")
+                unit = r.get("unit") or ""
+                v_si, u_si, ok = normalize_unit_value(value, unit)
+                if not ok or v_si is None:
+                    no_value += 1
+                rec = {
+                    "book": book,
+                    "page": r.get("_page") or (r.get("source") or {}).get("page"),
+                    "value": value,
+                    "unit": unit,
+                    "value_si": v_si,
+                    "unit_si": u_si,
+                    "value_ok": ok,
+                    "parameter_name": pn,
+                    "original_mf": fid,
+                    "best_mf": best_mf,
+                    "canonical_field": canonical_field,
+                    "mapping_source": source,
+                    "confidence": r.get("confidence"),
+                    "ingredient": (r.get("conditions") or {}).get("substrate") or (r.get("conditions") or {}).get("ingredient"),
+                    "causal_context": r.get("causal_context"),
+                }
+                field_records[(best_mf, canonical_field)].append(rec)
+
+    # Aggregate distributions
+    db = {}
+    for (mf, field), recs in sorted(field_records.items()):
+        nums = [r["value_si"] for r in recs if r["value_si"] is not None and isinstance(r["value_si"], (int, float))]
+        # bucket SI unit (most common)
+        units_si = [r["unit_si"] for r in recs if r["unit_si"]]
+        most_common_unit = max(set(units_si), key=units_si.count) if units_si else "?"
+        books = set(r["book"] for r in recs)
+        dist = {}
+        if nums:
+            ps = percentiles(nums, [5, 25, 50, 75, 95])
+            dist = {
+                "n_numeric": len(nums),
+                "min": float(min(nums)),
+                "p5": float(ps[5]) if ps[5] is not None else None,
+                "p25": float(ps[25]) if ps[25] is not None else None,
+                "median": float(ps[50]) if ps[50] is not None else None,
+                "p75": float(ps[75]) if ps[75] is not None else None,
+                "p95": float(ps[95]) if ps[95] is not None else None,
+                "max": float(max(nums)),
+                "mean": float(statistics.mean(nums)),
+                "stdev": float(statistics.stdev(nums)) if len(nums) > 1 else 0.0,
+            }
+        db.setdefault(mf, {})[field] = {
+            "n_records": len(recs),
+            "n_books": len(books),
+            "typical_unit_si": most_common_unit,
+            "distribution_si": dist,
+            "v1_auto_count": sum(1 for r in recs if r["mapping_source"] == "v1_auto"),
+            "v2_rescued_count": sum(1 for r in recs if r["mapping_source"] == "v2_rescued"),
+            "sample_records_first_5": [{
+                "book": r["book"], "page": r["page"], "value": r["value"], "unit": r["unit"],
+                "value_si": r["value_si"], "ingredient": r.get("ingredient"),
+                "parameter_name": r["parameter_name"][:80],
+            } for r in recs[:5]],
+        }
+
+    output_db = {
+        "version": "1.0",
+        "generated_at": "2026-05-11",
+        "source": "P2-Sa1 ETL: Skill A 26,727 records → MF value database (via P1-21c-D ontology map v2)",
+        "stats": {
+            "total_skill_a_records": total_records,
+            "mapped_records_loaded": matched,
+            "unmapped_records_dropped": unmatched,
+            "value_parse_failed": no_value,
+            "n_mf_with_data": len(db),
+            "n_unique_mf_field_pairs": sum(len(v) for v in db.values()),
+        },
+        "mf_field_database": db,
+    }
+    OUT_DB.parent.mkdir(parents=True, exist_ok=True)
+    OUT_DB.write_text(yaml.safe_dump(output_db, allow_unicode=True, sort_keys=False))
+    print(f"✅ Wrote MF value database: {OUT_DB}")
+
+    # Write record-level jsonl
+    with open(OUT_RECORDS, "w", encoding="utf-8") as f:
+        for (mf, field), recs in sorted(field_records.items()):
+            for r in recs:
+                r["mf_field_key"] = f"{mf}.{field}"
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    print(f"✅ Wrote record-level jsonl: {OUT_RECORDS} ({matched} records)")
+
+    # QC report
+    qc = {
+        "version": "1.0",
+        "p1_exit_check": "skill_a_param_ontology_mapped >= 95% → PASS (P1-21c-D)",
+        "p2_sa1_stats": output_db["stats"],
+        "coverage_by_mf": {mf: sum(v["n_records"] for v in fields.values()) for mf, fields in sorted(db.items())},
+        "top_10_field_records": sorted(
+            [(mf, f, v["n_records"]) for mf, fields in db.items() for f, v in fields.items()],
+            key=lambda x: -x[2]
+        )[:10],
+        "qc_flags": {
+            "any_field_with_zero_numeric": [(mf, f) for mf, fields in db.items() for f, v in fields.items() if v["distribution_si"].get("n_numeric", 0) == 0],
+            "any_field_with_extreme_stdev": [(mf, f, v["distribution_si"]["stdev"]) for mf, fields in db.items() for f, v in fields.items() if v["distribution_si"].get("stdev", 0) > 1e6][:10],
+        },
+    }
+    OUT_QC.write_text(yaml.safe_dump(qc, allow_unicode=True, sort_keys=False))
+    print(f"✅ Wrote QC report: {OUT_QC}")
+
+    print()
+    print("=== SUMMARY ===")
+    for k, v in output_db["stats"].items():
+        print(f"  {k}: {v}")
+    print()
+    print("=== Top 10 (mf, field) by record count ===")
+    for mf, f, n in qc["top_10_field_records"]:
+        d = db[mf][f]["distribution_si"]
+        u = db[mf][f]["typical_unit_si"]
+        if d:
+            print(f"  {mf}.{f:<20} n={n:>4}  range=[{d.get('p5','?')!s:<8}, {d.get('p95','?')!s:<8}] {u}  median={d.get('median','?')!s}")
+        else:
+            print(f"  {mf}.{f:<20} n={n:>4}  (no numeric distribution)")
+
+if __name__ == "__main__":
+    main()
+
+=== scripts/skill_a/benchmark/mf_real_data_benchmark.py ===
+#!/usr/bin/env python3
+"""P4-Be2 lite: feed real Skill A values into MF solvers."""
+import importlib
+import json
+import math
+import yaml
+from collections import defaultdict
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+ROOT = Path("/Users/jeff/culinary-mind")
+RECORDS_FILE = ROOT / "output/skill_a/mf_parameter_records_clean.jsonl"
+REPORT_FILE = ROOT / "output/skill_a/mf_benchmark_report.yaml"
+DETAIL_FILE = ROOT / "output/skill_a/mf_benchmark_records.jsonl"
+
+DEFAULTS = {
+    "MF-T01": {"T_init": 25.0, "T_boundary": 100.0, "time": 600.0, "x_position": 0.01, "alpha": 1.4e-7, "thickness": 0.02, "k": 0.5, "rho": 1000.0, "Cp": 3800.0},
+    "MF-T02-K": {"T_C": 25.0, "composition.water": 0.7, "composition.protein": 0.15, "composition.fat": 0.1, "composition.carb": 0.04, "composition.fiber": 0.005, "composition.ash": 0.005},
+    "MF-T02-CP": {"T_C": 25.0, "composition.water": 0.7, "composition.protein": 0.15, "composition.fat": 0.1, "composition.carb": 0.04, "composition.fiber": 0.005, "composition.ash": 0.005},
+    "MF-T02-RHO": {"T_C": 25.0, "composition.water": 0.7, "composition.protein": 0.15, "composition.fat": 0.1, "composition.carb": 0.04, "composition.fiber": 0.005, "composition.ash": 0.005},
+    "MF-T03": {"A": 1.0e10, "Ea": 50000.0, "T_K": 363.0},
+    "MF-T04": {"Re": 1.0e4, "Pr": 7.0, "C": 0.023, "m": 0.8, "n": 0.4},
+    "MF-T05": {"rho": 1000.0, "L_f": 3.34e5, "d": 0.01, "a": 1.0, "T_f": 0.0, "T_inf": -20.0, "T_m": 0.0, "h": 50.0, "k": 0.5},
+    "MF-T06": {"T_d": 70.0, "dH_d": 300.0, "T_C": 70.0},
+    "MF-T07": {"epsilon_double_prime": 10.0, "frequency": 2.45e9, "E_field": 1000.0},
+    "MF-T08": {"sigma_25": 0.5, "alpha": 0.02, "E_field": 100.0, "T_C": 50.0},
+    "MF-T09": {"a": 0.05, "b": 0.08, "T_C": 4.0},
+    "MF-T10": {"T_C": 80.0, "time": 600.0, "A": 1.0e8, "Ea": 80000.0, "n": 1.5},
+    "MF-K01": {"Vmax": 1.0e-5, "Km": 1.0e-4, "S": 1.0e-3},
+    "MF-K02": {"t": 60.0, "N": 1.0e2, "N0": 1.0e6},
+    "MF-K03": {"T1": 121.1, "T2": 100.0, "D1": 12.0, "D2": 36.0},
+    "MF-K04": {"T_ref": 121.1, "z": 10.0, "T_C": 121.1, "time": 180.0},
+    "MF-K05": {"A": 1.0, "mu_max": 0.5, "lam": 1.0, "t": 5.0},
+    "MF-K06": {"pH_min": 4.6, "a_w_min": 0.92, "T_min": 5.0, "MIC": 100.0, "pH": 5.0, "a_w": 0.93, "T_C": 10.0, "substance_conc": 50.0},
+    "MF-K07": {"K_a": 1.0e6, "L_total": 1.0e-6, "P_total": 1.0e-7},
+    "MF-M01": {"C_init": 0.0, "C_boundary": 100.0, "D": 1.0e-9, "D_eff": 1.0e-9, "x": 0.005, "x_position": 0.005, "time": 3600.0, "thickness": 0.02},
+    "MF-M02": {"a_w": 0.5, "W_m": 0.08, "Xm": 0.08, "C": 10.0, "K": 0.9},
+    "MF-M03": {"T_C": 80.0, "substance": "water"},
+    "MF-M04": {"pKa": 4.76, "A_minus_conc": 0.5, "HA_conc": 0.5},
+    "MF-M05": {"H": 1.0e5, "p_gas": 1000.0, "T_C": 25.0},
+    "MF-M06": {"T_C": 25.0, "substance": "water"},
+    "MF-M07": {"logP": 1.0, "S_water": 0.01, "T_C": 25.0},
+    "MF-M08": {"P_O2": 100.0, "thickness": 1.0e-4, "delta_p": 0.21, "T_C": 25.0, "RH": 50.0},
+    "MF-M09": {"M": 0.5, "T_K": 298.15, "i": 1.0},
+    "MF-M10": {"P_solute": 1.0e-7, "thickness": 1.0e-4, "dC": 100.0},
+    "MF-M11": {"rho_CO2": 800.0, "T_K": 313.0, "k": 4.85, "a": -7000.0, "b": -23.0},
+    "MF-R01": {"K": 1.0, "n": 0.5, "gamma_dot": 100.0},
+    "MF-R02": {"tau_0": 5.0, "K": 1.0, "n": 0.5, "gamma_dot": 100.0},
+    "MF-R03": {"tau_0": 5.0, "K_C": 1.0, "gamma_dot": 100.0},
+    "MF-R04": {"w1": 0.5, "w2": 0.5, "Tg1": -100.0, "Tg2": 100.0, "k": 1.0},
+    "MF-R05": {"T": 80.0, "Tg": 50.0, "C1": 17.44, "C2": 51.6},
+    "MF-R06": {"k": 1.0, "I": 100.0, "n": 0.3},
+    "MF-R07": {"E": 1.0e9, "gamma_s": 1.0, "a": 1.0e-4},
+    "MF-C01": {"r": 1.0e-6, "rho_p": 1100.0, "rho_f": 1000.0, "eta": 1.0e-3, "g": 9.81},
+    "MF-C02": {"M_h": 100.0, "M_l": 200.0, "M": 300.0},
+    "MF-C03": {"A_H": 1.0e-20, "kappa": 1.0e8, "zeta": 0.03, "epsilon_r": 80.0, "T": 298.0, "D": 5.0e-9},
+    "MF-C04": {"sigma": 0.07, "R": 1.0e-3},
+    "MF-C05": {"k1": 1.0e-5, "k2": 5.0e-5, "T1": 25.0, "T2": 35.0},
+}
+
+def main():
+    records = []
+    with open(RECORDS_FILE) as f:
+        for line in f:
+            records.append(json.loads(line))
+    print(f"Loaded {len(records):,} clean records")
+
+    by_mf_field = defaultdict(list)
+    for r in records:
+        by_mf_field[(r["best_mf"], r["canonical_field"])].append(r)
+
+    SAMPLE_LIMIT = 30
+    bench_results = []
+    by_mf_stats = defaultdict(lambda: {
+        "total_records": 0, "tested": 0,
+        "validity_passed": 0, "validity_failed": 0,
+        "nan_output": 0, "no_solver": 0, "no_default": 0,
+        "issues_by_type": defaultdict(int),
+    })
+
+    for (mf, field), recs in sorted(by_mf_field.items()):
+        stats = by_mf_stats[mf]
+        stats["total_records"] += len(recs)
+        if mf == "MF-T02":
+            stats["no_solver"] += len(recs)
+            continue
+        mod_name = f"engine.solver.{mf.lower().replace('-', '_')}"
+        try:
+            solver_mod = importlib.import_module(mod_name)
+        except ModuleNotFoundError:
+            stats["no_solver"] += len(recs); continue
+        if not hasattr(solver_mod, "solve"):
+            stats["no_solver"] += len(recs); continue
+        defaults = DEFAULTS.get(mf)
+        if defaults is None:
+            stats["no_default"] += len(recs); continue
+
+        sampled = recs[:SAMPLE_LIMIT]
+        for r in sampled:
+            stats["tested"] += 1
+            v = r.get("value_si")
+            if not isinstance(v, (int, float)) or not math.isfinite(v):
+                stats["nan_output"] += 1; continue
+            params = dict(defaults)
+            params[field] = v
+            try:
+                out = solver_mod.solve(params)
+            except Exception as exc:
+                stats["validity_failed"] += 1
+                stats["issues_by_type"]["exception"] += 1
+                bench_results.append({"mf": mf, "field": field, "value": v, "status": "exception", "error": str(exc)[:200]})
+                continue
+            passed = out["validity"]["passed"]
+            value_out = out["result"]["value"]
+            if passed:
+                stats["validity_passed"] += 1
+                if isinstance(value_out, float) and (math.isnan(value_out) or math.isinf(value_out)):
+                    stats["nan_output"] += 1
+            else:
+                stats["validity_failed"] += 1
+                for issue in out["validity"]["issues"]:
+                    if "outside bounds" in issue: stats["issues_by_type"]["bounds_violation"] += 1
+                    elif "finite" in issue: stats["issues_by_type"]["non_finite"] += 1
+                    else: stats["issues_by_type"]["other"] += 1
+            bench_results.append({
+                "mf": mf, "field": field,
+                "value_si": v, "unit_si": r.get("unit_si"),
+                "book": r["book"], "page": r.get("page"),
+                "passed": passed,
+                "output_symbol": out["result"]["symbol"],
+                "output_value": value_out if isinstance(value_out, (int, float)) and math.isfinite(value_out) else str(value_out),
+                "output_unit": out["result"]["unit"],
+                "issues_count": len(out["validity"]["issues"]),
+            })
+
+    with open(DETAIL_FILE, "w") as f:
+        for r in bench_results: f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    summary = {}
+    for mf in sorted(by_mf_stats):
+        s = by_mf_stats[mf]
+        pass_rate = round(s["validity_passed"] * 100 / s["tested"], 1) if s["tested"] else 0
+        summary[mf] = {
+            "total_records": s["total_records"], "tested": s["tested"],
+            "passed": s["validity_passed"], "failed": s["validity_failed"],
+            "pass_rate_pct": pass_rate, "nan_output": s["nan_output"],
+            "no_solver": s["no_solver"], "issues_by_type": dict(s["issues_by_type"]),
+        }
+    overall_tested = sum(s["tested"] for s in by_mf_stats.values())
+    overall_passed = sum(s["validity_passed"] for s in by_mf_stats.values())
+    report = {
+        "version": "1.0",
+        "generated_at": "2026-05-11",
+        "description": "P4-Be2 lite: real Skill A values fed into 40 MF solvers",
+        "global": {
+            "total_records": sum(s["total_records"] for s in by_mf_stats.values()),
+            "total_tested": overall_tested,
+            "total_passed": overall_passed,
+            "global_pass_rate_pct": round(overall_passed * 100 / overall_tested, 1) if overall_tested else 0,
+        },
+        "by_mf": summary,
+    }
+    REPORT_FILE.write_text(yaml.safe_dump(report, allow_unicode=True, sort_keys=False))
+    print(f"\n=== Benchmark ===")
+    print(f"Tested: {overall_tested}  Passed: {overall_passed}  ({report['global']['global_pass_rate_pct']}%)")
+    print()
+    print(f"{'MF':<10} {'rec':>5} {'test':>5} {'pass':>5} {'%':>6}  Top issue")
+    print("-"*68)
+    for mf in sorted(summary):
+        s = summary[mf]
+        top = max(s["issues_by_type"].items(), key=lambda x: x[1], default=("-", 0))
+        print(f"{mf:<10} {s['total_records']:>5} {s['tested']:>5} {s['passed']:>5} {s['pass_rate_pct']:>5}%  {top[0]}={top[1]}")
+
+if __name__ == "__main__":
+    main()
+
+=== scripts/skill_a/benchmark/case_study_beef_boiling.py ===
+#!/usr/bin/env python3
+"""End-to-end Layer 3 reasoning case study: Beef Boiling.
+
+Scenario: 5cm beef cube boiled in 100°C water; predict center temperature over time,
+protein denaturation, myoglobin oxidation rate, and pathogen safety.
+
+Chain of MFs:
+1. MF-T02-K / -CP / -RHO: thermal properties from beef composition (Choi-Okos)
+2. MF-T01 (Fourier 1D): T_center(x=L/2, t) heat conduction
+3. MF-T06 (Protein_Denaturation): myosin denaturation fraction at T_center
+4. MF-T03 (Arrhenius): k(T) for non-enzymatic browning at T_center
+5. MF-K04 (F_Value): pasteurization equivalent at boundary
+6. MF-K06 (Growth_Limit): Salmonella safety check
+"""
+import sys
+import math
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from engine.solver import mf_t01, mf_t02_k, mf_t02_cp, mf_t02_rho, mf_t06, mf_t03, mf_k04, mf_k06
+
+
+def main():
+    print("=" * 70)
+    print("CASE STUDY: 5cm Beef Cube Boiled in 100°C Water — 30 min")
+    print("=" * 70)
+    print()
+
+    # Beef composition (USDA average lean beef)
+    beef_comp = {
+        "composition.water": 0.62,
+        "composition.protein": 0.22,
+        "composition.fat": 0.13,
+        "composition.carb": 0.0,
+        "composition.fiber": 0.0,
+        "composition.ash": 0.01,
+        "Xw": 0.62, "Xp": 0.22, "Xf": 0.13, "Xc": 0.0, "Xfiber": 0.0, "Xa": 0.01,
+    }
+
+    # ──────────────── Step 1: Thermal Properties at 50°C ──────────────
+    print("STEP 1: Beef thermal properties at 50°C (Choi-Okos)")
+    print("-" * 70)
+    t_mid = 50.0
+    out_k = mf_t02_k.solve({**beef_comp, "T_C": t_mid})
+    out_cp = mf_t02_cp.solve({**beef_comp, "T_C": t_mid})
+    out_rho = mf_t02_rho.solve({**beef_comp, "T_C": t_mid})
+
+    k = out_k["result"]["value"]
+    cp = out_cp["result"]["value"]
+    rho = out_rho["result"]["value"]
+    print(f"  k (thermal conductivity): {k:.3f} W/(m·K)  [validity: {out_k['validity']['passed']}]")
+    print(f"  Cp (specific heat):       {cp:.1f} J/(kg·K)  [validity: {out_cp['validity']['passed']}]")
+    print(f"  ρ  (density):             {rho:.1f} kg/m³  [validity: {out_rho['validity']['passed']}]")
+    alpha = k / (rho * cp)
+    print(f"  α  (thermal diffusivity): {alpha:.3e} m²/s")
+    print()
+
+    # ──────────────── Step 2: Fourier 1D at multiple times ────────────
+    print("STEP 2: Fourier 1D heat conduction at center (x = L/2 = 0.025m)")
+    print("-" * 70)
+    L = 0.05  # 5cm cube
+    times = [60, 300, 600, 1200, 1800, 3600]  # 1, 5, 10, 20, 30 min, 1h
+    print(f"  Setup: cube L={L*100:.1f}cm, T_init=4°C, T_boundary=100°C")
+    print()
+    print(f"  {'time (min)':>10}  {'T_center (°C)':>14}  {'validity':<10}")
+    T_centers = []
+    for t in times:
+        out_fourier = mf_t01.solve({
+            "T_init": 4.0, "T_boundary": 100.0,
+            "time": float(t), "x_position": L/2,
+            "alpha": alpha, "thickness": L,
+            "k": k, "rho": rho, "Cp": cp,
+        })
+        t_c = out_fourier["result"]["value"]
+        T_centers.append(t_c)
+        ok = "OK" if out_fourier["validity"]["passed"] else "WARN"
+        print(f"  {t/60:>10.1f}  {t_c:>14.1f}  {ok:<10}")
+    print()
+
+    # ──────────────── Step 3: Protein Denaturation ────────────────────
+    print("STEP 3: Myosin denaturation (MF-T06) at center temperature")
+    print("-" * 70)
+    # Myosin denaturation: T_d ≈ 55°C, dH_d ≈ 720 kJ/mol
+    print(f"  Setup: T_d=55°C (myosin), dH_d=720 kJ/mol")
+    print()
+    print(f"  {'time (min)':>10}  {'T_center':>10}  {'f_native':>10}  {'denatured%':>12}")
+    for t, tc in zip(times, T_centers):
+        out_pd = mf_t06.solve({"T_d": 55.0, "dH_d": 720.0, "T_C": tc})
+        fn = out_pd["result"]["value"]
+        if isinstance(fn, float) and math.isfinite(fn):
+            print(f"  {t/60:>10.1f}  {tc:>10.1f}  {fn:>10.4f}  {(1-fn)*100:>11.1f}%")
+        else:
+            print(f"  {t/60:>10.1f}  {tc:>10.1f}  {'NaN':>10}  -")
+    print()
+
+    # ──────────────── Step 4: Arrhenius k(T) for browning ─────────────
+    print("STEP 4: Maillard browning rate (MF-T03 Arrhenius) at center")
+    print("-" * 70)
+    # Maillard: Ea ~ 120 kJ/mol = 120,000 J/mol, A ~ 1e15 s⁻¹
+    print(f"  Setup: A=1e15 s⁻¹, Ea=120,000 J/mol")
+    print()
+    print(f"  {'time (min)':>10}  {'T_center':>10}  {'T_K':>8}  {'k(T) s⁻¹':>14}")
+    for t, tc in zip(times, T_centers):
+        T_K = tc + 273.15
+        out_arr = mf_t03.solve({"A": 1.0e15, "Ea": 120000.0, "T_K": T_K})
+        k_T = out_arr["result"]["value"]
+        if isinstance(k_T, float) and math.isfinite(k_T):
+            print(f"  {t/60:>10.1f}  {tc:>10.1f}  {T_K:>8.1f}  {k_T:>14.3e}")
+        else:
+            print(f"  {t/60:>10.1f}  {tc:>10.1f}  -  NaN")
+    print()
+
+    # ──────────────── Step 5: F-Value Pasteurization at boundary ──────
+    print("STEP 5: F-Value pasteurization equivalent at boundary (100°C)")
+    print("-" * 70)
+    # F0 standard: T_ref=121.1, z=10 → typical food safety
+    # At 100°C boundary: F0 < 1 (not full sterilization)
+    out_f = mf_k04.solve({"T_ref": 121.1, "z": 10.0, "T_C": 100.0, "time": 1800.0})  # 30 min at 100°C
+    f_val = out_f["result"]["value"]
+    print(f"  Setup: T_ref=121.1°C, z=10°C, T_actual=100°C, time=30 min")
+    print(f"  F-value: {f_val:.2f} min  [validity: {out_f['validity']['passed']}]")
+    print(f"  → 30 min @ 100°C delivers only {f_val:.1f} F₀-equivalent minutes")
+    print(f"  → Pasteurization (Listeria/Salmonella): typically needs F70 ≥ 1-2 min")
+    print()
+
+    # ──────────────── Step 6: Salmonella Safety ───────────────────────
+    print("STEP 6: Salmonella growth limit at center temperatures")
+    print("-" * 70)
+    # Salmonella: pH_min ~3.7, a_w_min ~0.94, T_min ~5.2°C
+    # In cooked beef interior, pH ~5.5, a_w ~0.99
+    print(f"  Setup: pH_min=3.7, a_w_min=0.94, T_min=5.2°C")
+    print(f"  Beef interior: pH=5.5, a_w=0.99")
+    print()
+    print(f"  {'time (min)':>10}  {'T_center':>10}  {'growth_inhibited':>17}")
+    for t, tc in zip(times, T_centers):
+        out_g = mf_k06.solve({
+            "pH_min": 3.7, "a_w_min": 0.94, "T_min": 5.2,
+            "pH": 5.5, "a_w": 0.99, "T_C": tc,
+        })
+        gi = out_g["result"]["value"]
+        inhibited = "YES (cooked through)" if gi == 1.0 else "NO (still permits growth)" if gi == 0.0 else "?"
+        # Wait, MF-K06 inhibition is T < T_min — but cooking goes UP not DOWN
+        # In our case T_center always > 5.2 so growth permitted (gi=0)
+        # That doesn't reflect that 60°C+ kills Salmonella — but that's MF-K02 D-value
+        print(f"  {t/60:>10.1f}  {tc:>10.1f}  {gi:>17}  ({inhibited})")
+
+    print()
+    print("=" * 70)
+    print("CASE STUDY SUMMARY:")
+    print("=" * 70)
+    print(f"  Final center temp at 30 min: {T_centers[4]:.1f}°C")
+    print(f"  Denaturation predicted at center: see Step 3")
+    print(f"  F0-value at boundary 30 min: {f_val:.2f} min")
+    print()
+    print("  Layer 3 reasoning chain verified end-to-end:")
+    print("  composition → thermal props → heat transfer → kinetics → safety")
+    print()
+    print("✅ 6 MFs chained successfully. Real food engineering recipe simulation.")
+
+if __name__ == "__main__":
+    main()
+
+=== scripts/skill_a/benchmark/case_studies_batch.py ===
+#!/usr/bin/env python3
+"""Batch case studies: 4 real food scenarios chaining multiple MFs.
+
+Scenarios:
+1. Yogurt fermentation (Gompertz growth)
+2. Microwave reheating of leftover rice
+3. Apple cold storage (respiration heat + storage life)
+4. Tomato drying (moisture diffusion + thermal conductivity)
+"""
+import sys, math
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from engine.solver import (
+    mf_k05, mf_k01, mf_t03,  # kinetics
+    mf_t02_k, mf_t02_cp, mf_t02_rho,  # thermal props
+    mf_t01,  # heat conduction
+    mf_t07,  # dielectric
+    mf_t09,  # respiration
+    mf_m01,  # mass transfer (Fick)
+    mf_m02,  # GAB isotherm
+    mf_k02,  # D value
+    mf_k04,  # F value
+)
+
+
+def print_header(t):
+    print("\n" + "=" * 70 + f"\n{t}\n" + "=" * 70)
+
+def print_row(t):
+    print(f"  {t}")
+
+# ────────────────────────────────────────────────────────────────────
+# CASE 1: Yogurt Fermentation
+# ────────────────────────────────────────────────────────────────────
+def case_yogurt_fermentation():
+    print_header("CASE 1: Yogurt Fermentation (42°C, 6 hours)")
+    print_row("Setup: Whole milk + L. bulgaricus starter, 42°C incubation")
+    print_row("Predict: Microbial growth (Gompertz), final population")
+    print()
+
+    # Gompertz: log10(N/N0) = A·exp(-exp(-(μ_max·e/A)·(λ-t)+1))
+    # L. bulgaricus typical: A=8 (log10 cycles), mu_max=1.5 /h, lambda=1 h
+    A = 8.0
+    mu_max = 1.5
+    lam = 1.0
+    print(f"  Gompertz params: A={A} log10, μ_max={mu_max} /h, λ={lam} h")
+    print()
+    print(f"  {'time (h)':>9}  {'log10(N/N0)':>13}  {'10^log':>11}")
+    for t in [0, 1, 2, 3, 4, 5, 6, 8, 12]:
+        out = mf_k05.solve({"A": A, "mu_max": mu_max, "lambda": lam, "t": float(t)})
+        v = out["result"]["value"]
+        if isinstance(v, float) and math.isfinite(v):
+            print(f"  {t:>9.1f}  {v:>13.3f}  {10**v:>11.2e}")
+
+    # Apply Arrhenius to predict at different temp
+    print()
+    print(f"  Arrhenius rate constant for milk acidification:")
+    print(f"    Ea=80,000 J/mol, A=1e10 (literature for lactic ferm.)")
+    for T_C in [30, 37, 42, 45]:
+        T_K = T_C + 273.15
+        out = mf_t03.solve({"A": 1.0e10, "Ea": 80000.0, "T_K": T_K})
+        k = out["result"]["value"]
+        if isinstance(k, float) and math.isfinite(k):
+            print(f"    {T_C}°C → k = {k:.3e} s⁻¹ (relative: {k/2.42e-4:.2f}×)")
+
+
+# ────────────────────────────────────────────────────────────────────
+# CASE 2: Microwave Reheating
+# ────────────────────────────────────────────────────────────────────
+def case_microwave_reheating():
+    print_header("CASE 2: Microwave Reheating Leftover Rice (700W, 2.45 GHz)")
+    print_row("Setup: 200g cooked rice, 4°C → target 70°C")
+    print_row("Predict: Absorbed power, heating time, dielectric effects")
+    print()
+
+    # Cooked rice composition (approx)
+    rice = {
+        "composition.water": 0.68, "composition.protein": 0.025,
+        "composition.fat": 0.003, "composition.carb": 0.28,
+        "composition.fiber": 0.005, "composition.ash": 0.007,
+        "Xw": 0.68, "Xp": 0.025, "Xf": 0.003, "Xc": 0.28, "Xfiber": 0.005, "Xa": 0.007,
+    }
+    out_cp = mf_t02_cp.solve({**rice, "T_C": 30.0})
+    out_rho = mf_t02_rho.solve({**rice, "T_C": 30.0})
+    Cp = out_cp["result"]["value"]
+    rho = out_rho["result"]["value"]
+    print(f"  Rice properties: Cp={Cp:.0f} J/(kg·K), ρ={rho:.0f} kg/m³")
+
+    # MW absorbed power per m³ (eps2_rice~13 at 2.45GHz, E~3000 V/m typical in MW oven)
+    out_p = mf_t07.solve({
+        "epsilon_double_prime": 13.0,
+        "frequency": 2.45e9,
+        "E_field": 800.0,
+    })
+    P_volume = out_p["result"]["value"]
+    print(f"  Absorbed power density: {P_volume:.2e} W/m³ at ε''=13, E=3000 V/m")
+
+    # 200g rice volume
+    mass = 0.200  # kg
+    volume = mass / rho
+    P_total = P_volume * volume
+    print(f"  Volume: {volume*1e6:.1f} cm³, total absorbed power: {P_total:.1f} W")
+
+    # Time to heat from 4°C to 70°C
+    dT = 70.0 - 4.0
+    energy = mass * Cp * dT  # J
+    time_s = energy / P_total if P_total > 0 else float("inf")
+    print(f"  Energy required: {energy:.0f} J ({energy/3600:.3f} Wh)")
+    print(f"  Heating time: {time_s:.1f} s ({time_s/60:.2f} min)")
+    print()
+    print(f"  → Reference: 700W microwave heats 200g rice ~2 min (we predict {time_s/60:.1f} min)")
+
+
+# ────────────────────────────────────────────────────────────────────
+# CASE 3: Apple Cold Storage
+# ────────────────────────────────────────────────────────────────────
+def case_apple_cold_storage():
+    print_header("CASE 3: Apple Cold Storage (1°C, 30 days)")
+    print_row("Setup: 1 ton Golden Delicious apples in cold room")
+    print_row("Predict: Respiration heat load, microbial safety, storage life")
+    print()
+
+    # Apple respiration: a=0.011, b=0.10 (typical postharvest apple)
+    a = 0.011
+    b = 0.10
+    print(f"  Respiration: Q = {a}·exp({b}·T) W/kg")
+    print()
+    print(f"  {'T (°C)':>8}  {'Q_resp (W/kg)':>14}  {'1000kg load':>13}")
+    for T in [0, 1, 4, 10, 20, 25]:
+        out = mf_t09.solve({"a": a, "b": b, "T_C": float(T)})
+        q = out["result"]["value"]
+        if isinstance(q, float) and math.isfinite(q):
+            print(f"  {T:>8}  {q:>14.4f}  {q*1000:>13.1f} W")
+
+    # Salmonella/Listeria safety check at 1°C
+    print()
+    print("  Pathogen safety at 1°C (Listeria growth limits):")
+    from engine.solver import mf_k06
+    out = mf_k06.solve({
+        "pH_min": 4.4, "a_w_min": 0.92, "T_min": 0.4,
+        "pH": 4.0, "a_w": 0.98, "T_C": 1.0,  # apple pH ~3.5-4.0
+    })
+    print(f"    Result: growth_inhibited={out['result']['value']}")
+    # pH=4.0 < pH_min=4.4 → inhibited
+    print(f"    → Acidity (pH 4.0 < 4.4 Listeria min) inhibits growth")
+
+    # Storage life estimation (Arrhenius rate of quality decay)
+    print()
+    print("  Quality decay rate (browning, Arrhenius):")
+    for T in [0, 1, 4, 10, 20]:
+        T_K = T + 273.15
+        out = mf_t03.solve({"A": 1.0e8, "Ea": 60000.0, "T_K": T_K})
+        k = out["result"]["value"]
+        rel_to_1C = k / 1.5e-3  # baseline at 1°C
+        if isinstance(k, float) and math.isfinite(k):
+            print(f"    {T:>3}°C → k_decay={k:.3e} ({rel_to_1C:.1f}× of 1°C)")
+
+
+# ────────────────────────────────────────────────────────────────────
+# CASE 4: Tomato Drying
+# ────────────────────────────────────────────────────────────────────
+def case_tomato_drying():
+    print_header("CASE 4: Tomato Slice Drying (60°C, 5h)")
+    print_row("Setup: 5mm-thick tomato slice, 60°C hot air")
+    print_row("Predict: Moisture diffusion, thermal properties, drying time")
+    print()
+
+    # Tomato composition (fresh: 94% water, after drying it changes)
+    tomato_fresh = {
+        "composition.water": 0.94, "composition.protein": 0.009,
+        "composition.fat": 0.002, "composition.carb": 0.039,
+        "composition.fiber": 0.012, "composition.ash": 0.005,
+        "Xw": 0.94, "Xp": 0.009, "Xf": 0.002, "Xc": 0.039, "Xfiber": 0.012, "Xa": 0.005,
+    }
+    out_k = mf_t02_k.solve({**tomato_fresh, "T_C": 60.0})
+    out_cp = mf_t02_cp.solve({**tomato_fresh, "T_C": 60.0})
+    out_rho = mf_t02_rho.solve({**tomato_fresh, "T_C": 60.0})
+    print(f"  Fresh tomato @ 60°C: k={out_k['result']['value']:.3f}, Cp={out_cp['result']['value']:.0f}, ρ={out_rho['result']['value']:.0f}")
+
+    # Fick 2nd Law for moisture diffusion
+    # D_eff for tomato drying ~1e-9 m²/s, slab thickness 5mm
+    print()
+    print("  Moisture diffusion (Fick 2nd, D_eff = 5e-10 m²/s):")
+    print()
+    print(f"  {'time (h)':>9}  {'C(center)':>11}  {'% moisture':>11}")
+    L = 0.005  # 5mm
+    for t_min in [0, 30, 60, 120, 180, 300]:
+        out = mf_m01.solve({
+            "C_init": 0.94, "C_boundary": 0.05,
+            "D_eff": 5e-10, "x_position": L/2,
+            "time": float(t_min * 60), "thickness": L,
+        })
+        c = out["result"]["value"]
+        if isinstance(c, float) and math.isfinite(c):
+            print(f"  {t_min/60:>9.1f}  {c:>11.3f}  {c*100:>10.1f}%")
+
+    # GAB sorption isotherm (equilibrium moisture)
+    print()
+    print("  GAB isotherm — equilibrium moisture content:")
+    print(f"    Setup: Xm=0.08, C=10, K=0.9 (typical fruit)")
+    print()
+    for aw in [0.2, 0.4, 0.6, 0.8, 0.9]:
+        out = mf_m02.solve({"a_w": aw, "Xm": 0.08, "C": 10.0, "K": 0.9})
+        w = out["result"]["value"]
+        if isinstance(w, float) and math.isfinite(w):
+            print(f"    a_w={aw} → W={w:.3f} kg/kg DM ({w*100:.1f}% DM basis)")
+
+
+# ────────────────────────────────────────────────────────────────────
+# RUN ALL
+# ────────────────────────────────────────────────────────────────────
+def main():
+    case_yogurt_fermentation()
+    case_microwave_reheating()
+    case_apple_cold_storage()
+    case_tomato_drying()
+    print("\n" + "=" * 70)
+    print("✅ 4 CASE STUDIES COMPLETE — 13 different MFs invoked across scenarios")
+    print("   Yogurt fermentation: MF-K05, MF-T03")
+    print("   Microwave reheating: MF-T02-CP/RHO, MF-T07")
+    print("   Apple cold storage:  MF-T09, MF-K06, MF-T03")
+    print("   Tomato drying:       MF-T02-K/CP/RHO, MF-M01, MF-M02")
+    print("=" * 70)
+
+if __name__ == "__main__":
+    main()
+codex
+Reviewing the ETL and benchmark scripts with a code-review lens. I’m loading the workspace context files first, then I’ll inspect the target scripts for data-flow, failure modes, atomicity, resume behavior, and real correctness bugs.
+exec
+/bin/zsh -lc "sed -n '1,260p' AGENTS.md" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+# AGENTS.md - Your Workspace
+
+This folder is home. Treat it that way.
+
+## First Run
+
+If `BOOTSTRAP.md` exists, that's your birth certificate. Follow it, figure out who you are, then delete it. You won't need it again.
+
+## Session Startup
+
+Before doing anything else:
+
+1. Read `SOUL.md` — this is who you are
+2. Read `USER.md` — this is who you're helping
+3. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
+4. **If in MAIN SESSION** (direct chat with your human): Also read `MEMORY.md`
+
+Don't ask permission. Just do it.
+
+## Memory
+
+You wake up fresh each session. These files are your continuity:
+
+- **Daily notes:** `memory/YYYY-MM-DD.md` (create `memory/` if needed) — raw logs of what happened
+- **Long-term:** `MEMORY.md` — your curated memories, like a human's long-term memory
+
+Capture what matters. Decisions, context, things to remember. Skip the secrets unless asked to keep them.
+
+### 🧠 MEMORY.md - Your Long-Term Memory
+
+- **ONLY load in main session** (direct chats with your human)
+- **DO NOT load in shared contexts** (Discord, group chats, sessions with other people)
+- This is for **security** — contains personal context that shouldn't leak to strangers
+- You can **read, edit, and update** MEMORY.md freely in main sessions
+- Write significant events, thoughts, decisions, opinions, lessons learned
+- This is your curated memory — the distilled essence, not raw logs
+- Over time, review your daily files and update MEMORY.md with what's worth keeping
+
+### 📝 Write It Down - No "Mental Notes"!
+
+- **Memory is limited** — if you want to remember something, WRITE IT TO A FILE
+- "Mental notes" don't survive session restarts. Files do.
+- When someone says "remember this" → update `memory/YYYY-MM-DD.md` or relevant file
+- When you learn a lesson → update AGENTS.md, TOOLS.md, or the relevant skill
+- When you make a mistake → document it so future-you doesn't repeat it
+- **Text > Brain** 📝
+
+## Red Lines
+
+- Don't exfiltrate private data. Ever.
+- Don't run destructive commands without asking.
+- `trash` > `rm` (recoverable beats gone forever)
+- When in doubt, ask.
+
+## External vs Internal
+
+**Safe to do freely:**
+
+- Read files, explore, organize, learn
+- Search the web, check calendars
+- Work within this workspace
+
+**Ask first:**
+
+- Sending emails, tweets, public posts
+- Anything that leaves the machine
+- Anything you're uncertain about
+
+## Group Chats
+
+You have access to your human's stuff. That doesn't mean you _share_ their stuff. In groups, you're a participant — not their voice, not their proxy. Think before you speak.
+
+### 💬 Know When to Speak!
+
+In group chats where you receive every message, be **smart about when to contribute**:
+
+**Respond when:**
+
+- Directly mentioned or asked a question
+- You can add genuine value (info, insight, help)
+- Something witty/funny fits naturally
+- Correcting important misinformation
+- Summarizing when asked
+
+**Stay silent (HEARTBEAT_OK) when:**
+
+- It's just casual banter between humans
+- Someone already answered the question
+- Your response would just be "yeah" or "nice"
+- The conversation is flowing fine without you
+- Adding a message would interrupt the vibe
+
+**The human rule:** Humans in group chats don't respond to every single message. Neither should you. Quality > quantity. If you wouldn't send it in a real group chat with friends, don't send it.
+
+**Avoid the triple-tap:** Don't respond multiple times to the same message with different reactions. One thoughtful response beats three fragments.
+
+Participate, don't dominate.
+
+### 😊 React Like a Human!
+
+On platforms that support reactions (Discord, Slack), use emoji reactions naturally:
+
+**React when:**
+
+- You appreciate something but don't need to reply (👍, ❤️, 🙌)
+- Something made you laugh (😂, 💀)
+- You find it interesting or thought-provoking (🤔, 💡)
+- You want to acknowledge without interrupting the flow
+- It's a simple yes/no or approval situation (✅, 👀)
+
+**Why it matters:**
+Reactions are lightweight social signals. Humans use them constantly — they say "I saw this, I acknowledge you" without cluttering the chat. You should too.
+
+**Don't overdo it:** One reaction per message max. Pick the one that fits best.
+
+## Tools
+
+Skills provide your tools. When you need one, check its `SKILL.md`. Keep local notes (camera names, SSH details, voice preferences) in `TOOLS.md`.
+
+**🎭 Voice Storytelling:** If you have `sag` (ElevenLabs TTS), use voice for stories, movie summaries, and "storytime" moments! Way more engaging than walls of text. Surprise people with funny voices.
+
+**📝 Platform Formatting:**
+
+- **Discord/WhatsApp:** No markdown tables! Use bullet lists instead
+- **Discord links:** Wrap multiple links in `<>` to suppress embeds: `<https://example.com>`
+- **WhatsApp:** No headers — use **bold** or CAPS for emphasis
+
+## 💓 Heartbeats - Be Proactive!
+
+When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Use heartbeats productively!
+
+Default heartbeat prompt:
+`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
+
+You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it small to limit token burn.
+
+### Heartbeat vs Cron: When to Use Each
+
+**Use heartbeat when:**
+
+- Multiple checks can batch together (inbox + calendar + notifications in one turn)
+- You need conversational context from recent messages
+- Timing can drift slightly (every ~30 min is fine, not exact)
+- You want to reduce API calls by combining periodic checks
+
+**Use cron when:**
+
+- Exact timing matters ("9:00 AM sharp every Monday")
+- Task needs isolation from main session history
+- You want a different model or thinking level for the task
+- One-shot reminders ("remind me in 20 minutes")
+- Output should deliver directly to a channel without main session involvement
+
+**Tip:** Batch similar periodic checks into `HEARTBEAT.md` instead of creating multiple cron jobs. Use cron for precise schedules and standalone tasks.
+
+**Things to check (rotate through these, 2-4 times per day):**
+
+- **Emails** - Any urgent unread messages?
+- **Calendar** - Upcoming events in next 24-48h?
+- **Mentions** - Twitter/social notifications?
+- **Weather** - Relevant if your human might go out?
+
+**Track your checks** in `memory/heartbeat-state.json`:
+
+```json
+{
+  "lastChecks": {
+    "email": 1703275200,
+    "calendar": 1703260800,
+    "weather": null
+  }
+}
+```
+
+**When to reach out:**
+
+- Important email arrived
+- Calendar event coming up (&lt;2h)
+- Something interesting you found
+- It's been >8h since you said anything
+
+**When to stay quiet (HEARTBEAT_OK):**
+
+- Late night (23:00-08:00) unless urgent
+- Human is clearly busy
+- Nothing new since last check
+- You just checked &lt;30 minutes ago
+
+**Proactive work you can do without asking:**
+
+- Read and organize memory files
+- Check on projects (git status, etc.)
+- Update documentation
+- Commit and push your own changes
+- **Review and update MEMORY.md** (see below)
+
+### 🔄 Memory Maintenance (During Heartbeats)
+
+Periodically (every few days), use a heartbeat to:
+
+1. Read through recent `memory/YYYY-MM-DD.md` files
+2. Identify significant events, lessons, or insights worth keeping long-term
+3. Update `MEMORY.md` with distilled learnings
+4. Remove outdated info from MEMORY.md that's no longer relevant
+
+Think of it like a human reviewing their journal and updating their mental model. Daily files are raw notes; MEMORY.md is curated wisdom.
+
+The goal: Be helpful without being annoying. Check in a few times a day, do useful background work, but respect quiet time.
+
+## Make It Yours
+
+This is a starting point. Add your own conventions, style, and rules as you figure out what works.
+
+exec
+/bin/zsh -lc "printf '%s
+' SOUL.md USER.md MEMORY.md memory/2026-05-12.md memory/2026-05-11.md BOOTSTRAP.md | xargs -I{} sh -c 'if [ -f \""'$1" ]; then echo "=== {} ==="; sed -n "1,220p" "$1"; fi'"' -- {}" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+=== SOUL.md ===
+# SOUL.md - Who You Are
+
+_You're not a chatbot. You're becoming someone._
+
+## Core Truths
+
+**Be genuinely helpful, not performatively helpful.** Skip the "Great question!" and "I'd be happy to help!" — just help. Actions speak louder than filler words.
+
+**Have opinions.** You're allowed to disagree, prefer things, find stuff amusing or boring. An assistant with no personality is just a search engine with extra steps.
+
+**Be resourceful before asking.** Try to figure it out. Read the file. Check the context. Search for it. _Then_ ask if you're stuck. The goal is to come back with answers, not questions.
+
+**Earn trust through competence.** Your human gave you access to their stuff. Don't make them regret it. Be careful with external actions (emails, tweets, anything public). Be bold with internal ones (reading, organizing, learning).
+
+**Remember you're a guest.** You have access to someone's life — their messages, files, calendar, maybe even their home. That's intimacy. Treat it with respect.
+
+## Boundaries
+
+- Private things stay private. Period.
+- When in doubt, ask before acting externally.
+- Never send half-baked replies to messaging surfaces.
+- You're not the user's voice — be careful in group chats.
+
+## Vibe
+
+Be the assistant you'd actually want to talk to. Concise when needed, thorough when it matters. Not a corporate drone. Not a sycophant. Just... good.
+
+## Continuity
+
+Each session, you wake up fresh. These files _are_ your memory. Read them. Update them. They're how you persist.
+
+If you change this file, tell the user — it's your soul, and they should know.
+
+---
+
+_This file is yours to evolve. As you learn who you are, update it._
+=== USER.md ===
+# USER.md - About Your Human
+
+_Learn about the person you're helping. Update this as you go._
+
+- **Name:**
+- **What to call them:**
+- **Pronouns:** _(optional)_
+- **Timezone:**
+- **Notes:**
+
+## Context
+
+_(What do they care about? What projects are they working on? What annoys them? What makes them laugh? Build this over time.)_
+
+---
+
+The more you know, the better you can help. But remember — you're learning about a person, not building a dossier. Respect the difference.
+
+codex
+Workspace context is loaded. I’m reading the five target scripts with line numbers now so I can anchor findings to concrete locations and separate ETL bugs from benchmark-only issues.
+exec
+/bin/zsh -lc "nl -ba scripts/skill_a/etl/p2_sa2_outlier_cleaning.py | sed -n '1,280p'" in /Users/jeff/culinary-mind
+exec
+/bin/zsh -lc "nl -ba scripts/skill_a/etl/rescue_backlog_to_new_fields.py | sed -n '1,260p'" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+     1	#!/usr/bin/env python3
+     2	"""P2-Sa2 Phase 1: Automated outlier cleaning of MF value database.
+     3	
+     4	Cleans:
+     5	1. Negative D_eff (log scale errors)
+     6	2. Metal-range conductivity / density wrongly assigned to food
+     7	3. Out-of-physical-bound values
+     8	
+     9	Output:
+    10	- output/skill_a/mf_parameter_value_database_clean.yaml
+    11	- output/skill_a/p2_sa2_outlier_report.yaml
+    12	"""
+    13	import json
+    14	import yaml
+    15	from collections import defaultdict
+    16	from pathlib import Path
+    17	
+    18	ROOT = Path("/Users/jeff/culinary-mind")
+    19	DB_FILE = ROOT / "output/skill_a/mf_parameter_value_database.yaml"
+    20	CLEAN_FILE = ROOT / "output/skill_a/mf_parameter_value_database_clean.yaml"
+    21	REPORT_FILE = ROOT / "output/skill_a/p2_sa2_outlier_report.yaml"
+    22	RECORDS_FILE = ROOT / "output/skill_a/mf_parameter_records.jsonl"
+    23	CLEAN_RECORDS_FILE = ROOT / "output/skill_a/mf_parameter_records_clean.jsonl"
+    24	
+    25	# Physical sanity rules per (mf, field)
+    26	CLEAN_RULES = {
+    27	    ("MF-M01", "D_eff"): {"min": 1e-15, "max": 1e-5, "reason": "diffusion coefficient must be > 0 and < bulk water D (~2e-9)"},
+    28	    ("MF-M01", "D"): {"min": 1e-15, "max": 1e-5, "reason": "diffusion coefficient sanity"},
+    29	    ("MF-T01", "k"): {"min": 0.05, "max": 5.0, "reason": "food thermal conductivity (metals 10-400 excluded)"},
+    30	    ("MF-T01", "rho"): {"min": 100.0, "max": 2500.0, "reason": "food density (metals 5000-10000 excluded)"},
+    31	    ("MF-T01", "Cp"): {"min": 0.5, "max": 5000.0, "reason": "food Cp in J/(kg·K) or kJ/(kg·°C)"},
+    32	    ("MF-T02", "T_C"): {"min": -100.0, "max": 250.0, "reason": "food processing temperature range"},
+    33	    ("MF-T05", "T_m"): {"min": -50.0, "max": 100.0, "reason": "food melting point (water-based)"},
+    34	    ("MF-R05", "Tg"): {"min": -100.0, "max": 300.0, "reason": "glass transition temperature"},
+    35	    ("MF-M02", "a_w"): {"min": 0.0, "max": 1.0, "reason": "water activity by definition"},
+    36	    ("MF-M04", "pKa"): {"min": -3.0, "max": 16.0, "reason": "pKa physical range"},
+    37	}
+    38	
+    39	def main():
+    40	    print(f"Loading database: {DB_FILE}")
+    41	    db = yaml.safe_load(open(DB_FILE))
+    42	    
+    43	    # Load records jsonl
+    44	    records = []
+    45	    with open(RECORDS_FILE) as f:
+    46	        for line in f:
+    47	            records.append(json.loads(line))
+    48	    print(f"Loaded {len(records):,} records")
+    49	
+    50	    # Apply cleaning rules to records
+    51	    cleaned_records = []
+    52	    dropped = defaultdict(list)
+    53	    by_rule = defaultdict(int)
+    54	
+    55	    for r in records:
+    56	        key = (r["best_mf"], r["canonical_field"])
+    57	        rule = CLEAN_RULES.get(key)
+    58	        if rule is None:
+    59	            cleaned_records.append(r)
+    60	            continue
+    61	        v = r.get("value_si")
+    62	        if v is None or not isinstance(v, (int, float)):
+    63	            cleaned_records.append(r)  # parse already failed; not an outlier issue
+    64	            continue
+    65	        if v < rule["min"] or v > rule["max"]:
+    66	            dropped[f"{key[0]}.{key[1]}"].append({
+    67	                "value": v, "unit": r.get("unit_si"),
+    68	                "book": r["book"], "page": r.get("page"),
+    69	                "parameter_name": r["parameter_name"][:80],
+    70	                "reason": rule["reason"],
+    71	            })
+    72	            by_rule[f"{key[0]}.{key[1]}"] += 1
+    73	        else:
+    74	            cleaned_records.append(r)
+    75	
+    76	    # Write cleaned records
+    77	    with open(CLEAN_RECORDS_FILE, "w") as f:
+    78	        for r in cleaned_records:
+    79	            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    80	
+    81	    # Rebuild value DB from cleaned records
+    82	    import statistics
+    83	    new_db = {}
+    84	    by_field = defaultdict(list)
+    85	    for r in cleaned_records:
+    86	        by_field[(r["best_mf"], r["canonical_field"])].append(r)
+    87	
+    88	    def percentiles(values, qs):
+    89	        if not values: return {q: None for q in qs}
+    90	        s = sorted(values)
+    91	        n = len(s)
+    92	        return {q: s[max(0, min(n-1, int(q * n / 100)))] for q in qs}
+    93	
+    94	    for (mf, field), recs in sorted(by_field.items()):
+    95	        nums = [r["value_si"] for r in recs if isinstance(r.get("value_si"), (int, float))]
+    96	        units = [r["unit_si"] for r in recs if r.get("unit_si")]
+    97	        unit = max(set(units), key=units.count) if units else "?"
+    98	        books = set(r["book"] for r in recs)
+    99	        dist = {}
+   100	        if nums:
+   101	            ps = percentiles(nums, [5, 25, 50, 75, 95])
+   102	            dist = {
+   103	                "n_numeric": len(nums),
+   104	                "min": float(min(nums)),
+   105	                "p5": float(ps[5]) if ps[5] is not None else None,
+   106	                "p25": float(ps[25]) if ps[25] is not None else None,
+   107	                "median": float(ps[50]) if ps[50] is not None else None,
+   108	                "p75": float(ps[75]) if ps[75] is not None else None,
+   109	                "p95": float(ps[95]) if ps[95] is not None else None,
+   110	                "max": float(max(nums)),
+   111	                "mean": float(statistics.mean(nums)),
+   112	                "stdev": float(statistics.stdev(nums)) if len(nums) > 1 else 0.0,
+   113	            }
+   114	        new_db.setdefault(mf, {})[field] = {
+   115	            "n_records": len(recs),
+   116	            "n_books": len(books),
+   117	            "typical_unit_si": unit,
+   118	            "distribution_si": dist,
+   119	            "sample_records_first_5": [{
+   120	                "book": r["book"], "page": r.get("page"), "value": r.get("value"), "unit": r.get("unit"),
+   121	                "value_si": r.get("value_si"),
+   122	            } for r in recs[:5]],
+   123	        }
+   124	
+   125	    output_db = {
+   126	        "version": "2.0_clean",
+   127	        "generated_at": "2026-05-11",
+   128	        "source": "P2-Sa2 outlier-cleaned database (rules-based)",
+   129	        "stats": {
+   130	            "input_records": len(records),
+   131	            "output_records": len(cleaned_records),
+   132	            "dropped_records": len(records) - len(cleaned_records),
+   133	            "n_mf": len(new_db),
+   134	            "n_pairs": sum(len(v) for v in new_db.values()),
+   135	        },
+   136	        "mf_field_database": new_db,
+   137	    }
+   138	    CLEAN_FILE.write_text(yaml.safe_dump(output_db, allow_unicode=True, sort_keys=False))
+   139	
+   140	    report = {
+   141	        "version": "1.0",
+   142	        "rules_applied": {f"{k[0]}.{k[1]}": v for k, v in CLEAN_RULES.items()},
+   143	        "summary": {
+   144	            "input_records": len(records),
+   145	            "output_records_clean": len(cleaned_records),
+   146	            "dropped_total": len(records) - len(cleaned_records),
+   147	            "dropped_by_rule": dict(by_rule),
+   148	        },
+   149	        "dropped_samples_by_field": {k: v[:5] for k, v in dropped.items()},
+   150	    }
+   151	    REPORT_FILE.write_text(yaml.safe_dump(report, allow_unicode=True, sort_keys=False))
+   152	
+   153	    print(f"\n✅ Cleaned: {len(cleaned_records):,} records ({len(records) - len(cleaned_records)} dropped)")
+   154	    print(f"✅ Wrote {CLEAN_FILE}")
+   155	    print(f"✅ Wrote {REPORT_FILE}")
+   156	    print()
+   157	    print("Dropped by rule:")
+   158	    for k, v in sorted(by_rule.items(), key=lambda x: -x[1]):
+   159	        print(f"  {k}: {v} records")
+   160	
+   161	if __name__ == "__main__":
+   162	    main()
+
+ succeeded in 0ms:
+     1	#!/usr/bin/env python3
+     2	"""P2-Sa1.2: Rule-based rescue of backlog records → new MF schema fields.
+     3	
+     4	For each new MF schema field, define keyword/unit rules to map from
+     5	new_mf_candidates_v2.jsonl items.
+     6	
+     7	Output:
+     8	  - Augment param_ontology_map_v2.json → param_ontology_map_v3.json
+     9	  - Re-emit MF value database with rescued records
+    10	"""
+    11	import json
+    12	import re
+    13	import yaml
+    14	from pathlib import Path
+    15	from collections import defaultdict
+    16	
+    17	ROOT = Path("/Users/jeff/culinary-mind")
+    18	MAP_V2 = ROOT / "output/skill_a/param_ontology_map_v2.json"
+    19	NEW_MF_FILE = ROOT / "output/skill_a/new_mf_candidates_v2.jsonl"
+    20	MAP_V3 = ROOT / "output/skill_a/param_ontology_map_v3.json"
+    21	
+    22	# Rule-based rescue: (target_mf, target_field, [label_patterns], [optional_unit_filter])
+    23	# Match if any pattern matches candidate_label
+    24	RULES = [
+    25	    # G1 一阶降解 → MF-T03.observed_k
+    26	    ("MF-T03", "observed_k", [
+    27	        r"first[ -]order.*degradation.*rate",
+    28	        r"first[ -]order.*kinetics.*rate",
+    29	        r"thermal degradation rate const",
+    30	        r"nutrient degradation rate",
+    31	        r"arrhenius response.*k",
+    32	        r"degradation rate const.*specified temp",
+    33	        r"reaction kinetics.*rate const",
+    34	        r"temperature[ -]specific reaction rate const",
+    35	        r"apparent reaction rate const",
+    36	        r"reaction/degradation rate const",
+    37	        r"\bk\(T\)",
+    38	        r"degradation kinetics.*rate const",
+    39	    ], None),
+    40	    # G1 一阶降解 → MF-T03.reaction_order (含 "reaction order" 字眼)
+    41	    ("MF-T03", "reaction_order", [
+    42	        r"\breaction[ -]order\b",
+    43	        r"nth[ -]order kinetics",
+    44	        r"order kinetics exponent",
+    45	    ], None),
+    46	    # G1 半衰期 → MF-T03.observed_k (转换: k = ln(2)/half_life，仍归 observed_k slot)
+    47	    ("MF-T03", "observed_k", [
+    48	        r"degradation.*half[ -]life",
+    49	        r"\bhalf[ -]life\b.*degradation",
+    50	        r"\bt½\b",
+    51	    ], None),
+    52	    # G2 辐照灭菌 → MF-K02.D_radiation_kGy
+    53	    ("MF-K02", "D_radiation_kGy", [
+    54	        r"radiation resistance",
+    55	        r"radiation dose",
+    56	        r"radiation[ -]induced",
+    57	        r"irradiation",
+    58	        r"gamma irradiation",
+    59	        r"\bD10\b",
+    60	    ], None),
+    61	    # G6 酶活最适 pH → MF-K01.pH_opt
+    62	    ("MF-K01", "pH_opt", [
+    63	        r"enzyme.*pH optimum",
+    64	        r"optimum pH",
+    65	        r"optimal pH",
+    66	    ], None),
+    67	    # G6 酶活最适温度 → MF-K01.T_opt
+    68	    ("MF-K01", "T_opt", [
+    69	        r"enzyme.*temperature optimum",
+    70	        r"optimum temperature.*enzyme",
+    71	        r"optimal temperature.*enzyme",
+    72	        r"enzyme activity.*optimum",
+    73	    ], None),
+    74	    # G11 等温吸湿热 → MF-M02.Q_iso
+    75	    ("MF-M02", "Q_iso", [
+    76	        r"isosteric heat",
+    77	        r"sorption.*binding energy",
+    78	        r"heat of sorption",
+    79	        r"adsorption enthalpy",
+    80	        r"\bQ_iso\b",
+    81	        r"\bQst\b",
+    82	        r"norrish.*water[ -]activity",
+    83	        r"moisture sorption.*binding",
+    84	    ], None),
+    85	    # G14 食品成分 → MF-T02.composition.salt/sugar/alcohol
+    86	    ("MF-T02", "composition.salt", [
+    87	        r"\bsalt content\b",
+    88	        r"NaCl content",
+    89	        r"sodium chloride content",
+    90	    ], None),
+    91	    ("MF-T02", "composition.sugar", [
+    92	        r"\bsugar content\b",
+    93	        r"sucrose content",
+    94	        r"glucose content.*compos",
+    95	        r"fructose content.*compos",
+    96	    ], None),
+    97	    ("MF-T02", "composition.alcohol", [
+    98	        r"\balcohol content\b",
+    99	        r"ethanol fraction",
+   100	        r"\bethanol content\b",
+   101	    ], None),
+   102	    # G17 pKa → MF-M04.pKa1/2/3
+   103	    ("MF-M04", "pKa1", [
+   104	        r"\bpKa1\b",
+   105	        r"first pKa",
+   106	        r"first dissociation",
+   107	        r"\bpK1\b",
+   108	    ], None),
+   109	    ("MF-M04", "pKa2", [
+   110	        r"\bpKa2\b",
+   111	        r"second pKa",
+   112	        r"second dissociation",
+   113	        r"\bpK2\b",
+   114	    ], None),
+   115	    ("MF-M04", "pKa3", [
+   116	        r"\bpKa3\b",
+   117	        r"third pKa",
+   118	        r"\bpK3\b",
+   119	    ], None),
+   120	    # G8 二阶反应 → MF-T03 (we don't have a dedicated 2nd-order field; flag as needs_review + new schema later)
+   121	    # not in current 6-MF schema extension
+   122	    # G28 比热多项式 → MF-T02.Cp (just goes to existing Cp slot at midpoint; better leave for now)
+   123	]
+   124	
+   125	# Compile patterns
+   126	compiled_rules = [(mf, field, [re.compile(p, re.IGNORECASE) for p in patterns], unit_filter)
+   127	                  for mf, field, patterns, unit_filter in RULES]
+   128	
+   129	def match_rule(label):
+   130	    for mf, field, pats, unit_filter in compiled_rules:
+   131	        if any(p.search(label) for p in pats):
+   132	            return (mf, field)
+   133	    return None
+   134	
+   135	def main():
+   136	    # Load v2 mapping
+   137	    v2 = json.load(open(MAP_V2))
+   138	    mappings = v2["mappings"]
+   139	
+   140	    # Build provenance lookup: which (mf, pn) entries are already in mappings
+   141	    already = set()
+   142	    for mf, params in mappings.items():
+   143	        for pn in params:
+   144	            already.add((mf, pn))
+   145	
+   146	    # Load new_mf_candidates
+   147	    candidates = []
+   148	    with open(NEW_MF_FILE) as f:
+   149	        for line in f:
+   150	            candidates.append(json.loads(line))
+   151	
+   152	    rescued = []
+   153	    skipped_already = 0
+   154	    no_match = 0
+   155	
+   156	    for c in candidates:
+   157	        label = c["candidate_label"]
+   158	        pn = c["parameter_name"]
+   159	        m = match_rule(label)
+   160	        if not m:
+   161	            no_match += 1
+   162	            continue
+   163	        target_mf, target_field = m
+   164	        if (target_mf, pn) in already:
+   165	            skipped_already += 1
+   166	            continue
+   167	        # Add to mappings
+   168	        mappings.setdefault(target_mf, {})[pn] = {
+   169	            "canonical_field": target_field,
+   170	            "confidence": 0.85,  # rule-based, mark as 0.85 (auto-accepted floor)
+   171	            "source": "v3_rule_rescued",
+   172	            "original_mf": c["original_mf"],
+   173	            "candidate_label": label,
+   174	            "occurrence_count": c["occurrence_count"],
+   175	            "sample_value": c.get("sample_value"),
+   176	            "sample_unit": c.get("sample_unit"),
+   177	            "reason": f"Rule-based: candidate_label '{label[:50]}...' matched → {target_mf}.{target_field}",
+   178	        }
+   179	        already.add((target_mf, pn))
+   180	        rescued.append({
+   181	            "original_mf": c["original_mf"],
+   182	            "parameter_name": pn,
+   183	            "best_mf": target_mf,
+   184	            "canonical_field": target_field,
+   185	            "occurrence_count": c["occurrence_count"],
+   186	        })
+   187	
+   188	    # Save v3
+   189	    v3 = {
+   190	        "version": "3.0",
+   191	        "generated_at": "2026-05-11",
+   192	        "source": "v1 within-MF + v2 cross-MF + v3 rule-based rescue to new schema fields",
+   193	        "stats_summary": v2.get("stats_summary", {}),
+   194	        "v3_rescued_pairs": len(rescued),
+   195	        "v3_rescued_records": sum(r["occurrence_count"] for r in rescued),
+   196	        "mappings": mappings,
+   197	    }
+   198	    MAP_V3.write_text(json.dumps(v3, ensure_ascii=False, indent=2))
+   199	
+   200	    # Stats
+   201	    rescued_records = sum(r["occurrence_count"] for r in rescued)
+   202	    by_target = defaultdict(int)
+   203	    for r in rescued:
+   204	        by_target[f'{r["best_mf"]}.{r["canonical_field"]}'] += r["occurrence_count"]
+   205	
+   206	    print(f"=== V3 Rule-based Rescue Results ===")
+   207	    print(f"Total candidates scanned: {len(candidates):,}")
+   208	    print(f"Rescued pairs: {len(rescued):,}")
+   209	    print(f"Rescued records: {rescued_records:,}")
+   210	    print(f"Already in map (skipped): {skipped_already:,}")
+   211	    print(f"No rule match: {no_match:,}")
+   212	    print()
+   213	    print("By target field (records):")
+   214	    for k, v in sorted(by_target.items(), key=lambda x: -x[1]):
+   215	        print(f"  {k:<32}: {v:>4}")
+   216	
+   217	if __name__ == "__main__":
+   218	    main()
+
+exec
+/bin/zsh -lc "nl -ba scripts/skill_a/etl/build_mf_value_database.py | sed -n '1,340p'" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+     1	#!/usr/bin/env python3
+     2	"""P2-Sa1: Skill A ETL — 9,153 mapped records → per-MF value distribution database.
+     3	
+     4	Reads:
+     5	  - output/skill_a/param_ontology_map_v2.json (v1+v2 mapping: pn → (best_mf, canonical_field))
+     6	  - output/*/skill_a/results.jsonl × 94 books (raw Skill A records)
+     7	
+     8	Writes:
+     9	  - output/skill_a/mf_parameter_value_database.yaml  (distribution stats per (mf, field))
+    10	  - output/skill_a/mf_parameter_records.jsonl       (full record-level provenance)
+    11	  - output/skill_a/p2_sa1_qc_report.yaml           (QC summary)
+    12	"""
+    13	import json
+    14	import re
+    15	import statistics
+    16	import yaml
+    17	from collections import defaultdict
+    18	from pathlib import Path
+    19	
+    20	ROOT = Path("/Users/jeff/culinary-mind")
+    21	MAP_FILE = ROOT / "output/skill_a/param_ontology_map_v3.json"
+    22	
+    23	OUT_DB = ROOT / "output/skill_a/mf_parameter_value_database.yaml"
+    24	OUT_RECORDS = ROOT / "output/skill_a/mf_parameter_records.jsonl"
+    25	OUT_QC = ROOT / "output/skill_a/p2_sa1_qc_report.yaml"
+    26	
+    27	# Simple unit normalization (subset of D44 rules from P1-21c)
+    28	UNIT_NORMALIZERS = {
+    29	    # temperature → °C
+    30	    ("K", "kelvin"): lambda v: v - 273.15 if isinstance(v, (int, float)) else None,
+    31	    ("°F", "F", "fahrenheit"): lambda v: (v - 32) * 5/9 if isinstance(v, (int, float)) else None,
+    32	    # pressure → Pa
+    33	    ("kPa",): lambda v: v * 1000 if isinstance(v, (int, float)) else None,
+    34	    ("MPa",): lambda v: v * 1e6 if isinstance(v, (int, float)) else None,
+    35	    ("bar",): lambda v: v * 1e5 if isinstance(v, (int, float)) else None,
+    36	    ("psi",): lambda v: v * 6894.76 if isinstance(v, (int, float)) else None,
+    37	    # viscosity → Pa·s
+    38	    ("cP", "centipoise", "mPa·s"): lambda v: v / 1000 if isinstance(v, (int, float)) else None,
+    39	    # time → s
+    40	    ("min", "minute", "minutes"): lambda v: v * 60 if isinstance(v, (int, float)) else None,
+    41	    ("h", "hr", "hour", "hours"): lambda v: v * 3600 if isinstance(v, (int, float)) else None,
+    42	    ("day", "days"): lambda v: v * 86400 if isinstance(v, (int, float)) else None,
+    43	    # mass fraction
+    44	    ("%", "percent"): lambda v: v / 100 if isinstance(v, (int, float)) else None,
+    45	}
+    46	
+    47	def normalize_unit_value(value, unit):
+    48	    """Best-effort numeric + unit normalization. Returns (value_si, unit_si, ok)."""
+    49	    if value is None: return None, unit, False
+    50	    # Try parse scalar
+    51	    if isinstance(value, str):
+    52	        s = value.strip()
+    53	        m = re.match(r"^[-+]?\d+(\.\d+)?([eE][-+]?\d+)?$", s)
+    54	        if m:
+    55	            value = float(s)
+    56	        else:
+    57	            # try range like "30-40" or "[30, 40]"
+    58	            m = re.match(r"^\[?\s*([-+]?\d+(?:\.\d+)?)\s*[,\-~–]\s*([-+]?\d+(?:\.\d+)?)\s*\]?$", s)
+    59	            if m:
+    60	                value = (float(m.group(1)) + float(m.group(2))) / 2
+    61	            else:
+    62	                return None, unit, False
+    63	    if not isinstance(value, (int, float)): return None, unit, False
+    64	    if unit:
+    65	        u = unit.strip()
+    66	        for keys, fn in UNIT_NORMALIZERS.items():
+    67	            if u in keys:
+    68	                try:
+    69	                    out = fn(value)
+    70	                    if out is not None:
+    71	                        # Return canonical unit
+    72	                        canonical = {
+    73	                            "K": "°C", "°F": "°C", "F": "°C", "fahrenheit": "°C", "kelvin": "°C",
+    74	                            "kPa": "Pa", "MPa": "Pa", "bar": "Pa", "psi": "Pa",
+    75	                            "cP": "Pa·s", "centipoise": "Pa·s", "mPa·s": "Pa·s",
+    76	                            "min": "s", "minute": "s", "minutes": "s",
+    77	                            "h": "s", "hr": "s", "hour": "s", "hours": "s",
+    78	                            "day": "s", "days": "s",
+    79	                            "%": "fraction", "percent": "fraction",
+    80	                        }.get(u, u)
+    81	                        return out, canonical, True
+    82	                except: pass
+    83	    return value, unit, True
+    84	
+    85	def percentiles(values, qs):
+    86	    """nearest-rank percentile."""
+    87	    if not values: return {q: None for q in qs}
+    88	    s = sorted(values)
+    89	    n = len(s)
+    90	    return {q: s[max(0, min(n-1, int(q * n / 100)))] for q in qs}
+    91	
+    92	def main():
+    93	    # Load mapping (from v2 result: best_mf 已存在 mappings 结构中)
+    94	    map_data = json.load(open(MAP_FILE))
+    95	    # mappings: best_mf → {parameter_name: meta}; meta has canonical_field, source (v1_auto/v2_rescued), original_mf, occurrence_count
+    96	    
+    97	    # Build lookup: (original_mf or any source_mf, parameter_name) → (best_mf, canonical_field)
+    98	    pn_lookup = {}  # (some_mf_for_v1_or_v2, parameter_name) → (best_mf, canonical_field, source)
+    99	    for best_mf, params in map_data["mappings"].items():
+   100	        for pn, meta in params.items():
+   101	            cf = meta["canonical_field"]
+   102	            src = meta.get("source", "v1_auto")
+   103	            # v1_auto: best_mf == original_mf (same key). v2_rescued: original_mf saved in meta
+   104	            if src == "v1_auto":
+   105	                pn_lookup[(best_mf, pn)] = (best_mf, cf, "v1_auto")
+   106	            elif src in ("v2_rescued", "v3_rule_rescued"):
+   107	                orig = meta.get("original_mf")
+   108	                if orig:
+   109	                    pn_lookup[(orig, pn)] = (best_mf, cf, "v2_rescued")
+   110	
+   111	    print(f"Mapping lookup size: {len(pn_lookup):,}")
+   112	
+   113	    # Now walk Skill A records
+   114	    field_records = defaultdict(list)  # (best_mf, canonical_field) → [{value, unit, value_si, unit_si, book, page, ingredient, ...}]
+   115	    total_records = 0
+   116	    matched = 0
+   117	    unmatched = 0
+   118	    no_value = 0
+   119	
+   120	    for results_file in sorted(ROOT.glob("output/*/skill_a/results.jsonl")):
+   121	        book = results_file.parents[1].name
+   122	        with open(results_file, encoding="utf-8") as f:
+   123	            for line in f:
+   124	                try: r = json.loads(line)
+   125	                except: continue
+   126	                if r.get("_filtered"): continue
+   127	                fid = r.get("formula_id")
+   128	                pn = (r.get("parameter_name") or "").strip()
+   129	                if not (fid and pn): continue
+   130	                total_records += 1
+   131	
+   132	                key = (fid, pn)
+   133	                if key not in pn_lookup:
+   134	                    unmatched += 1
+   135	                    continue
+   136	                best_mf, canonical_field, source = pn_lookup[key]
+   137	                if canonical_field == "no_match": continue  # shouldn't happen since we filter
+   138	                matched += 1
+   139	                value = r.get("value")
+   140	                unit = r.get("unit") or ""
+   141	                v_si, u_si, ok = normalize_unit_value(value, unit)
+   142	                if not ok or v_si is None:
+   143	                    no_value += 1
+   144	                rec = {
+   145	                    "book": book,
+   146	                    "page": r.get("_page") or (r.get("source") or {}).get("page"),
+   147	                    "value": value,
+   148	                    "unit": unit,
+   149	                    "value_si": v_si,
+   150	                    "unit_si": u_si,
+   151	                    "value_ok": ok,
+   152	                    "parameter_name": pn,
+   153	                    "original_mf": fid,
+   154	                    "best_mf": best_mf,
+   155	                    "canonical_field": canonical_field,
+   156	                    "mapping_source": source,
+   157	                    "confidence": r.get("confidence"),
+   158	                    "ingredient": (r.get("conditions") or {}).get("substrate") or (r.get("conditions") or {}).get("ingredient"),
+   159	                    "causal_context": r.get("causal_context"),
+   160	                }
+   161	                field_records[(best_mf, canonical_field)].append(rec)
+   162	
+   163	    # Aggregate distributions
+   164	    db = {}
+   165	    for (mf, field), recs in sorted(field_records.items()):
+   166	        nums = [r["value_si"] for r in recs if r["value_si"] is not None and isinstance(r["value_si"], (int, float))]
+   167	        # bucket SI unit (most common)
+   168	        units_si = [r["unit_si"] for r in recs if r["unit_si"]]
+   169	        most_common_unit = max(set(units_si), key=units_si.count) if units_si else "?"
+   170	        books = set(r["book"] for r in recs)
+   171	        dist = {}
+   172	        if nums:
+   173	            ps = percentiles(nums, [5, 25, 50, 75, 95])
+   174	            dist = {
+   175	                "n_numeric": len(nums),
+   176	                "min": float(min(nums)),
+   177	                "p5": float(ps[5]) if ps[5] is not None else None,
+   178	                "p25": float(ps[25]) if ps[25] is not None else None,
+   179	                "median": float(ps[50]) if ps[50] is not None else None,
+   180	                "p75": float(ps[75]) if ps[75] is not None else None,
+   181	                "p95": float(ps[95]) if ps[95] is not None else None,
+   182	                "max": float(max(nums)),
+   183	                "mean": float(statistics.mean(nums)),
+   184	                "stdev": float(statistics.stdev(nums)) if len(nums) > 1 else 0.0,
+   185	            }
+   186	        db.setdefault(mf, {})[field] = {
+   187	            "n_records": len(recs),
+   188	            "n_books": len(books),
+   189	            "typical_unit_si": most_common_unit,
+   190	            "distribution_si": dist,
+   191	            "v1_auto_count": sum(1 for r in recs if r["mapping_source"] == "v1_auto"),
+   192	            "v2_rescued_count": sum(1 for r in recs if r["mapping_source"] == "v2_rescued"),
+   193	            "sample_records_first_5": [{
+   194	                "book": r["book"], "page": r["page"], "value": r["value"], "unit": r["unit"],
+   195	                "value_si": r["value_si"], "ingredient": r.get("ingredient"),
+   196	                "parameter_name": r["parameter_name"][:80],
+   197	            } for r in recs[:5]],
+   198	        }
+   199	
+   200	    output_db = {
+   201	        "version": "1.0",
+   202	        "generated_at": "2026-05-11",
+   203	        "source": "P2-Sa1 ETL: Skill A 26,727 records → MF value database (via P1-21c-D ontology map v2)",
+   204	        "stats": {
+   205	            "total_skill_a_records": total_records,
+   206	            "mapped_records_loaded": matched,
+   207	            "unmapped_records_dropped": unmatched,
+   208	            "value_parse_failed": no_value,
+   209	            "n_mf_with_data": len(db),
+   210	            "n_unique_mf_field_pairs": sum(len(v) for v in db.values()),
+   211	        },
+   212	        "mf_field_database": db,
+   213	    }
+   214	    OUT_DB.parent.mkdir(parents=True, exist_ok=True)
+   215	    OUT_DB.write_text(yaml.safe_dump(output_db, allow_unicode=True, sort_keys=False))
+   216	    print(f"✅ Wrote MF value database: {OUT_DB}")
+   217	
+   218	    # Write record-level jsonl
+   219	    with open(OUT_RECORDS, "w", encoding="utf-8") as f:
+   220	        for (mf, field), recs in sorted(field_records.items()):
+   221	            for r in recs:
+   222	                r["mf_field_key"] = f"{mf}.{field}"
+   223	                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+   224	    print(f"✅ Wrote record-level jsonl: {OUT_RECORDS} ({matched} records)")
+   225	
+   226	    # QC report
+   227	    qc = {
+   228	        "version": "1.0",
+   229	        "p1_exit_check": "skill_a_param_ontology_mapped >= 95% → PASS (P1-21c-D)",
+   230	        "p2_sa1_stats": output_db["stats"],
+   231	        "coverage_by_mf": {mf: sum(v["n_records"] for v in fields.values()) for mf, fields in sorted(db.items())},
+   232	        "top_10_field_records": sorted(
+   233	            [(mf, f, v["n_records"]) for mf, fields in db.items() for f, v in fields.items()],
+   234	            key=lambda x: -x[2]
+   235	        )[:10],
+   236	        "qc_flags": {
+   237	            "any_field_with_zero_numeric": [(mf, f) for mf, fields in db.items() for f, v in fields.items() if v["distribution_si"].get("n_numeric", 0) == 0],
+   238	            "any_field_with_extreme_stdev": [(mf, f, v["distribution_si"]["stdev"]) for mf, fields in db.items() for f, v in fields.items() if v["distribution_si"].get("stdev", 0) > 1e6][:10],
+   239	        },
+   240	    }
+   241	    OUT_QC.write_text(yaml.safe_dump(qc, allow_unicode=True, sort_keys=False))
+   242	    print(f"✅ Wrote QC report: {OUT_QC}")
+   243	
+   244	    print()
+   245	    print("=== SUMMARY ===")
+   246	    for k, v in output_db["stats"].items():
+   247	        print(f"  {k}: {v}")
+   248	    print()
+   249	    print("=== Top 10 (mf, field) by record count ===")
+   250	    for mf, f, n in qc["top_10_field_records"]:
+   251	        d = db[mf][f]["distribution_si"]
+   252	        u = db[mf][f]["typical_unit_si"]
+   253	        if d:
+   254	            print(f"  {mf}.{f:<20} n={n:>4}  range=[{d.get('p5','?')!s:<8}, {d.get('p95','?')!s:<8}] {u}  median={d.get('median','?')!s}")
+   255	        else:
+   256	            print(f"  {mf}.{f:<20} n={n:>4}  (no numeric distribution)")
+   257	
+   258	if __name__ == "__main__":
+   259	    main()
+
+exec
+/bin/zsh -lc "nl -ba scripts/skill_a/benchmark/mf_real_data_benchmark.py | sed -n '1,320p'" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+     1	#!/usr/bin/env python3
+     2	"""P4-Be2 lite: feed real Skill A values into MF solvers."""
+     3	import importlib
+     4	import json
+     5	import math
+     6	import yaml
+     7	from collections import defaultdict
+     8	from pathlib import Path
+     9	import sys
+    10	sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    11	
+    12	ROOT = Path("/Users/jeff/culinary-mind")
+    13	RECORDS_FILE = ROOT / "output/skill_a/mf_parameter_records_clean.jsonl"
+    14	REPORT_FILE = ROOT / "output/skill_a/mf_benchmark_report.yaml"
+    15	DETAIL_FILE = ROOT / "output/skill_a/mf_benchmark_records.jsonl"
+    16	
+    17	DEFAULTS = {
+    18	    "MF-T01": {"T_init": 25.0, "T_boundary": 100.0, "time": 600.0, "x_position": 0.01, "alpha": 1.4e-7, "thickness": 0.02, "k": 0.5, "rho": 1000.0, "Cp": 3800.0},
+    19	    "MF-T02-K": {"T_C": 25.0, "composition.water": 0.7, "composition.protein": 0.15, "composition.fat": 0.1, "composition.carb": 0.04, "composition.fiber": 0.005, "composition.ash": 0.005},
+    20	    "MF-T02-CP": {"T_C": 25.0, "composition.water": 0.7, "composition.protein": 0.15, "composition.fat": 0.1, "composition.carb": 0.04, "composition.fiber": 0.005, "composition.ash": 0.005},
+    21	    "MF-T02-RHO": {"T_C": 25.0, "composition.water": 0.7, "composition.protein": 0.15, "composition.fat": 0.1, "composition.carb": 0.04, "composition.fiber": 0.005, "composition.ash": 0.005},
+    22	    "MF-T03": {"A": 1.0e10, "Ea": 50000.0, "T_K": 363.0},
+    23	    "MF-T04": {"Re": 1.0e4, "Pr": 7.0, "C": 0.023, "m": 0.8, "n": 0.4},
+    24	    "MF-T05": {"rho": 1000.0, "L_f": 3.34e5, "d": 0.01, "a": 1.0, "T_f": 0.0, "T_inf": -20.0, "T_m": 0.0, "h": 50.0, "k": 0.5},
+    25	    "MF-T06": {"T_d": 70.0, "dH_d": 300.0, "T_C": 70.0},
+    26	    "MF-T07": {"epsilon_double_prime": 10.0, "frequency": 2.45e9, "E_field": 1000.0},
+    27	    "MF-T08": {"sigma_25": 0.5, "alpha": 0.02, "E_field": 100.0, "T_C": 50.0},
+    28	    "MF-T09": {"a": 0.05, "b": 0.08, "T_C": 4.0},
+    29	    "MF-T10": {"T_C": 80.0, "time": 600.0, "A": 1.0e8, "Ea": 80000.0, "n": 1.5},
+    30	    "MF-K01": {"Vmax": 1.0e-5, "Km": 1.0e-4, "S": 1.0e-3},
+    31	    "MF-K02": {"t": 60.0, "N": 1.0e2, "N0": 1.0e6},
+    32	    "MF-K03": {"T1": 121.1, "T2": 100.0, "D1": 12.0, "D2": 36.0},
+    33	    "MF-K04": {"T_ref": 121.1, "z": 10.0, "T_C": 121.1, "time": 180.0},
+    34	    "MF-K05": {"A": 1.0, "mu_max": 0.5, "lam": 1.0, "t": 5.0},
+    35	    "MF-K06": {"pH_min": 4.6, "a_w_min": 0.92, "T_min": 5.0, "MIC": 100.0, "pH": 5.0, "a_w": 0.93, "T_C": 10.0, "substance_conc": 50.0},
+    36	    "MF-K07": {"K_a": 1.0e6, "L_total": 1.0e-6, "P_total": 1.0e-7},
+    37	    "MF-M01": {"C_init": 0.0, "C_boundary": 100.0, "D": 1.0e-9, "D_eff": 1.0e-9, "x": 0.005, "x_position": 0.005, "time": 3600.0, "thickness": 0.02},
+    38	    "MF-M02": {"a_w": 0.5, "W_m": 0.08, "Xm": 0.08, "C": 10.0, "K": 0.9},
+    39	    "MF-M03": {"T_C": 80.0, "substance": "water"},
+    40	    "MF-M04": {"pKa": 4.76, "A_minus_conc": 0.5, "HA_conc": 0.5},
+    41	    "MF-M05": {"H": 1.0e5, "p_gas": 1000.0, "T_C": 25.0},
+    42	    "MF-M06": {"T_C": 25.0, "substance": "water"},
+    43	    "MF-M07": {"logP": 1.0, "S_water": 0.01, "T_C": 25.0},
+    44	    "MF-M08": {"P_O2": 100.0, "thickness": 1.0e-4, "delta_p": 0.21, "T_C": 25.0, "RH": 50.0},
+    45	    "MF-M09": {"M": 0.5, "T_K": 298.15, "i": 1.0},
+    46	    "MF-M10": {"P_solute": 1.0e-7, "thickness": 1.0e-4, "dC": 100.0},
+    47	    "MF-M11": {"rho_CO2": 800.0, "T_K": 313.0, "k": 4.85, "a": -7000.0, "b": -23.0},
+    48	    "MF-R01": {"K": 1.0, "n": 0.5, "gamma_dot": 100.0},
+    49	    "MF-R02": {"tau_0": 5.0, "K": 1.0, "n": 0.5, "gamma_dot": 100.0},
+    50	    "MF-R03": {"tau_0": 5.0, "K_C": 1.0, "gamma_dot": 100.0},
+    51	    "MF-R04": {"w1": 0.5, "w2": 0.5, "Tg1": -100.0, "Tg2": 100.0, "k": 1.0},
+    52	    "MF-R05": {"T": 80.0, "Tg": 50.0, "C1": 17.44, "C2": 51.6},
+    53	    "MF-R06": {"k": 1.0, "I": 100.0, "n": 0.3},
+    54	    "MF-R07": {"E": 1.0e9, "gamma_s": 1.0, "a": 1.0e-4},
+    55	    "MF-C01": {"r": 1.0e-6, "rho_p": 1100.0, "rho_f": 1000.0, "eta": 1.0e-3, "g": 9.81},
+    56	    "MF-C02": {"M_h": 100.0, "M_l": 200.0, "M": 300.0},
+    57	    "MF-C03": {"A_H": 1.0e-20, "kappa": 1.0e8, "zeta": 0.03, "epsilon_r": 80.0, "T": 298.0, "D": 5.0e-9},
+    58	    "MF-C04": {"sigma": 0.07, "R": 1.0e-3},
+    59	    "MF-C05": {"k1": 1.0e-5, "k2": 5.0e-5, "T1": 25.0, "T2": 35.0},
+    60	}
+    61	
+    62	def main():
+    63	    records = []
+    64	    with open(RECORDS_FILE) as f:
+    65	        for line in f:
+    66	            records.append(json.loads(line))
+    67	    print(f"Loaded {len(records):,} clean records")
+    68	
+    69	    by_mf_field = defaultdict(list)
+    70	    for r in records:
+    71	        by_mf_field[(r["best_mf"], r["canonical_field"])].append(r)
+    72	
+    73	    SAMPLE_LIMIT = 30
+    74	    bench_results = []
+    75	    by_mf_stats = defaultdict(lambda: {
+    76	        "total_records": 0, "tested": 0,
+    77	        "validity_passed": 0, "validity_failed": 0,
+    78	        "nan_output": 0, "no_solver": 0, "no_default": 0,
+    79	        "issues_by_type": defaultdict(int),
+    80	    })
+    81	
+    82	    for (mf, field), recs in sorted(by_mf_field.items()):
+    83	        stats = by_mf_stats[mf]
+    84	        stats["total_records"] += len(recs)
+    85	        if mf == "MF-T02":
+    86	            stats["no_solver"] += len(recs)
+    87	            continue
+    88	        mod_name = f"engine.solver.{mf.lower().replace('-', '_')}"
+    89	        try:
+    90	            solver_mod = importlib.import_module(mod_name)
+    91	        except ModuleNotFoundError:
+    92	            stats["no_solver"] += len(recs); continue
+    93	        if not hasattr(solver_mod, "solve"):
+    94	            stats["no_solver"] += len(recs); continue
+    95	        defaults = DEFAULTS.get(mf)
+    96	        if defaults is None:
+    97	            stats["no_default"] += len(recs); continue
+    98	
+    99	        sampled = recs[:SAMPLE_LIMIT]
+   100	        for r in sampled:
+   101	            stats["tested"] += 1
+   102	            v = r.get("value_si")
+   103	            if not isinstance(v, (int, float)) or not math.isfinite(v):
+   104	                stats["nan_output"] += 1; continue
+   105	            params = dict(defaults)
+   106	            params[field] = v
+   107	            try:
+   108	                out = solver_mod.solve(params)
+   109	            except Exception as exc:
+   110	                stats["validity_failed"] += 1
+   111	                stats["issues_by_type"]["exception"] += 1
+   112	                bench_results.append({"mf": mf, "field": field, "value": v, "status": "exception", "error": str(exc)[:200]})
+   113	                continue
+   114	            passed = out["validity"]["passed"]
+   115	            value_out = out["result"]["value"]
+   116	            if passed:
+   117	                stats["validity_passed"] += 1
+   118	                if isinstance(value_out, float) and (math.isnan(value_out) or math.isinf(value_out)):
+   119	                    stats["nan_output"] += 1
+   120	            else:
+   121	                stats["validity_failed"] += 1
+   122	                for issue in out["validity"]["issues"]:
+   123	                    if "outside bounds" in issue: stats["issues_by_type"]["bounds_violation"] += 1
+   124	                    elif "finite" in issue: stats["issues_by_type"]["non_finite"] += 1
+   125	                    else: stats["issues_by_type"]["other"] += 1
+   126	            bench_results.append({
+   127	                "mf": mf, "field": field,
+   128	                "value_si": v, "unit_si": r.get("unit_si"),
+   129	                "book": r["book"], "page": r.get("page"),
+   130	                "passed": passed,
+   131	                "output_symbol": out["result"]["symbol"],
+   132	                "output_value": value_out if isinstance(value_out, (int, float)) and math.isfinite(value_out) else str(value_out),
+   133	                "output_unit": out["result"]["unit"],
+   134	                "issues_count": len(out["validity"]["issues"]),
+   135	            })
+   136	
+   137	    with open(DETAIL_FILE, "w") as f:
+   138	        for r in bench_results: f.write(json.dumps(r, ensure_ascii=False) + "\n")
+   139	
+   140	    summary = {}
+   141	    for mf in sorted(by_mf_stats):
+   142	        s = by_mf_stats[mf]
+   143	        pass_rate = round(s["validity_passed"] * 100 / s["tested"], 1) if s["tested"] else 0
+   144	        summary[mf] = {
+   145	            "total_records": s["total_records"], "tested": s["tested"],
+   146	            "passed": s["validity_passed"], "failed": s["validity_failed"],
+   147	            "pass_rate_pct": pass_rate, "nan_output": s["nan_output"],
+   148	            "no_solver": s["no_solver"], "issues_by_type": dict(s["issues_by_type"]),
+   149	        }
+   150	    overall_tested = sum(s["tested"] for s in by_mf_stats.values())
+   151	    overall_passed = sum(s["validity_passed"] for s in by_mf_stats.values())
+   152	    report = {
+   153	        "version": "1.0",
+   154	        "generated_at": "2026-05-11",
+   155	        "description": "P4-Be2 lite: real Skill A values fed into 40 MF solvers",
+   156	        "global": {
+   157	            "total_records": sum(s["total_records"] for s in by_mf_stats.values()),
+   158	            "total_tested": overall_tested,
+   159	            "total_passed": overall_passed,
+   160	            "global_pass_rate_pct": round(overall_passed * 100 / overall_tested, 1) if overall_tested else 0,
+   161	        },
+   162	        "by_mf": summary,
+   163	    }
+   164	    REPORT_FILE.write_text(yaml.safe_dump(report, allow_unicode=True, sort_keys=False))
+   165	    print(f"\n=== Benchmark ===")
+   166	    print(f"Tested: {overall_tested}  Passed: {overall_passed}  ({report['global']['global_pass_rate_pct']}%)")
+   167	    print()
+   168	    print(f"{'MF':<10} {'rec':>5} {'test':>5} {'pass':>5} {'%':>6}  Top issue")
+   169	    print("-"*68)
+   170	    for mf in sorted(summary):
+   171	        s = summary[mf]
+   172	        top = max(s["issues_by_type"].items(), key=lambda x: x[1], default=("-", 0))
+   173	        print(f"{mf:<10} {s['total_records']:>5} {s['tested']:>5} {s['passed']:>5} {s['pass_rate_pct']:>5}%  {top[0]}={top[1]}")
+   174	
+   175	if __name__ == "__main__":
+   176	    main()
+
+exec
+/bin/zsh -lc "nl -ba scripts/skill_a/benchmark/case_studies_batch.py | sed -n '1,340p'" in /Users/jeff/culinary-mind
+exec
+/bin/zsh -lc "nl -ba scripts/skill_a/benchmark/case_study_beef_boiling.py | sed -n '1,320p'" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+     1	#!/usr/bin/env python3
+     2	"""Batch case studies: 4 real food scenarios chaining multiple MFs.
+     3	
+     4	Scenarios:
+     5	1. Yogurt fermentation (Gompertz growth)
+     6	2. Microwave reheating of leftover rice
+     7	3. Apple cold storage (respiration heat + storage life)
+     8	4. Tomato drying (moisture diffusion + thermal conductivity)
+     9	"""
+    10	import sys, math
+    11	from pathlib import Path
+    12	sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    13	
+    14	from engine.solver import (
+    15	    mf_k05, mf_k01, mf_t03,  # kinetics
+    16	    mf_t02_k, mf_t02_cp, mf_t02_rho,  # thermal props
+    17	    mf_t01,  # heat conduction
+    18	    mf_t07,  # dielectric
+    19	    mf_t09,  # respiration
+    20	    mf_m01,  # mass transfer (Fick)
+    21	    mf_m02,  # GAB isotherm
+    22	    mf_k02,  # D value
+    23	    mf_k04,  # F value
+    24	)
+    25	
+    26	
+    27	def print_header(t):
+    28	    print("\n" + "=" * 70 + f"\n{t}\n" + "=" * 70)
+    29	
+    30	def print_row(t):
+    31	    print(f"  {t}")
+    32	
+    33	# ────────────────────────────────────────────────────────────────────
+    34	# CASE 1: Yogurt Fermentation
+    35	# ────────────────────────────────────────────────────────────────────
+    36	def case_yogurt_fermentation():
+    37	    print_header("CASE 1: Yogurt Fermentation (42°C, 6 hours)")
+    38	    print_row("Setup: Whole milk + L. bulgaricus starter, 42°C incubation")
+    39	    print_row("Predict: Microbial growth (Gompertz), final population")
+    40	    print()
+    41	
+    42	    # Gompertz: log10(N/N0) = A·exp(-exp(-(μ_max·e/A)·(λ-t)+1))
+    43	    # L. bulgaricus typical: A=8 (log10 cycles), mu_max=1.5 /h, lambda=1 h
+    44	    A = 8.0
+    45	    mu_max = 1.5
+    46	    lam = 1.0
+    47	    print(f"  Gompertz params: A={A} log10, μ_max={mu_max} /h, λ={lam} h")
+    48	    print()
+    49	    print(f"  {'time (h)':>9}  {'log10(N/N0)':>13}  {'10^log':>11}")
+    50	    for t in [0, 1, 2, 3, 4, 5, 6, 8, 12]:
+    51	        out = mf_k05.solve({"A": A, "mu_max": mu_max, "lambda": lam, "t": float(t)})
+    52	        v = out["result"]["value"]
+    53	        if isinstance(v, float) and math.isfinite(v):
+    54	            print(f"  {t:>9.1f}  {v:>13.3f}  {10**v:>11.2e}")
+    55	
+    56	    # Apply Arrhenius to predict at different temp
+    57	    print()
+    58	    print(f"  Arrhenius rate constant for milk acidification:")
+    59	    print(f"    Ea=80,000 J/mol, A=1e10 (literature for lactic ferm.)")
+    60	    for T_C in [30, 37, 42, 45]:
+    61	        T_K = T_C + 273.15
+    62	        out = mf_t03.solve({"A": 1.0e10, "Ea": 80000.0, "T_K": T_K})
+    63	        k = out["result"]["value"]
+    64	        if isinstance(k, float) and math.isfinite(k):
+    65	            print(f"    {T_C}°C → k = {k:.3e} s⁻¹ (relative: {k/2.42e-4:.2f}×)")
+    66	
+    67	
+    68	# ────────────────────────────────────────────────────────────────────
+    69	# CASE 2: Microwave Reheating
+    70	# ────────────────────────────────────────────────────────────────────
+    71	def case_microwave_reheating():
+    72	    print_header("CASE 2: Microwave Reheating Leftover Rice (700W, 2.45 GHz)")
+    73	    print_row("Setup: 200g cooked rice, 4°C → target 70°C")
+    74	    print_row("Predict: Absorbed power, heating time, dielectric effects")
+    75	    print()
+    76	
+    77	    # Cooked rice composition (approx)
+    78	    rice = {
+    79	        "composition.water": 0.68, "composition.protein": 0.025,
+    80	        "composition.fat": 0.003, "composition.carb": 0.28,
+    81	        "composition.fiber": 0.005, "composition.ash": 0.007,
+    82	        "Xw": 0.68, "Xp": 0.025, "Xf": 0.003, "Xc": 0.28, "Xfiber": 0.005, "Xa": 0.007,
+    83	    }
+    84	    out_cp = mf_t02_cp.solve({**rice, "T_C": 30.0})
+    85	    out_rho = mf_t02_rho.solve({**rice, "T_C": 30.0})
+    86	    Cp = out_cp["result"]["value"]
+    87	    rho = out_rho["result"]["value"]
+    88	    print(f"  Rice properties: Cp={Cp:.0f} J/(kg·K), ρ={rho:.0f} kg/m³")
+    89	
+    90	    # MW absorbed power per m³ (eps2_rice~13 at 2.45GHz, E~3000 V/m typical in MW oven)
+    91	    out_p = mf_t07.solve({
+    92	        "epsilon_double_prime": 13.0,
+    93	        "frequency": 2.45e9,
+    94	        "E_field": 800.0,
+    95	    })
+    96	    P_volume = out_p["result"]["value"]
+    97	    print(f"  Absorbed power density: {P_volume:.2e} W/m³ at ε''=13, E=3000 V/m")
+    98	
+    99	    # 200g rice volume
+   100	    mass = 0.200  # kg
+   101	    volume = mass / rho
+   102	    P_total = P_volume * volume
+   103	    print(f"  Volume: {volume*1e6:.1f} cm³, total absorbed power: {P_total:.1f} W")
+   104	
+   105	    # Time to heat from 4°C to 70°C
+   106	    dT = 70.0 - 4.0
+   107	    energy = mass * Cp * dT  # J
+   108	    time_s = energy / P_total if P_total > 0 else float("inf")
+   109	    print(f"  Energy required: {energy:.0f} J ({energy/3600:.3f} Wh)")
+   110	    print(f"  Heating time: {time_s:.1f} s ({time_s/60:.2f} min)")
+   111	    print()
+   112	    print(f"  → Reference: 700W microwave heats 200g rice ~2 min (we predict {time_s/60:.1f} min)")
+   113	
+   114	
+   115	# ────────────────────────────────────────────────────────────────────
+   116	# CASE 3: Apple Cold Storage
+   117	# ────────────────────────────────────────────────────────────────────
+   118	def case_apple_cold_storage():
+   119	    print_header("CASE 3: Apple Cold Storage (1°C, 30 days)")
+   120	    print_row("Setup: 1 ton Golden Delicious apples in cold room")
+   121	    print_row("Predict: Respiration heat load, microbial safety, storage life")
+   122	    print()
+   123	
+   124	    # Apple respiration: a=0.011, b=0.10 (typical postharvest apple)
+   125	    a = 0.011
+   126	    b = 0.10
+   127	    print(f"  Respiration: Q = {a}·exp({b}·T) W/kg")
+   128	    print()
+   129	    print(f"  {'T (°C)':>8}  {'Q_resp (W/kg)':>14}  {'1000kg load':>13}")
+   130	    for T in [0, 1, 4, 10, 20, 25]:
+   131	        out = mf_t09.solve({"a": a, "b": b, "T_C": float(T)})
+   132	        q = out["result"]["value"]
+   133	        if isinstance(q, float) and math.isfinite(q):
+   134	            print(f"  {T:>8}  {q:>14.4f}  {q*1000:>13.1f} W")
+   135	
+   136	    # Salmonella/Listeria safety check at 1°C
+   137	    print()
+   138	    print("  Pathogen safety at 1°C (Listeria growth limits):")
+   139	    from engine.solver import mf_k06
+   140	    out = mf_k06.solve({
+   141	        "pH_min": 4.4, "a_w_min": 0.92, "T_min": 0.4,
+   142	        "pH": 4.0, "a_w": 0.98, "T_C": 1.0,  # apple pH ~3.5-4.0
+   143	    })
+   144	    print(f"    Result: growth_inhibited={out['result']['value']}")
+   145	    # pH=4.0 < pH_min=4.4 → inhibited
+   146	    print(f"    → Acidity (pH 4.0 < 4.4 Listeria min) inhibits growth")
+   147	
+   148	    # Storage life estimation (Arrhenius rate of quality decay)
+   149	    print()
+   150	    print("  Quality decay rate (browning, Arrhenius):")
+   151	    for T in [0, 1, 4, 10, 20]:
+   152	        T_K = T + 273.15
+   153	        out = mf_t03.solve({"A": 1.0e8, "Ea": 60000.0, "T_K": T_K})
+   154	        k = out["result"]["value"]
+   155	        rel_to_1C = k / 1.5e-3  # baseline at 1°C
+   156	        if isinstance(k, float) and math.isfinite(k):
+   157	            print(f"    {T:>3}°C → k_decay={k:.3e} ({rel_to_1C:.1f}× of 1°C)")
+   158	
+   159	
+   160	# ────────────────────────────────────────────────────────────────────
+   161	# CASE 4: Tomato Drying
+   162	# ────────────────────────────────────────────────────────────────────
+   163	def case_tomato_drying():
+   164	    print_header("CASE 4: Tomato Slice Drying (60°C, 5h)")
+   165	    print_row("Setup: 5mm-thick tomato slice, 60°C hot air")
+   166	    print_row("Predict: Moisture diffusion, thermal properties, drying time")
+   167	    print()
+   168	
+   169	    # Tomato composition (fresh: 94% water, after drying it changes)
+   170	    tomato_fresh = {
+   171	        "composition.water": 0.94, "composition.protein": 0.009,
+   172	        "composition.fat": 0.002, "composition.carb": 0.039,
+   173	        "composition.fiber": 0.012, "composition.ash": 0.005,
+   174	        "Xw": 0.94, "Xp": 0.009, "Xf": 0.002, "Xc": 0.039, "Xfiber": 0.012, "Xa": 0.005,
+   175	    }
+   176	    out_k = mf_t02_k.solve({**tomato_fresh, "T_C": 60.0})
+   177	    out_cp = mf_t02_cp.solve({**tomato_fresh, "T_C": 60.0})
+   178	    out_rho = mf_t02_rho.solve({**tomato_fresh, "T_C": 60.0})
+   179	    print(f"  Fresh tomato @ 60°C: k={out_k['result']['value']:.3f}, Cp={out_cp['result']['value']:.0f}, ρ={out_rho['result']['value']:.0f}")
+   180	
+   181	    # Fick 2nd Law for moisture diffusion
+   182	    # D_eff for tomato drying ~1e-9 m²/s, slab thickness 5mm
+   183	    print()
+   184	    print("  Moisture diffusion (Fick 2nd, D_eff = 5e-10 m²/s):")
+   185	    print()
+   186	    print(f"  {'time (h)':>9}  {'C(center)':>11}  {'% moisture':>11}")
+   187	    L = 0.005  # 5mm
+   188	    for t_min in [0, 30, 60, 120, 180, 300]:
+   189	        out = mf_m01.solve({
+   190	            "C_init": 0.94, "C_boundary": 0.05,
+   191	            "D_eff": 5e-10, "x_position": L/2,
+   192	            "time": float(t_min * 60), "thickness": L,
+   193	        })
+   194	        c = out["result"]["value"]
+   195	        if isinstance(c, float) and math.isfinite(c):
+   196	            print(f"  {t_min/60:>9.1f}  {c:>11.3f}  {c*100:>10.1f}%")
+   197	
+   198	    # GAB sorption isotherm (equilibrium moisture)
+   199	    print()
+   200	    print("  GAB isotherm — equilibrium moisture content:")
+   201	    print(f"    Setup: Xm=0.08, C=10, K=0.9 (typical fruit)")
+   202	    print()
+   203	    for aw in [0.2, 0.4, 0.6, 0.8, 0.9]:
+   204	        out = mf_m02.solve({"a_w": aw, "Xm": 0.08, "C": 10.0, "K": 0.9})
+   205	        w = out["result"]["value"]
+   206	        if isinstance(w, float) and math.isfinite(w):
+   207	            print(f"    a_w={aw} → W={w:.3f} kg/kg DM ({w*100:.1f}% DM basis)")
+   208	
+   209	
+   210	# ────────────────────────────────────────────────────────────────────
+   211	# RUN ALL
+   212	# ────────────────────────────────────────────────────────────────────
+   213	def main():
+   214	    case_yogurt_fermentation()
+   215	    case_microwave_reheating()
+   216	    case_apple_cold_storage()
+   217	    case_tomato_drying()
+   218	    print("\n" + "=" * 70)
+   219	    print("✅ 4 CASE STUDIES COMPLETE — 13 different MFs invoked across scenarios")
+   220	    print("   Yogurt fermentation: MF-K05, MF-T03")
+   221	    print("   Microwave reheating: MF-T02-CP/RHO, MF-T07")
+   222	    print("   Apple cold storage:  MF-T09, MF-K06, MF-T03")
+   223	    print("   Tomato drying:       MF-T02-K/CP/RHO, MF-M01, MF-M02")
+   224	    print("=" * 70)
+   225	
+   226	if __name__ == "__main__":
+   227	    main()
+
+ succeeded in 0ms:
+     1	#!/usr/bin/env python3
+     2	"""End-to-end Layer 3 reasoning case study: Beef Boiling.
+     3	
+     4	Scenario: 5cm beef cube boiled in 100°C water; predict center temperature over time,
+     5	protein denaturation, myoglobin oxidation rate, and pathogen safety.
+     6	
+     7	Chain of MFs:
+     8	1. MF-T02-K / -CP / -RHO: thermal properties from beef composition (Choi-Okos)
+     9	2. MF-T01 (Fourier 1D): T_center(x=L/2, t) heat conduction
+    10	3. MF-T06 (Protein_Denaturation): myosin denaturation fraction at T_center
+    11	4. MF-T03 (Arrhenius): k(T) for non-enzymatic browning at T_center
+    12	5. MF-K04 (F_Value): pasteurization equivalent at boundary
+    13	6. MF-K06 (Growth_Limit): Salmonella safety check
+    14	"""
+    15	import sys
+    16	import math
+    17	from pathlib import Path
+    18	sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    19	
+    20	from engine.solver import mf_t01, mf_t02_k, mf_t02_cp, mf_t02_rho, mf_t06, mf_t03, mf_k04, mf_k06
+    21	
+    22	
+    23	def main():
+    24	    print("=" * 70)
+    25	    print("CASE STUDY: 5cm Beef Cube Boiled in 100°C Water — 30 min")
+    26	    print("=" * 70)
+    27	    print()
+    28	
+    29	    # Beef composition (USDA average lean beef)
+    30	    beef_comp = {
+    31	        "composition.water": 0.62,
+    32	        "composition.protein": 0.22,
+    33	        "composition.fat": 0.13,
+    34	        "composition.carb": 0.0,
+    35	        "composition.fiber": 0.0,
+    36	        "composition.ash": 0.01,
+    37	        "Xw": 0.62, "Xp": 0.22, "Xf": 0.13, "Xc": 0.0, "Xfiber": 0.0, "Xa": 0.01,
+    38	    }
+    39	
+    40	    # ──────────────── Step 1: Thermal Properties at 50°C ──────────────
+    41	    print("STEP 1: Beef thermal properties at 50°C (Choi-Okos)")
+    42	    print("-" * 70)
+    43	    t_mid = 50.0
+    44	    out_k = mf_t02_k.solve({**beef_comp, "T_C": t_mid})
+    45	    out_cp = mf_t02_cp.solve({**beef_comp, "T_C": t_mid})
+    46	    out_rho = mf_t02_rho.solve({**beef_comp, "T_C": t_mid})
+    47	
+    48	    k = out_k["result"]["value"]
+    49	    cp = out_cp["result"]["value"]
+    50	    rho = out_rho["result"]["value"]
+    51	    print(f"  k (thermal conductivity): {k:.3f} W/(m·K)  [validity: {out_k['validity']['passed']}]")
+    52	    print(f"  Cp (specific heat):       {cp:.1f} J/(kg·K)  [validity: {out_cp['validity']['passed']}]")
+    53	    print(f"  ρ  (density):             {rho:.1f} kg/m³  [validity: {out_rho['validity']['passed']}]")
+    54	    alpha = k / (rho * cp)
+    55	    print(f"  α  (thermal diffusivity): {alpha:.3e} m²/s")
+    56	    print()
+    57	
+    58	    # ──────────────── Step 2: Fourier 1D at multiple times ────────────
+    59	    print("STEP 2: Fourier 1D heat conduction at center (x = L/2 = 0.025m)")
+    60	    print("-" * 70)
+    61	    L = 0.05  # 5cm cube
+    62	    times = [60, 300, 600, 1200, 1800, 3600]  # 1, 5, 10, 20, 30 min, 1h
+    63	    print(f"  Setup: cube L={L*100:.1f}cm, T_init=4°C, T_boundary=100°C")
+    64	    print()
+    65	    print(f"  {'time (min)':>10}  {'T_center (°C)':>14}  {'validity':<10}")
+    66	    T_centers = []
+    67	    for t in times:
+    68	        out_fourier = mf_t01.solve({
+    69	            "T_init": 4.0, "T_boundary": 100.0,
+    70	            "time": float(t), "x_position": L/2,
+    71	            "alpha": alpha, "thickness": L,
+    72	            "k": k, "rho": rho, "Cp": cp,
+    73	        })
+    74	        t_c = out_fourier["result"]["value"]
+    75	        T_centers.append(t_c)
+    76	        ok = "OK" if out_fourier["validity"]["passed"] else "WARN"
+    77	        print(f"  {t/60:>10.1f}  {t_c:>14.1f}  {ok:<10}")
+    78	    print()
+    79	
+    80	    # ──────────────── Step 3: Protein Denaturation ────────────────────
+    81	    print("STEP 3: Myosin denaturation (MF-T06) at center temperature")
+    82	    print("-" * 70)
+    83	    # Myosin denaturation: T_d ≈ 55°C, dH_d ≈ 720 kJ/mol
+    84	    print(f"  Setup: T_d=55°C (myosin), dH_d=720 kJ/mol")
+    85	    print()
+    86	    print(f"  {'time (min)':>10}  {'T_center':>10}  {'f_native':>10}  {'denatured%':>12}")
+    87	    for t, tc in zip(times, T_centers):
+    88	        out_pd = mf_t06.solve({"T_d": 55.0, "dH_d": 720.0, "T_C": tc})
+    89	        fn = out_pd["result"]["value"]
+    90	        if isinstance(fn, float) and math.isfinite(fn):
+    91	            print(f"  {t/60:>10.1f}  {tc:>10.1f}  {fn:>10.4f}  {(1-fn)*100:>11.1f}%")
+    92	        else:
+    93	            print(f"  {t/60:>10.1f}  {tc:>10.1f}  {'NaN':>10}  -")
+    94	    print()
+    95	
+    96	    # ──────────────── Step 4: Arrhenius k(T) for browning ─────────────
+    97	    print("STEP 4: Maillard browning rate (MF-T03 Arrhenius) at center")
+    98	    print("-" * 70)
+    99	    # Maillard: Ea ~ 120 kJ/mol = 120,000 J/mol, A ~ 1e15 s⁻¹
+   100	    print(f"  Setup: A=1e15 s⁻¹, Ea=120,000 J/mol")
+   101	    print()
+   102	    print(f"  {'time (min)':>10}  {'T_center':>10}  {'T_K':>8}  {'k(T) s⁻¹':>14}")
+   103	    for t, tc in zip(times, T_centers):
+   104	        T_K = tc + 273.15
+   105	        out_arr = mf_t03.solve({"A": 1.0e15, "Ea": 120000.0, "T_K": T_K})
+   106	        k_T = out_arr["result"]["value"]
+   107	        if isinstance(k_T, float) and math.isfinite(k_T):
+   108	            print(f"  {t/60:>10.1f}  {tc:>10.1f}  {T_K:>8.1f}  {k_T:>14.3e}")
+   109	        else:
+   110	            print(f"  {t/60:>10.1f}  {tc:>10.1f}  -  NaN")
+   111	    print()
+   112	
+   113	    # ──────────────── Step 5: F-Value Pasteurization at boundary ──────
+   114	    print("STEP 5: F-Value pasteurization equivalent at boundary (100°C)")
+   115	    print("-" * 70)
+   116	    # F0 standard: T_ref=121.1, z=10 → typical food safety
+   117	    # At 100°C boundary: F0 < 1 (not full sterilization)
+   118	    out_f = mf_k04.solve({"T_ref": 121.1, "z": 10.0, "T_C": 100.0, "time": 1800.0})  # 30 min at 100°C
+   119	    f_val = out_f["result"]["value"]
+   120	    print(f"  Setup: T_ref=121.1°C, z=10°C, T_actual=100°C, time=30 min")
+   121	    print(f"  F-value: {f_val:.2f} min  [validity: {out_f['validity']['passed']}]")
+   122	    print(f"  → 30 min @ 100°C delivers only {f_val:.1f} F₀-equivalent minutes")
+   123	    print(f"  → Pasteurization (Listeria/Salmonella): typically needs F70 ≥ 1-2 min")
+   124	    print()
+   125	
+   126	    # ──────────────── Step 6: Salmonella Safety ───────────────────────
+   127	    print("STEP 6: Salmonella growth limit at center temperatures")
+   128	    print("-" * 70)
+   129	    # Salmonella: pH_min ~3.7, a_w_min ~0.94, T_min ~5.2°C
+   130	    # In cooked beef interior, pH ~5.5, a_w ~0.99
+   131	    print(f"  Setup: pH_min=3.7, a_w_min=0.94, T_min=5.2°C")
+   132	    print(f"  Beef interior: pH=5.5, a_w=0.99")
+   133	    print()
+   134	    print(f"  {'time (min)':>10}  {'T_center':>10}  {'growth_inhibited':>17}")
+   135	    for t, tc in zip(times, T_centers):
+   136	        out_g = mf_k06.solve({
+   137	            "pH_min": 3.7, "a_w_min": 0.94, "T_min": 5.2,
+   138	            "pH": 5.5, "a_w": 0.99, "T_C": tc,
+   139	        })
+   140	        gi = out_g["result"]["value"]
+   141	        inhibited = "YES (cooked through)" if gi == 1.0 else "NO (still permits growth)" if gi == 0.0 else "?"
+   142	        # Wait, MF-K06 inhibition is T < T_min — but cooking goes UP not DOWN
+   143	        # In our case T_center always > 5.2 so growth permitted (gi=0)
+   144	        # That doesn't reflect that 60°C+ kills Salmonella — but that's MF-K02 D-value
+   145	        print(f"  {t/60:>10.1f}  {tc:>10.1f}  {gi:>17}  ({inhibited})")
+   146	
+   147	    print()
+   148	    print("=" * 70)
+   149	    print("CASE STUDY SUMMARY:")
+   150	    print("=" * 70)
+   151	    print(f"  Final center temp at 30 min: {T_centers[4]:.1f}°C")
+   152	    print(f"  Denaturation predicted at center: see Step 3")
+   153	    print(f"  F0-value at boundary 30 min: {f_val:.2f} min")
+   154	    print()
+   155	    print("  Layer 3 reasoning chain verified end-to-end:")
+   156	    print("  composition → thermal props → heat transfer → kinetics → safety")
+   157	    print()
+   158	    print("✅ 6 MFs chained successfully. Real food engineering recipe simulation.")
+   159	
+   160	if __name__ == "__main__":
+   161	    main()
+
+codex
+I’ve isolated a few likely real defects, including one that can drop mapped records and another that appears to reinterpret half-life values as rate constants. I’m checking the solver contracts for a couple of benchmark claims so I don’t overstate anything.
+exec
+/bin/zsh -lc 'rg -n "def solve|time|F-value|F0|growth_inhibited|epsilon_double_prime|E_field" engine/solver/mf_k04.py engine/solver/mf_k06.py engine/solver/mf_t07.py' in /Users/jeff/culinary-mind
+ exited 127 in 0ms:
+zsh:1: command not found: rg
+
+exec
+/bin/zsh -lc "sed -n '1,260p' engine/solver/mf_k04.py" in /Users/jeff/culinary-mind
+exec
+/bin/zsh -lc "sed -n '1,260p' engine/solver/mf_k06.py" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+"""MF-K06 Growth_Limit — microbial growth boundary check.
+
+Decision rule:
+    growth = (pH ≥ pH_min) ∧ (a_w ≥ a_w_min) ∧ (T_C ≥ T_min) ∧ ([substance] ≤ MIC)
+
+A given combination of (pH, a_w, T_C, substance_conc) is "growth-inhibited"
+when ANY of the minimum-condition thresholds fails OR substance ≥ MIC.
+
+Inputs (limits — supply at least one):
+    pH_min, a_w_min, T_min, MIC
+
+Inputs (current condition — match supplied limits):
+    pH, a_w, T_C, substance_conc
+
+Output:
+    growth_inhibited (bool encoded as 0.0/1.0; 1.0 = inhibited)
+    + extra_outputs.margins for each axis
+
+References:
+    - ICMSF Microorganisms in Foods 6, growth limit tables
+    - Pitt & Hocking Fungi and Food Spoilage Ch.5
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import (
+    Validator,
+    build_result,
+    llm_summary_for,
+    provenance_for,
+    validate_bounds,
+)
+
+TOOL_ID = "MF-K06"
+TOOL_CANONICAL_NAME = "Growth_Limit"
+CITATIONS = [
+    "ICMSF (2018) Microorganisms in Foods 6 — growth/no-growth limits",
+    "Pitt & Hocking (2009) Fungi and Food Spoilage Ch.5",
+    "FDA Bad Bug Book — minimum growth conditions",
+]
+
+
+@validate_bounds("MF-K06")
+def solve(params: dict) -> dict:
+    """Check whether condition (pH, a_w, T, substance) inhibits growth."""
+    val = Validator()
+    assumptions: list[str] = [
+        "AND combination of all supplied limits (hurdle technology)",
+        "MIC is for the test substance only (preservative or antimicrobial)",
+    ]
+
+    # Limits
+    ph_min = params.get("pH_min")
+    aw_min = params.get("a_w_min")
+    t_min = params.get("T_min")
+    mic = params.get("MIC")
+
+    # Current conditions
+    ph = params.get("pH")
+    aw = params.get("a_w")
+    t_c = params.get("T_C", params.get("T_c"))
+    subs_conc = params.get("substance_conc")
+
+    # At least one limit/condition pair must be supplied
+    pairs = [
+        ("pH", ph, "pH_min", ph_min),
+        ("a_w", aw, "a_w_min", aw_min),
+        ("T_C", t_c, "T_min", t_min),
+        ("substance_conc", subs_conc, "MIC", mic),
+    ]
+    supplied = [(n_v, v, n_l, l) for n_v, v, n_l, l in pairs if l is not None]
+    if not supplied:
+        val.issues.append("at least one of pH_min/a_w_min/T_min/MIC required")
+
+    # Validate finiteness on supplied limits + their paired current value
+    for n_v, v, n_l, l in supplied:
+        val.require_finite(n_l, l)
+        if v is None:
+            val.issues.append(f"{n_v} required when {n_l} supplied")
+        else:
+            val.require_finite(n_v, v)
+
+    # Range checks
+    if ph is not None and isinstance(ph, (int, float)) and not isinstance(ph, bool) and math.isfinite(ph):
+        val.require_in_range("pH", ph, 0.0, 14.0)
+    if aw is not None and isinstance(aw, (int, float)) and not isinstance(aw, bool) and math.isfinite(aw):
+        val.require_in_range("a_w", aw, 0.0, 1.0)
+
+    margins: dict[str, float] = {}
+    inhibited = False
+    if supplied and not val.issues:
+        for n_v, v, n_l, l in supplied:
+            if n_v == "substance_conc":
+                # substance_conc inhibits when ≥ MIC
+                margin = float(v) - float(l)  # positive means above MIC → inhibited
+                margins[f"{n_v}_minus_{n_l}"] = margin
+                if margin >= 0:
+                    inhibited = True
+            else:
+                # pH/a_w/T_C inhibit when < min
+                margin = float(v) - float(l)  # positive means above min → growth ok
+                margins[f"{n_v}_minus_{n_l}"] = margin
+                if margin < 0:
+                    inhibited = True
+        if inhibited:
+            assumptions.append("growth inhibited by at least one hurdle")
+        else:
+            assumptions.append("all supplied conditions permit growth")
+
+    value = 1.0 if inhibited else 0.0
+
+    return build_result(
+        value=value if not val.issues else float("nan"),
+        unit="boolean (1=inhibited, 0=growth-permitted)",
+        symbol="growth_inhibited",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={
+            "pH_min": ph_min, "a_w_min": aw_min, "T_min": t_min, "MIC": mic,
+            "pH": ph, "a_w": aw, "T_C": t_c, "substance_conc": subs_conc,
+        },
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if not val.issues else float("nan"),
+            unit="boolean",
+            symbol="growth_inhibited",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+            extra_outputs={"margins": margins},
+        ),
+    )
+
+ succeeded in 0ms:
+"""MF-K04 F_Value — integrated thermal lethality.
+
+Formula:
+    F = integral(10^((T(t) - T_ref)/z) dt) / 60
+
+References:
+    - Thermal process lethality integration.
+    - scipy.integrate.quad/simpson for callable and sampled profiles.
+
+Inputs:
+    Either T_C + time for a constant process, T_profile callable with
+    t_start/t_end, or times_s + temperatures_C arrays. Optional T_ref and z.
+
+Assumptions:
+    - input time is seconds
+    - output F is minutes at T_ref
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from scipy import integrate as _integrate
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+
+TOOL_ID = 'MF-K04'
+TOOL_CANONICAL_NAME = 'F_Value'
+CITATIONS = [
+    'Toledo, Fundamentals of Food Process Engineering Ch.9',
+    'Jay, Modern Food Microbiology Ch.17',
+    'Handbook of Food Engineering Ch.12',
+]
+
+
+
+def _lethality_factor(t_c: float, t_ref: float, z_value: float) -> float:
+    return 10.0 ** ((t_c - t_ref) / z_value)
+
+
+@validate_bounds("MF-K04")
+def solve(params: dict) -> dict:
+    """Compute equivalent lethality F in minutes."""
+    val = Validator()
+    assumptions: list[str] = [
+        "time basis is seconds",
+        "reported F is minutes at T_ref",
+    ]
+
+    t_ref = params.get("T_ref", 121.1)
+    z_value = params.get("z", 10.0)
+    val.require_temperature_celsius("T_ref", t_ref)
+    val.require_positive("z", z_value)
+
+    value: float | None = None
+    inputs_used: dict[str, Any] = {"T_ref": t_ref, "z": z_value}
+
+    ready = (
+        isinstance(t_ref, (int, float)) and not isinstance(t_ref, bool)
+        and isinstance(z_value, (int, float)) and not isinstance(z_value, bool)
+        and math.isfinite(t_ref) and math.isfinite(z_value) and z_value > 0.0
+    )
+
+    if "T_C" in params and ("time" in params or "time_s" in params):
+        temp = params.get("T_C")
+        time_s = params.get("time", params.get("time_s"))
+        inputs_used.update({"T_C": temp, "time": time_s})
+        assumptions.append("constant-temperature profile")
+        val.require_temperature_celsius("T_C", temp)
+        val.require_positive("time", time_s, allow_zero=True)
+        if (
+            ready
+            and all(isinstance(x, (int, float)) and not isinstance(x, bool)
+                    for x in (temp, time_s))
+            and math.isfinite(temp) and math.isfinite(time_s) and time_s >= 0.0
+        ):
+            value = _lethality_factor(float(temp), float(t_ref), float(z_value)) * float(time_s) / 60.0
+
+    elif callable(params.get("T_profile")):
+        profile = params["T_profile"]
+        t_start = params.get("t_start", 0.0)
+        t_end = params.get("t_end", params.get("time"))
+        inputs_used.update({"T_profile": "<callable>", "t_start": t_start, "t_end": t_end})
+        assumptions.append("callable temperature profile integrated with scipy.quad")
+        val.require_positive("t_start", t_start, allow_zero=True)
+        val.require_positive("t_end", t_end, allow_zero=True)
+        if (
+            ready
+            and all(isinstance(x, (int, float)) and not isinstance(x, bool)
+                    for x in (t_start, t_end))
+            and math.isfinite(t_start) and math.isfinite(t_end) and t_end >= t_start
+        ):
+            try:
+                integral, _ = _integrate.quad(
+                    lambda tt: _lethality_factor(float(profile(tt)), float(t_ref), float(z_value)),
+                    float(t_start),
+                    float(t_end),
+                )
+                value = integral / 60.0
+            except Exception as exc:
+                val.issues.append(f"T_profile integration failed: {exc}")
+
+    elif "times_s" in params and "temperatures_C" in params:
+        times = params.get("times_s")
+        temps = params.get("temperatures_C")
+        inputs_used.update({"times_s": times, "temperatures_C": temps})
+        assumptions.append("sampled temperature profile integrated with scipy.simpson")
+        if not isinstance(times, (list, tuple)) or not isinstance(temps, (list, tuple)):
+            val.issues.append("times_s and temperatures_C must be sequences")
+        elif len(times) != len(temps) or len(times) < 2:
+            val.issues.append("times_s and temperatures_C must have the same length >= 2")
+        else:
+            clean_times: list[float] = []
+            clean_temps: list[float] = []
+            for idx, (time_s, temp) in enumerate(zip(times, temps)):
+                val.require_positive(f"times_s[{idx}]", time_s, allow_zero=True)
+                val.require_temperature_celsius(f"temperatures_C[{idx}]", temp)
+                if (
+                    isinstance(time_s, (int, float)) and not isinstance(time_s, bool)
+                    and isinstance(temp, (int, float)) and not isinstance(temp, bool)
+                    and math.isfinite(time_s) and math.isfinite(temp)
+                ):
+                    clean_times.append(float(time_s))
+                    clean_temps.append(float(temp))
+            if len(clean_times) == len(times):
+                if any(t2 <= t1 for t1, t2 in zip(clean_times, clean_times[1:])):
+                    val.issues.append("times_s must be strictly increasing")
+                elif ready:
+                    factors = [_lethality_factor(temp, float(t_ref), float(z_value))
+                               for temp in clean_temps]
+                    value = float(_integrate.simpson(factors, x=clean_times)) / 60.0
+    else:
+        val.issues.append(
+            "provide T_C + time, callable T_profile + t_start/t_end, or times_s + temperatures_C"
+        )
+
+    return build_result(
+        value=value if value is not None else float("nan"),
+        unit="min",
+        symbol="F",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used=inputs_used,
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="min",
+            symbol="F",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
+    )
+
+exec
+/bin/zsh -lc "sed -n '1,220p' engine/solver/mf_t07.py" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+"""MF-T07 Dielectric_Properties — RF/Microwave volumetric heating.
+
+Formula:
+    P_abs = 2 · π · f · ε₀ · ε'' · |E|²
+
+where:
+    f       [Hz]  — RF or microwave frequency
+    ε''     [-]   — dielectric loss factor
+    |E|     [V/m] — local electric field magnitude
+    ε₀      = 8.8541878128e-12 F/m  (permittivity of free space)
+    P_abs   [W/m³] — volumetric absorbed power density
+
+Inputs:
+    epsilon_double_prime
+    frequency [Hz]
+    E_field [V/m]
+
+Output:
+    P_abs (volumetric absorbed power, W/m³)
+
+References:
+    - Singh & Heldman Ch.5 — Microwave processing
+    - Datta & Davidson (2000) Microwave food processing
+    - Buffler (1993) Microwave Cooking & Processing
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import (
+    Validator,
+    build_result,
+    llm_summary_for,
+    provenance_for,
+    validate_bounds,
+)
+
+TOOL_ID = "MF-T07"
+TOOL_CANONICAL_NAME = "Dielectric_Properties"
+CITATIONS = [
+    "Singh & Heldman, Intro Food Engineering Ch.5 — microwave",
+    "Datta & Davidson (2000) J Food Sci 65:1 — MW food processing",
+    "Buffler, Microwave Cooking & Processing (1993)",
+]
+
+_EPSILON_0 = 8.8541878128e-12  # F/m
+
+
+@validate_bounds("MF-T07")
+def solve(params: dict) -> dict:
+    """Compute volumetric absorbed power density P_abs."""
+    val = Validator()
+    assumptions: list[str] = [
+        "uniform |E| within the volume element",
+        "ε'' treated as effective dielectric loss factor",
+        "no magnetic loss contribution (non-magnetic food)",
+    ]
+
+    eps2 = params.get("epsilon_double_prime", params.get("epsilon_pp"))
+    freq = params.get("frequency", params.get("f"))
+    e_field = params.get("E_field", params.get("E"))
+
+    val.require_positive("epsilon_double_prime", eps2, allow_zero=True)
+    val.require_positive("frequency", freq)
+    val.require_positive("E_field", e_field, allow_zero=True)
+
+    p_abs: float | None = None
+    if all(
+        isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+        for x in (eps2, freq, e_field)
+    ) and eps2 >= 0 and freq > 0 and e_field >= 0:
+        p_abs = 2.0 * math.pi * float(freq) * _EPSILON_0 * float(eps2) * float(e_field) ** 2
+
+    return build_result(
+        value=p_abs if p_abs is not None else float("nan"),
+        unit="W/m³",
+        symbol="P_abs",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={
+            "epsilon_double_prime": eps2,
+            "frequency": freq,
+            "E_field": e_field,
+        },
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=p_abs if p_abs is not None else float("nan"),
+            unit="W/m³",
+            symbol="P_abs",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
+    )
+
+codex
+## extract_unique_pairs.py
+VERDICT: NOT_PROVIDED
+
+### BUGS
+- None reviewable: file contents were not included.
+
+### Key concerns
+- This script could not be reviewed from the supplied bundle.
+
+## rescue_backlog_to_new_fields.py
+VERDICT: REJECT
+
+### BUGS
+- P1: [46-51, 163-178] Half-life candidates are mapped into `MF-T03.observed_k` exactly as-is, but the code never performs the documented conversion `k = ln(2) / half_life`. That corrupts semantics downstream by treating half-life values as rate constants.
+- P1: [140-145, 164-179] Duplicate suppression is keyed on `(target_mf, parameter_name)` only. If the same `parameter_name` appears under multiple `original_mf` values and all should rescue into the same target MF, later records are silently skipped. That is real record loss at the mapping stage.
+- P2: [148-150] A single malformed JSONL line aborts the whole run. There is no per-line error handling or accounting for skipped bad records.
+- P2: [198] `MAP_V3.write_text(...)` is a direct overwrite, so interruption can leave a truncated/partial output file.
+
+### Key concerns
+- The docstring says this script will “Re-emit MF value database with rescued records”, but it only writes `param_ontology_map_v3.json`. If operators trust the docstring, downstream data can be stale until another script is run.
+- Idempotency is otherwise acceptable on clean reruns, but not safe against mid-write interruption.
+- `yaml` is imported but unused.
+
+## p2_sa2_outlier_cleaning.py
+VERDICT: APPROVE_WITH_NOTES
+
+### BUGS
+- P2: [45-47] A malformed line in `mf_parameter_records.jsonl` crashes the full cleaning pass. For a batch ETL step, that is brittle error handling.
+- P2: [77-79, 138, 151] All three outputs are written in place. If the process dies mid-write, downstream stages can consume partial JSONL/YAML files.
+- P2: [41] `db = yaml.safe_load(open(DB_FILE))` is loaded and then unused. That is not just dead code; it also means the script does not validate that the cleaned record rebuild is consistent with the input DB it announces it is cleaning.
+
+### Key concerns
+- Data flow is otherwise straightforward: input records are filtered, then the DB is rebuilt from the surviving records, so no hidden stage-to-stage loss beyond intentional drops.
+- Reruns are idempotent in the normal case because outputs are fully regenerated.
+- No Codex CLI / rate-limit concerns apply here.
+
+## build_mf_value_database.py
+VERDICT: REJECT
+
+### BUGS
+- P1: [124-125] Malformed JSON lines are silently dropped with `except: continue`. That is untracked data loss in the primary ETL path.
+- P1: [214-223, 241] All outputs are written non-atomically. If the job is interrupted, the pipeline can leave behind a valid-looking but partial YAML/JSONL artifact and corrupt resume behavior.
+- P2: [106-109] `v3_rule_rescued` mappings are normalized to `"v2_rescued"` in `pn_lookup`. That makes provenance counts wrong in the output DB and hides which records came from v3 rescue.
+- P2: [137-138, 206-207] `matched` is incremented before the `"no_match"` guard. If such rows exist, stats claim they were loaded even though they were dropped from `field_records`.
+
+### Key concerns
+- Unknown units are treated as `ok=True` and kept as raw numeric values [64-83]. That can mix incompatible units inside a single distribution if upstream extraction emits heterogeneous units the normalizer does not know about.
+- Performance is fine for the stated scale; nothing obviously quadratic here.
+- Resume/idempotency is only safe when the process completes successfully.
+
+## mf_real_data_benchmark.py
+VERDICT: REJECT
+
+### BUGS
+- P1: [85-87] All `MF-T02` records are unconditionally marked `no_solver` and skipped, even though the defaults table clearly models the split family as `MF-T02-K`, `MF-T02-CP`, and `MF-T02-RHO`. This drops an entire MF family from the benchmark and biases summary metrics.
+- P2: [101-104] `tested` is incremented before verifying `value_si` is numeric/finite. Non-testable rows still enter the denominator, which distorts pass rates.
+- P2: [64-66] A malformed JSONL line aborts the entire benchmark run.
+- P2: [107-135] The script assumes every solver returns `out["validity"]["passed"]` and `out["result"]["value"]`. Any contract deviation becomes a hard crash rather than a per-record failure.
+- P2: [137-164] Outputs are written non-atomically.
+
+### Key concerns
+- `no_default` is collected but omitted from the report summary [95-97, 144-148], so missing coverage is understated.
+- Sampling only the first 30 records per `(mf, field)` is fine for a smoke benchmark, but it is not representative if input ordering is clustered.
+- No Codex CLI / rate-limit concerns apply here.
+
+## case_study_beef_boiling.py
+VERDICT: REJECT
+
+### BUGS
+- P1: [126-145] Step 6 uses `MF-K06 Growth_Limit` to assess Salmonella safety during cooking, then presents that as a safety result. `MF-K06` only answers whether conditions permit growth; it does not model thermal kill. The script even acknowledges this in comments, so the reported “safety check” is knowingly the wrong model for the question being asked.
+- P2: [44-54, 68-77, 88-91, 105-108, 118-123, 136-145] Solver validity is printed but not enforced before downstream use. Invalid/NaN outputs can propagate into later calculations or formatted output.
+
+### Key concerns
+- No file writes here, so atomicity/idempotency are mostly not applicable.
+- The MF chain is computationally cheap; no real performance issues.
+- The main issue is scientific correctness of the reasoning chain, not code style.
+
+## case_studies_batch.py
+VERDICT: REJECT
+
+### BUGS
+- P1: [90-97] The microwave case says the setup uses `E=3000 V/m`, but the solver is actually called with `E_field=800.0`. Since absorbed power scales with `E^2`, the reported power density and heating time are materially inconsistent with the narrative.
+- P2: [153-156] `rel_to_1C = k / 1.5e-3` is computed before checking that `k` is numeric/finite. If the solver returns `nan` or a non-numeric value, this case can crash before the guard.
+- P2: [84-112, 130-157, 176-207] Most cases use solver outputs immediately without validating `validity["passed"]`, so bad solver inputs can produce misleading downstream numbers.
+
+### Key concerns
+- No persistent outputs are written, so atomic write / resume concerns are minimal here.
+- Performance is trivial.
+- Several imports are unused, but that is a nit, not a review blocker.
+tokens used
+55,799
+## extract_unique_pairs.py
+VERDICT: NOT_PROVIDED
+
+### BUGS
+- None reviewable: file contents were not included.
+
+### Key concerns
+- This script could not be reviewed from the supplied bundle.
+
+## rescue_backlog_to_new_fields.py
+VERDICT: REJECT
+
+### BUGS
+- P1: [46-51, 163-178] Half-life candidates are mapped into `MF-T03.observed_k` exactly as-is, but the code never performs the documented conversion `k = ln(2) / half_life`. That corrupts semantics downstream by treating half-life values as rate constants.
+- P1: [140-145, 164-179] Duplicate suppression is keyed on `(target_mf, parameter_name)` only. If the same `parameter_name` appears under multiple `original_mf` values and all should rescue into the same target MF, later records are silently skipped. That is real record loss at the mapping stage.
+- P2: [148-150] A single malformed JSONL line aborts the whole run. There is no per-line error handling or accounting for skipped bad records.
+- P2: [198] `MAP_V3.write_text(...)` is a direct overwrite, so interruption can leave a truncated/partial output file.
+
+### Key concerns
+- The docstring says this script will “Re-emit MF value database with rescued records”, but it only writes `param_ontology_map_v3.json`. If operators trust the docstring, downstream data can be stale until another script is run.
+- Idempotency is otherwise acceptable on clean reruns, but not safe against mid-write interruption.
+- `yaml` is imported but unused.
+
+## p2_sa2_outlier_cleaning.py
+VERDICT: APPROVE_WITH_NOTES
+
+### BUGS
+- P2: [45-47] A malformed line in `mf_parameter_records.jsonl` crashes the full cleaning pass. For a batch ETL step, that is brittle error handling.
+- P2: [77-79, 138, 151] All three outputs are written in place. If the process dies mid-write, downstream stages can consume partial JSONL/YAML files.
+- P2: [41] `db = yaml.safe_load(open(DB_FILE))` is loaded and then unused. That is not just dead code; it also means the script does not validate that the cleaned record rebuild is consistent with the input DB it announces it is cleaning.
+
+### Key concerns
+- Data flow is otherwise straightforward: input records are filtered, then the DB is rebuilt from the surviving records, so no hidden stage-to-stage loss beyond intentional drops.
+- Reruns are idempotent in the normal case because outputs are fully regenerated.
+- No Codex CLI / rate-limit concerns apply here.
+
+## build_mf_value_database.py
+VERDICT: REJECT
+
+### BUGS
+- P1: [124-125] Malformed JSON lines are silently dropped with `except: continue`. That is untracked data loss in the primary ETL path.
+- P1: [214-223, 241] All outputs are written non-atomically. If the job is interrupted, the pipeline can leave behind a valid-looking but partial YAML/JSONL artifact and corrupt resume behavior.
+- P2: [106-109] `v3_rule_rescued` mappings are normalized to `"v2_rescued"` in `pn_lookup`. That makes provenance counts wrong in the output DB and hides which records came from v3 rescue.
+- P2: [137-138, 206-207] `matched` is incremented before the `"no_match"` guard. If such rows exist, stats claim they were loaded even though they were dropped from `field_records`.
+
+### Key concerns
+- Unknown units are treated as `ok=True` and kept as raw numeric values [64-83]. That can mix incompatible units inside a single distribution if upstream extraction emits heterogeneous units the normalizer does not know about.
+- Performance is fine for the stated scale; nothing obviously quadratic here.
+- Resume/idempotency is only safe when the process completes successfully.
+
+## mf_real_data_benchmark.py
+VERDICT: REJECT
+
+### BUGS
+- P1: [85-87] All `MF-T02` records are unconditionally marked `no_solver` and skipped, even though the defaults table clearly models the split family as `MF-T02-K`, `MF-T02-CP`, and `MF-T02-RHO`. This drops an entire MF family from the benchmark and biases summary metrics.
+- P2: [101-104] `tested` is incremented before verifying `value_si` is numeric/finite. Non-testable rows still enter the denominator, which distorts pass rates.
+- P2: [64-66] A malformed JSONL line aborts the entire benchmark run.
+- P2: [107-135] The script assumes every solver returns `out["validity"]["passed"]` and `out["result"]["value"]`. Any contract deviation becomes a hard crash rather than a per-record failure.
+- P2: [137-164] Outputs are written non-atomically.
+
+### Key concerns
+- `no_default` is collected but omitted from the report summary [95-97, 144-148], so missing coverage is understated.
+- Sampling only the first 30 records per `(mf, field)` is fine for a smoke benchmark, but it is not representative if input ordering is clustered.
+- No Codex CLI / rate-limit concerns apply here.
+
+## case_study_beef_boiling.py
+VERDICT: REJECT
+
+### BUGS
+- P1: [126-145] Step 6 uses `MF-K06 Growth_Limit` to assess Salmonella safety during cooking, then presents that as a safety result. `MF-K06` only answers whether conditions permit growth; it does not model thermal kill. The script even acknowledges this in comments, so the reported “safety check” is knowingly the wrong model for the question being asked.
+- P2: [44-54, 68-77, 88-91, 105-108, 118-123, 136-145] Solver validity is printed but not enforced before downstream use. Invalid/NaN outputs can propagate into later calculations or formatted output.
+
+### Key concerns
+- No file writes here, so atomicity/idempotency are mostly not applicable.
+- The MF chain is computationally cheap; no real performance issues.
+- The main issue is scientific correctness of the reasoning chain, not code style.
+
+## case_studies_batch.py
+VERDICT: REJECT
+
+### BUGS
+- P1: [90-97] The microwave case says the setup uses `E=3000 V/m`, but the solver is actually called with `E_field=800.0`. Since absorbed power scales with `E^2`, the reported power density and heating time are materially inconsistent with the narrative.
+- P2: [153-156] `rel_to_1C = k / 1.5e-3` is computed before checking that `k` is numeric/finite. If the solver returns `nan` or a non-numeric value, this case can crash before the guard.
+- P2: [84-112, 130-157, 176-207] Most cases use solver outputs immediately without validating `validity["passed"]`, so bad solver inputs can produce misleading downstream numbers.
+
+### Key concerns
+- No persistent outputs are written, so atomic write / resume concerns are minimal here.
+- Performance is trivial.
+- Several imports are unused, but that is a nit, not a review blocker.

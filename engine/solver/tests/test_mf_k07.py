@@ -30,3 +30,29 @@ class TestMFK07(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestMFK07ExactQuadratic(unittest.TestCase):
+    def test_equilibrium_when_L_comparable_to_P(self):
+        """P1 fix: exact quadratic mass balance when ligand not in excess."""
+        import math
+        K_a = 1.0e6
+        L_total = 2.0e-6  # 2× excess only (not vast)
+        P_total = 1.0e-6
+        out = mf_k07.solve({"K_a": K_a, "L_total": L_total, "P_total": P_total})
+        self.assertTrue(out["validity"]["passed"])
+        # Exact: PL = 0.5*((P+L+1/Ka) - sqrt((P+L+1/Ka)^2 - 4PL))
+        sum_t = P_total + L_total + 1/K_a
+        pl = 0.5 * (sum_t - math.sqrt(sum_t**2 - 4*P_total*L_total))
+        expected = pl / P_total
+        self.assertAlmostEqual(out["result"]["value"], expected, places=8)
+        # Compare to approximate model (should differ when L not in excess)
+        out_approx = mf_k07.solve({"K_a": K_a, "L_total": L_total})  # no P_total → approx
+        self.assertNotAlmostEqual(out["result"]["value"], out_approx["result"]["value"], places=2)
+
+    def test_excess_ligand_approximation(self):
+        """Without P_total, fall back to L_free ≈ L_total."""
+        out = mf_k07.solve({"K_a": 1.0e6, "L_total": 1.0e-6})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertAlmostEqual(out["result"]["value"], 0.5)
+        self.assertTrue(any("excess-ligand" in a for a in out["assumptions"]))

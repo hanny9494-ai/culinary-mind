@@ -43,8 +43,8 @@ RULES = [
         r"nth[ -]order kinetics",
         r"order kinetics exponent",
     ], None),
-    # G1 半衰期 → MF-T03.observed_k (转换: k = ln(2)/half_life，仍归 observed_k slot)
-    ("MF-T03", "observed_k", [
+    # G1 半衰期 → MF-T03.observed_k WITH conversion k = ln(2)/t_half (cross-review P1 fix)
+    ("MF-T03", "observed_k_from_half_life", [
         r"degradation.*half[ -]life",
         r"\bhalf[ -]life\b.*degradation",
         r"\bt½\b",
@@ -164,17 +164,29 @@ def main():
         if (target_mf, pn) in already:
             skipped_already += 1
             continue
-        # Add to mappings
+        # P1 fix: half-life → k via k = ln(2)/t_half (assume t_half in seconds if 's' unit, else original)
+        value_transform = None
+        actual_target_field = target_field
+        sample_value = c.get("sample_value")
+        sample_unit = c.get("sample_unit")
+        if target_field == "observed_k_from_half_life":
+            actual_target_field = "observed_k"
+            value_transform = "k = ln(2) / half_life (P1 fix from cross-review)"
+            if isinstance(sample_value, (int, float)) and sample_value > 0:
+                import math
+                sample_value = math.log(2) / sample_value  # k_obs
+                sample_unit = "s⁻¹ (converted from half_life)"
         mappings.setdefault(target_mf, {})[pn] = {
-            "canonical_field": target_field,
-            "confidence": 0.85,  # rule-based, mark as 0.85 (auto-accepted floor)
+            "canonical_field": actual_target_field,
+            "confidence": 0.85,
             "source": "v3_rule_rescued",
             "original_mf": c["original_mf"],
             "candidate_label": label,
             "occurrence_count": c["occurrence_count"],
-            "sample_value": c.get("sample_value"),
-            "sample_unit": c.get("sample_unit"),
-            "reason": f"Rule-based: candidate_label '{label[:50]}...' matched → {target_mf}.{target_field}",
+            "sample_value": sample_value,
+            "sample_unit": sample_unit,
+            "value_transform": value_transform,
+            "reason": f"Rule-based: candidate_label '{label[:50]}...' matched → {target_mf}.{actual_target_field}",
         }
         already.add((target_mf, pn))
         rescued.append({
