@@ -75,7 +75,11 @@
       "mass",
       "°C",
       "kg",
-      "kg/m³"
+      "kg/m³",
+      "salt content",
+      "sugar content",
+      "alcohol content",
+      "ethanol fraction"
     ],
     "keywords_zh": [
       "导热系数",
@@ -85,14 +89,23 @@
       "Xp",
       "Xf",
       "Xc",
-      "Xa"
+      "Xa",
+      "盐含量",
+      "糖含量",
+      "酒精含量"
     ],
     "parameter_names": [
       "Xw",
       "Xp",
       "Xf",
       "Xc",
-      "Xa"
+      "Xa",
+      "composition.salt",
+      "composition.sugar",
+      "composition.alcohol",
+      "Xsalt",
+      "Xsugar",
+      "Xalcohol"
     ],
     "typical_statements": [
       "Choi, Y. & Okos, M.R. (1986). Three properties: Cp (mass-weighted), rho (volume-parallel), k (volume-fraction-weighted)"
@@ -319,7 +332,12 @@
       "rancidity",
       "activation energy",
       "Ea",
-      "T must be in"
+      "T must be in",
+      "first-order degradation rate constant",
+      "reaction order",
+      "observed rate constant",
+      "thermal degradation k",
+      "nutrient degradation rate"
     ],
     "keywords_zh": [
       "蛋白质",
@@ -336,12 +354,20 @@
       "灭菌",
       "脂肪",
       "脂质",
-      "氧化"
+      "氧化",
+      "一阶降解速率",
+      "反应级数",
+      "热降解速率常数",
+      "营养素降解"
     ],
     "parameter_names": [
       "Ea",
       "A",
-      "R"
+      "R",
+      "observed_k",
+      "k_obs",
+      "reaction_order",
+      "n_order"
     ],
     "typical_statements": [
       "WARNING: T must be in Kelvin. Common mistake: using °C gives wrong result by ~273K offset"
@@ -486,7 +512,10 @@
       "zeroth order",
       "first order",
       "mol",
-      "mol/L"
+      "mol/L",
+      "enzyme pH optimum",
+      "enzyme temperature optimum",
+      "optimal activity"
     ],
     "keywords_zh": [
       "酶",
@@ -496,11 +525,18 @@
       "微生物",
       "灭菌",
       "Vmax",
-      "Km"
+      "Km",
+      "最适 pH",
+      "最适温度",
+      "酶最适"
     ],
     "parameter_names": [
       "Vmax",
-      "Km"
+      "Km",
+      "pH_opt",
+      "T_opt",
+      "optimum_pH",
+      "optimum_temperature"
     ],
     "typical_statements": [
       "At S >> Km: v ≈ Vmax (zeroth order); at S << Km: v ≈ Vmax*S/Km (first order)"
@@ -532,16 +568,26 @@
       "min",
       "CFU/mL",
       "or",
-      "CFU/g"
+      "CFU/g",
+      "radiation resistance D10",
+      "radiation D-value",
+      "irradiation dose",
+      "gamma sterilization"
     ],
     "keywords_zh": [
       "病原体",
       "微生物",
       "灭菌",
-      "D"
+      "D",
+      "辐照剂量",
+      "辐射 D10",
+      "辐照灭菌"
     ],
     "parameter_names": [
-      "D"
+      "D",
+      "D_radiation_kGy",
+      "D10",
+      "radiation_D_value"
     ],
     "typical_statements": [
       "D = time for 1 log reduction (90% kill) at constant temperature"
@@ -773,7 +819,10 @@
       "T for aw",
       "g_water/g_dry",
       "dimensionless",
-      "0-1"
+      "0-1",
+      "isosteric heat",
+      "heat of sorption",
+      "sorption binding energy"
     ],
     "keywords_zh": [
       "水活度",
@@ -781,12 +830,17 @@
       "水分",
       "Xm",
       "C",
-      "K"
+      "K",
+      "等温吸湿热",
+      "解吸热"
     ],
     "parameter_names": [
       "Xm",
       "C",
-      "K"
+      "K",
+      "Q_iso",
+      "Qst",
+      "isosteric_heat"
     ],
     "typical_statements": [
       "BET is special case where K=1",
@@ -875,16 +929,27 @@
       "acetic acid p",
       "citric acid p",
       "dimensionless",
-      "mol/L"
+      "mol/L",
+      "multi-pKa",
+      "amino acid pKa",
+      "polyprotic acid"
     ],
     "keywords_zh": [
       "pH值",
       "缓冲液",
       "酸",
-      "pKa"
+      "pKa",
+      "多 pKa",
+      "氨基酸 pKa",
+      "多元酸"
     ],
     "parameter_names": [
-      "pKa"
+      "pKa",
+      "pKa1",
+      "pKa2",
+      "pKa3",
+      "Ka1",
+      "Ka2"
     ],
     "typical_statements": [
       "Valid for 10% < A-/HA < 1000%",

@@ -1,0 +1,198 @@
+# 12 New MF Candidates Backlog (P1-21c-D 调研产出)
+# 给 architect/未来 P3-P4 阶段实施参考
+# Total backlog records: 1,674 (already in mf_parameter_records.jsonl with status=new_mf_candidate)
+version: "1.0"
+generated_at: "2026-05-11"
+source: "raw/cc-lead/p1-21c-d-backlog-research-20260511.md"
+status: "PROPOSAL — awaiting architect schema design + Phase 3 implementation"
+
+candidates:
+  - id: MF-T06
+    canonical_name: Protein_Denaturation
+    display_name: "Protein Denaturation Kinetics (DSC-based)"
+    priority: 1  # Top 1: 271 records, food engineering core
+    records_backlog: 271
+    domains: [protein_science]
+    equation_latex: "f_{native}(T) = \\frac{1}{1+\\exp((T-T_d)/\\sigma)}"
+    proposed_inputs:
+      - {name: T_d, unit: "°C", bounds: [40, 120], note: "denaturation temperature (DSC peak)"}
+      - {name: dH_d, unit: "kJ/mol", bounds: [50, 1500], note: "denaturation enthalpy"}
+      - {name: T_C, unit: "°C", bounds: [0, 200], note: "current temperature"}
+    output_symbol: "f_native (native protein fraction [0,1])"
+    keywords_en: ["protein denaturation", "Td", "denaturation temperature", "DSC", "native fraction"]
+    keywords_zh: ["蛋白质变性", "变性温度", "DSC", "天然态"]
+    source_books_anchor: ["Belitz_Food_Chemistry_Ch1", "Fennema_Food_Chemistry"]
+    use_cases:
+      - "Predict if heating at given T preserves protein function (enzyme/whey)"
+      - "Optimize sous-vide cooking temperature for desired protein state"
+
+  - id: MF-K06
+    canonical_name: Growth_Limit
+    display_name: "Microbial Growth Limit Boundary (Min pH/aw/T/MIC)"
+    priority: 2  # 170 records, food safety
+    records_backlog: 170
+    domains: [food_safety]
+    equation_latex: "growth = (pH \\geq pH_{min}) \\wedge (a_w \\geq a_{w,min}) \\wedge (T \\geq T_{min}) \\wedge ([substance] \\leq MIC)"
+    proposed_inputs:
+      - {name: pH_min, unit: "pH", bounds: [1, 14], note: "minimum pH for growth"}
+      - {name: a_w_min, unit: "dimensionless", bounds: [0.5, 1.0], note: "minimum water activity"}
+      - {name: T_min, unit: "°C", bounds: [-10, 60], note: "minimum temperature"}
+      - {name: MIC, unit: "ppm", bounds: [0.1, 100000], note: "minimum inhibitory concentration"}
+      - {name: pH, unit: "pH", bounds: [1, 14], note: "current condition"}
+      - {name: a_w, unit: "dimensionless", bounds: [0, 1], note: "current condition"}
+      - {name: T_C, unit: "°C", bounds: [-20, 100], note: "current condition"}
+    output_symbol: "growth_inhibited (boolean / margin)"
+    keywords_en: ["minimum pH growth", "min water activity", "MIC", "growth limit"]
+    keywords_zh: ["生长极限", "最低生长 pH", "最低水活度", "MIC"]
+    source_books_anchor: ["ICMSF_Microbial_Spoilage"]
+    use_cases:
+      - "Food safety: predict whether formulation prevents Listeria/Salmonella growth"
+      - "Hurdle technology design"
+
+  - id: MF-T07
+    canonical_name: Dielectric_Properties
+    display_name: "Dielectric Properties for RF/Microwave Heating"
+    priority: 3  # 211 records (v2.0 backlog 已标)
+    records_backlog: 211
+    domains: [equipment_physics, thermal_dynamics]
+    equation_latex: "P_{abs} = 2\\pi f \\varepsilon_0 \\varepsilon'' |E|^2"
+    proposed_inputs:
+      - {name: epsilon_prime, unit: "dimensionless", bounds: [1, 100], note: "real permittivity ε'"}
+      - {name: epsilon_double_prime, unit: "dimensionless", bounds: [0, 50], note: "loss factor ε''"}
+      - {name: tan_delta, unit: "dimensionless", bounds: [0, 5], note: "loss tangent"}
+      - {name: frequency, unit: "Hz", bounds: [1e6, 30e9], note: "RF/MW frequency"}
+      - {name: T_C, unit: "°C", bounds: [-20, 200], note: "temperature"}
+    output_symbol: "P_abs (absorbed power density W/m³)"
+    keywords_en: ["dielectric constant", "loss factor", "microwave heating", "RF heating", "permittivity"]
+    keywords_zh: ["介电常数", "介电损耗", "微波加热"]
+    source_books_anchor: ["Singh_Heldman_Ch5", "Datta_Microwave_Food_Processing"]
+
+  - id: MF-T10
+    canonical_name: Starch_Gelatinization
+    display_name: "Starch Gelatinization Kinetics"
+    priority: 4  # 156 records
+    records_backlog: 156
+    domains: [carbohydrate]
+    equation_latex: "\\alpha(t) = 1 - \\exp(-k(T) \\cdot t^n)"
+    proposed_inputs:
+      - {name: T_gel_onset, unit: "°C", bounds: [40, 100], note: "onset temperature"}
+      - {name: T_gel_peak, unit: "°C", bounds: [50, 100], note: "peak temperature"}
+      - {name: dH_gel, unit: "J/g", bounds: [0, 30], note: "gelatinization enthalpy"}
+      - {name: water_content, unit: "mass fraction", bounds: [0.3, 0.9]}
+      - {name: T_C, unit: "°C", bounds: [0, 150], note: "current temperature"}
+      - {name: time, unit: "s", bounds: [0, 86400]}
+    output_symbol: "alpha (gelatinization extent [0,1])"
+    keywords_en: ["starch gelatinization", "onset temperature", "DSC starch"]
+    keywords_zh: ["淀粉糊化", "起始温度"]
+    source_books_anchor: ["BeMiller_Whistler_Starch"]
+
+  - id: MF-M07
+    canonical_name: Solubility_Partition
+    display_name: "Compound Solubility & Octanol-Water Partition"
+    priority: 5  # 198 records
+    records_backlog: 198
+    domains: [aroma_volatiles, lipid_science]
+    proposed_inputs:
+      - {name: logP, unit: "dimensionless", bounds: [-5, 10], note: "octanol-water partition log10"}
+      - {name: S_water, unit: "mol/L", bounds: [1e-12, 100], note: "water solubility"}
+      - {name: T_C, unit: "°C", bounds: [0, 100]}
+    output_symbol: "K_partition (oil/water partition coefficient)"
+    keywords_en: ["logP", "octanol-water", "partition coefficient", "solubility"]
+    keywords_zh: ["油水分配", "溶解度"]
+
+  - id: MF-M08
+    canonical_name: Gas_Permeability
+    display_name: "Gas Permeability through Packaging Films"
+    priority: 6  # 181 records
+    records_backlog: 181
+    domains: [mass_transfer, equipment_physics]
+    proposed_inputs:
+      - {name: P_O2, unit: "cm³·mil/(m²·day·atm)", bounds: [0.01, 10000], note: "oxygen transmission"}
+      - {name: P_CO2, unit: "cm³·mil/(m²·day·atm)", bounds: [0.01, 50000]}
+      - {name: WVTR, unit: "g/(m²·day)", bounds: [0.01, 1000], note: "water vapor transmission"}
+      - {name: thickness, unit: "m", bounds: [1e-6, 0.01]}
+      - {name: T_C, unit: "°C", bounds: [-20, 60]}
+      - {name: RH, unit: "%", bounds: [0, 100]}
+    output_symbol: "Q_perm (gas flux through film)"
+
+  - id: MF-T08
+    canonical_name: Ohmic_Heating
+    display_name: "Ohmic (Joule) Heating"
+    priority: 7  # 134 records
+    records_backlog: 134
+    domains: [equipment_physics, thermal_dynamics]
+    proposed_inputs:
+      - {name: sigma_T, unit: "S/m", bounds: [0.001, 10], note: "electrical conductivity"}
+      - {name: dsigma_dT, unit: "S/(m·°C)", bounds: [0, 0.5], note: "conductivity T-coefficient"}
+      - {name: E_field, unit: "V/m", bounds: [1, 10000], note: "applied electric field"}
+      - {name: T_C, unit: "°C", bounds: [0, 150]}
+    output_symbol: "Q_dot (volumetric heating rate W/m³)"
+
+  - id: MF-K07
+    canonical_name: Binding_Equilibrium
+    display_name: "Ligand-Protein Binding Equilibrium"
+    priority: 8  # 110 records
+    records_backlog: 110
+    domains: [protein_science, aroma_volatiles]
+    proposed_inputs:
+      - {name: K_a, unit: "L/mol", bounds: [1, 1e9], note: "association constant"}
+      - {name: K_d, unit: "mol/L", bounds: [1e-9, 1.0], note: "dissociation constant"}
+      - {name: L_total, unit: "mol/L", bounds: [1e-9, 1.0], note: "total ligand"}
+      - {name: P_total, unit: "mol/L", bounds: [1e-9, 1.0], note: "total protein"}
+    output_symbol: "f_bound (fraction bound)"
+
+  - id: MF-T09
+    canonical_name: Respiration_Heat
+    display_name: "Postharvest Respiration Heat"
+    priority: 9  # 87 records
+    records_backlog: 87
+    domains: [equipment_physics]
+    equation_latex: "Q_resp = a \\cdot \\exp(b \\cdot T)"
+    proposed_inputs:
+      - {name: a_coef, unit: "W/kg", bounds: [0.001, 10], note: "preexponential"}
+      - {name: b_coef, unit: "1/°C", bounds: [0, 0.2], note: "temperature coefficient"}
+      - {name: T_C, unit: "°C", bounds: [-5, 35]}
+    output_symbol: "Q_resp (respiration heat W/kg)"
+
+  - id: MF-M09
+    canonical_name: Osmotic_Pressure
+    display_name: "Osmotic Pressure (van't Hoff)"
+    priority: 10  # 60 records
+    records_backlog: 60
+    domains: [mass_transfer]
+    equation_latex: "\\pi = M R T"
+    proposed_inputs:
+      - {name: M_osmolar, unit: "mol/L", bounds: [0.001, 10], note: "osmolar concentration"}
+      - {name: T_K, unit: "K", bounds: [250, 400]}
+    output_symbol: "pi (osmotic pressure Pa)"
+
+  - id: MF-M11
+    canonical_name: SCFE_Solubility
+    display_name: "Supercritical CO2 Extraction Solubility"
+    priority: 11  # 55 records
+    records_backlog: 55
+    domains: [mass_transfer]
+    proposed_inputs:
+      - {name: P_MPa, unit: "MPa", bounds: [7.4, 100], note: "supercritical pressure"}
+      - {name: T_C, unit: "°C", bounds: [31, 100]}
+      - {name: rho_CO2, unit: "kg/m³", bounds: [200, 1100], note: "SC-CO2 density"}
+    output_symbol: "y_solute (solubility mole fraction)"
+
+  - id: MF-M10
+    canonical_name: Membrane_Transport
+    display_name: "Membrane Permeability for Solute Transport"
+    priority: 12  # 41 records
+    records_backlog: 41
+    domains: [mass_transfer]
+    proposed_inputs:
+      - {name: P_solute, unit: "m/s", bounds: [1e-12, 1e-4], note: "solute permeability"}
+      - {name: thickness, unit: "m", bounds: [1e-9, 1e-3]}
+      - {name: dC, unit: "mol/L", bounds: [0, 10], note: "concentration gradient"}
+    output_symbol: "J_solute (mass flux mol/(m²·s))"
+
+# Phase 3 / Phase 4 implementation plan:
+# - Tier 1 (high priority, food engineering core): MF-T06 / MF-K06 / MF-T07 / MF-T10
+# - Tier 2 (specialized but valuable): MF-M07 / MF-M08 / MF-T08 / MF-K07
+# - Tier 3 (niche): MF-T09 / MF-M09 / MF-M11 / MF-M10
+# Per MF implementation: ~1-2 days (Python solver + bounds + fingerprint + tests)
+# Total Tier 1: ~5-7 days work
