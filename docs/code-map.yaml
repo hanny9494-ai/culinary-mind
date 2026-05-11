@@ -3,10 +3,11 @@
 # 更新: 2026-05-02
 # 维护者: repo-curator agent
 
-version: "1.10"
+version: "1.11"
 status: "draft"  # draft → reviewed → locked
 last_updated: "2026-05-01"
 changelog:
+  - "1.11 (2026-05-01): PR #32 合并 — P1-21c-D Skill A parameter ontology mapping (cc-lead direct via Codex CLI)，新增 scripts/skill_a/ 目录（5 files, 1,254 LOC: extract_unique_pairs/codex_ontology_batch/codex_ontology_v2_cross_mf/aggregate_ontology/aggregate_ontology_v2），34.2% Skill A records mapped to 28 MF solvers (9,153/26,727)，13,080 records flagged as new MF candidates (P1-28 扩展 MF 库数据基础)，报告 raw/cc-lead/p1-21c-d-ontology-mapping-20260511.md + p1-21c-d-v2-final-report-20260511.md"
   - "1.10 (2026-05-01): PR #31 合并 — P1-13~16 L2a ingredient tree ETL 完整链路（Steps 5/6/7: cluster_merge/relationship_build/export_neo4j），CKG_L2A_* namespace 全节点隔离，21,423 atoms → 24,335 nodes + 52,313 edges 导入 Neo4j live，D74 process_type 13-value enum + D82 namespace 决策实现，GPT 5.5 + cc-lead 50-node audit 双签 APPROVE_WITH_NOTES (0 P0/P1, 6 P2 polish deferred)，69 L2a tests + 331 solver tests = 400 total passing (全绿无回归)，P4-08 LangGraph L2a 查询解锁"
   - "1.9 (2026-05-01): PR #30 合并 — P1-17.1.1 TOOL_ID 修复，mf_t02_k/cp/rho.py solver emit 'MF-T02-K/CP/RHO' (不再 'MF-T02')，canonical_name 对齐 config schema，grep 零残留 'MF-T02[^-]'，331 tests + 1159 subtests passing，P4-08 LangGraph dispatch 解锁"
   - "1.8 (2026-05-01): PR #29 合并 — P1-17.1 config sync，mother_formulas.yaml + mf_fingerprints.json 同步 mf_t02 → mf_t02_k/cp/rho 原子拆分（3 条目替换），新增 test_mf_t02_split_consistency.py (16 schema validation tests)，331 tests + 1159 subtests passing. Follow-up: P1-17.1.1 TOOL_ID/canonical_name 修复（pre-LangGraph 阻塞项）"
@@ -111,6 +112,7 @@ directories:
       orchestrator.py: "蒸馏编排器"
       y_s1/:           "Neo4j 导入（应迁移到 graph/import/）"
       l2a/:            "L2a ingredient tree ETL 完整链路（P1-13~16，PR #31）— Step 5 cluster_merge / Step 6 relationship_build / Step 7 export_neo4j，CKG_L2A_* namespace，24,335 nodes + 52,313 edges"
+      skill_a/:        "Skill A parameter ontology mapping（P1-21c-D，PR #32）— 5 scripts: extract_unique_pairs/codex_ontology_batch/codex_ontology_v2_cross_mf/aggregate_ontology/aggregate_ontology_v2，34.2% mapped to 28 MF solvers，13,080 new MF candidates"
 
   # ── 数据（不入 git） ──
   output/:
