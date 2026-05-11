@@ -1,0 +1,13 @@
+test_prompt_set:
+  version: 1.0-canary
+  description: 3-atom production canary (Gemini + GPT 5.4 peer_review)
+test_atoms:
+- atom_id: chicken
+  file: output/l2a/atoms_r2/chicken.json
+  expected_category: canary
+- atom_id: soy_sauce
+  file: output/l2a/atoms_r2/soy_sauce.json
+  expected_category: canary
+- atom_id: pomfret
+  file: output/l2a/atoms_r2/pomfret.json
+  expected_category: canary
