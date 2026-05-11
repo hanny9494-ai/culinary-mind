@@ -556,3 +556,77 @@
   applicable_range: {T: {min: 0, max: 200, unit: "°C"}}
   source_books: ["Toledo_Ch8", "van_Boekel_Ch5"]
   notes: "Maillard reaction: Q10 ≈ 2-3 (rate doubles or triples per 10°C); simpler than Arrhenius"
+
+# ═══════════════════════════════════════════════════════════
+# Tier 3 — P3 New MF Candidates (P1-21c-D backlog → impl 2026-05-11)
+# Added by cc-lead direct execution (architect unavailable)
+# Records-backed: T06=271, K06=170, T07=211, T10=156
+# ═══════════════════════════════════════════════════════════
+
+- id: MF-T06
+  canonical_name: Protein_Denaturation
+  display_name: "Protein Denaturation (van't Hoff sigmoid / DSC model)"
+  equation_latex: "f_{native}(T) = \\frac{1}{1+\\exp((T-T_d)/\\sigma)}"
+  sympy_expression: "1 / (1 + exp((T_C - T_d) / sigma))"
+  domain: [protein_science]
+  output_symbol: f_native
+  runtime_variables: [T_C]
+  one_of_inputs:
+    - [T_d, dH_d]
+    - [T_d, sigma_override]
+  constants: []
+  units: {T_d: "°C", dH_d: "kJ/mol", T_C: "°C", sigma_override: "°C", f_native: "dimensionless"}
+  applicable_range: {T: {min: -20, max: 250, unit: "°C"}}
+  source_books: ["Belitz_Food_Chemistry_Ch1", "Privalov_1974_JMolBiol"]
+  notes: "Sigma derived from van't Hoff: R·T_d_K²/dH_d unless sigma_override supplied. f_native ∈ [0,1]. P3 Tier 1."
+
+- id: MF-K06
+  canonical_name: Growth_Limit
+  display_name: "Microbial Growth Limit Boundary (Hurdle Technology)"
+  equation_latex: "\\text{growth} = (pH \\geq pH_{min}) \\wedge (a_w \\geq a_{w,min}) \\wedge (T \\geq T_{min}) \\wedge ([s] \\leq MIC)"
+  sympy_expression: "Piecewise((1, (pH < pH_min) | (a_w < a_w_min) | (T_C < T_min) | (substance_conc >= MIC)), (0, True))"
+  domain: [food_safety]
+  output_symbol: growth_inhibited
+  runtime_variables: [pH, a_w, T_C, substance_conc]
+  one_of_inputs:
+    - [pH_min]
+    - [a_w_min]
+    - [T_min]
+    - [MIC]
+  constants: []
+  units: {pH_min: "pH", a_w_min: "dimensionless", T_min: "°C", MIC: "ppm", pH: "pH", a_w: "dimensionless", T_C: "°C", substance_conc: "ppm", growth_inhibited: "boolean"}
+  applicable_range: {pH: {min: 0, max: 14}, a_w: {min: 0, max: 1}, T_C: {min: -30, max: 100, unit: "°C"}}
+  source_books: ["ICMSF_2018_v6", "Pitt_Hocking_Fungi_2009"]
+  notes: "AND-combination of all supplied hurdles. growth_inhibited=1 if ANY hurdle violated. P3 Tier 1."
+
+- id: MF-T07
+  canonical_name: Dielectric_Properties
+  display_name: "Dielectric RF/Microwave Volumetric Heating"
+  equation_latex: "P_{abs} = 2\\pi f \\varepsilon_0 \\varepsilon'' |E|^2"
+  sympy_expression: "2 * pi * f * epsilon_0 * epsilon_double_prime * E_field**2"
+  domain: [equipment_physics, thermal_dynamics]
+  output_symbol: P_abs
+  runtime_variables: []
+  one_of_inputs:
+    - [epsilon_double_prime, frequency, E_field]
+  constants: [epsilon_0]
+  units: {epsilon_double_prime: "dimensionless", frequency: "Hz", E_field: "V/m", P_abs: "W/m³"}
+  applicable_range: {frequency: {min: 1.0e6, max: 3.0e10, unit: "Hz"}}
+  source_books: ["Singh_Heldman_Ch5", "Datta_MW_Food_2000", "Buffler_MW_Cooking_1993"]
+  notes: "ε₀ = 8.8541878128e-12 F/m. Assumes uniform |E|, non-magnetic food. P3 Tier 1."
+
+- id: MF-T10
+  canonical_name: Starch_Gelatinization
+  display_name: "Starch Gelatinization Kinetics (Avrami)"
+  equation_latex: "\\alpha(t) = 1 - \\exp(-k(T) \\cdot t^n), k(T) = A \\exp(-E_a/(RT))"
+  sympy_expression: "1 - exp(-A * exp(-Ea / (R * T_K)) * time**n)"
+  domain: [carbohydrate]
+  output_symbol: alpha
+  runtime_variables: [T_C, time]
+  one_of_inputs:
+    - [A, Ea, n]
+  constants: []
+  units: {T_C: "°C", time: "s", A: "s⁻¹", Ea: "J/mol", n: "dimensionless", water_content: "mass fraction", alpha: "dimensionless"}
+  applicable_range: {T_C: {min: 0, max: 150, unit: "°C"}, water_content: {min: 0.30, max: 1.0, soft: true}}
+  source_books: ["BeMiller_Whistler_Starch_Ch7", "Marabi_2003_JFE", "Lund_1984"]
+  notes: "Avrami-Erofeev-style; k(T) follows Arrhenius. water_content < 0.30 emits advisory warning. P3 Tier 1."

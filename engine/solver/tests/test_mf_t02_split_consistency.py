@@ -143,15 +143,15 @@ class TestMFT02SplitConsistency(unittest.TestCase):
                          if isinstance(e, dict) and not e.get("parent_only")]
         routable_json = [k for k, v in self.fingerprints.items()
                          if not v.get("parent_only")]
-        self.assertEqual(len(routable_yaml), 30,
-                        f"Expected 30 routable yaml entries, got {len(routable_yaml)}")
-        self.assertEqual(len(routable_json), 30,
-                        f"Expected 30 routable json entries, got {len(routable_json)}")
+        self.assertEqual(len(routable_yaml), 34,  # +4 P3 Tier 1 MFs
+                        f"Expected 34 routable yaml entries, got {len(routable_yaml)}")
+        self.assertEqual(len(routable_json), 34,  # +4 P3 Tier 1 MFs
+                        f"Expected 34 routable json entries, got {len(routable_json)}")
 
-    def test_total_entries_31_in_both_files(self):
-        """27 unchanged routable + 1 parent_only (MF-T02) + 3 children = 31 total."""
-        self.assertEqual(len(self.yaml_entries), 31)
-        self.assertEqual(len(self.fingerprints), 31)
+    def test_total_entries_35_in_both_files(self):
+        """27 unchanged routable + 1 parent_only (MF-T02) + 3 children + 4 P3 Tier 1 = 35 total."""
+        self.assertEqual(len(self.yaml_entries), 35)
+        self.assertEqual(len(self.fingerprints), 35)
 
 
 if __name__ == "__main__":

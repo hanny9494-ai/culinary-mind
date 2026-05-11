@@ -486,3 +486,175 @@ solvers:
       min: 0
       max: 1.0e+6
       unit: "dimensionless"
+  MF-T06:
+    canonical_name: Protein_Denaturation
+    inputs:
+      - name: T_d
+        min: 30.0
+        max: 130.0
+        unit: °C
+        source: P3 Tier 1 — DSC midpoint
+      - name: dH_d
+        min: 50.0
+        max: 2000.0
+        unit: kJ/mol
+        source: P3 Tier 1
+      - name: T_C
+        min: -20.0
+        max: 250.0
+        unit: °C
+        source: P3 Tier 1
+      - name: T_c
+        min: -20.0
+        max: 250.0
+        unit: °C
+        source: P3 Tier 1 alias
+      - name: sigma_override
+        min: 0.01
+        max: 50.0
+        unit: °C
+        source: P3 Tier 1 optional
+    output:
+      symbol: f_native
+      min: 0.0
+      max: 1.0
+      unit: dimensionless
+  MF-K06:
+    canonical_name: Growth_Limit
+    inputs:
+      - name: pH_min
+        min: 1.0
+        max: 14.0
+        unit: pH
+        source: P3 Tier 1
+      - name: a_w_min
+        min: 0.5
+        max: 1.0
+        unit: dimensionless
+        source: P3 Tier 1
+      - name: T_min
+        min: -10.0
+        max: 60.0
+        unit: °C
+        source: P3 Tier 1
+      - name: MIC
+        min: 0.001
+        max: 100000.0
+        unit: ppm
+        source: P3 Tier 1
+      - name: pH
+        min: 0.0
+        max: 14.0
+        unit: pH
+        source: P3 Tier 1 current
+      - name: a_w
+        min: 0.0
+        max: 1.0
+        unit: dimensionless
+        source: P3 Tier 1 current
+      - name: T_C
+        min: -30.0
+        max: 100.0
+        unit: °C
+        source: P3 Tier 1 current
+      - name: T_c
+        min: -30.0
+        max: 100.0
+        unit: °C
+        source: P3 Tier 1 alias
+      - name: substance_conc
+        min: 0.0
+        max: 1000000.0
+        unit: ppm
+        source: P3 Tier 1
+    output:
+      symbol: growth_inhibited
+      min: 0.0
+      max: 1.0
+      unit: boolean
+  MF-T07:
+    canonical_name: Dielectric_Properties
+    inputs:
+      - name: epsilon_double_prime
+        min: 0.0
+        max: 100.0
+        unit: dimensionless
+        source: P3 Tier 1
+      - name: epsilon_pp
+        min: 0.0
+        max: 100.0
+        unit: dimensionless
+        source: P3 Tier 1 alias
+      - name: frequency
+        min: 1000000.0
+        max: 30000000000.0
+        unit: Hz
+        source: P3 Tier 1 (RF/MW)
+      - name: f
+        min: 1000000.0
+        max: 30000000000.0
+        unit: Hz
+        source: P3 Tier 1 alias
+      - name: E_field
+        min: 0.0
+        max: 1000000.0
+        unit: V/m
+        source: P3 Tier 1
+      - name: E
+        min: 0.0
+        max: 1000000.0
+        unit: V/m
+        source: P3 Tier 1 alias
+    output:
+      symbol: P_abs
+      min: 0.0
+      max: 1000000000.0
+      unit: W/m³
+  MF-T10:
+    canonical_name: Starch_Gelatinization
+    inputs:
+      - name: T_C
+        min: 0.0
+        max: 150.0
+        unit: °C
+        source: P3 Tier 1
+      - name: T_c
+        min: 0.0
+        max: 150.0
+        unit: °C
+        source: P3 Tier 1 alias
+      - name: time
+        min: 0.0
+        max: 86400.0
+        unit: s
+        source: P3 Tier 1
+      - name: t
+        min: 0.0
+        max: 86400.0
+        unit: s
+        source: P3 Tier 1 alias
+      - name: A
+        min: 0.001
+        max: 1.0e+30
+        unit: s⁻¹
+        source: P3 Tier 1 Arrhenius preexp
+      - name: Ea
+        min: 0.0
+        max: 500000.0
+        unit: J/mol
+        source: P3 Tier 1
+      - name: n
+        min: 0.1
+        max: 5.0
+        unit: dimensionless
+        source: P3 Tier 1 Avrami exp
+      - name: water_content
+        min: 0.0
+        max: 1.0
+        unit: mass fraction
+        source: P3 Tier 1 advisory
+    output:
+      symbol: alpha
+      min: 0.0
+      max: 1.0
+      unit: dimensionless
