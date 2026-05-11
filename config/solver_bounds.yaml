@@ -52,6 +52,21 @@ solvers:
       - {name: Xc, min: 0, max: 1.0, unit: "mass fraction"}
       - {name: Xfiber, min: 0, max: 1.0, unit: "mass fraction"}
       - {name: Xa, min: 0, max: 1.0, unit: "mass fraction"}
+      - name: composition.salt
+        min: 0.0
+        max: 1.0
+        unit: mass fraction
+        source: P1-21c-D backlog
+      - name: composition.sugar
+        min: 0.0
+        max: 1.0
+        unit: mass fraction
+        source: P1-21c-D backlog
+      - name: composition.alcohol
+        min: 0.0
+        max: 1.0
+        unit: mass fraction
+        source: P1-21c-D backlog
     outputs_by_variant:
       mf_t02_k: {symbol: k, min: 0.05, max: 5.0, unit: "W/(m·K)"}
       mf_t02_cp: {symbol: Cp, min: 500, max: 5000, unit: "J/(kg·K)"}
@@ -64,6 +79,16 @@ solvers:
       - {name: Ea, min: 0, max: 500000, unit: "J/mol"}
       - {name: T_K, min: 1, max: 5000, unit: "K"}
       - {name: T, min: 1, max: 5000, unit: "K"}
+      - name: observed_k
+        min: 1.0e-12
+        max: 1000.0
+        unit: s⁻¹
+        source: P1-21c-D backlog
+      - name: reaction_order
+        min: 0.0
+        max: 3.0
+        unit: dimensionless
+        source: P1-21c-D backlog
     output:
       symbol: k
       min: 0
@@ -109,6 +134,16 @@ solvers:
       - {name: Vmax, min: 1.0e-9, max: 1.0e+9, unit: "rate"}
       - {name: Km, min: 1.0e-9, max: 1.0e+6, unit: "concentration"}
       - {name: S, min: 0, max: 1.0e+6, unit: "concentration"}
+      - name: pH_opt
+        min: 1.0
+        max: 14.0
+        unit: pH
+        source: P1-21c-D backlog
+      - name: T_opt
+        min: -20.0
+        max: 100.0
+        unit: °C
+        source: P1-21c-D backlog
     output:
       symbol: v
       min: 0
@@ -122,6 +157,11 @@ solvers:
       - {name: time, min: 0, max: 1.0e+6, unit: "s"}
       - {name: N, min: 0, max: 1.0e+15, unit: "CFU"}
       - {name: N0, min: 1, max: 1.0e+15, unit: "CFU"}
+      - name: D_radiation_kGy
+        min: 0.001
+        max: 100.0
+        unit: kGy
+        source: P1-21c-D backlog
     output:
       symbol: D
       min: 0
@@ -201,6 +241,11 @@ solvers:
       - {name: Xm, min: 1.0e-3, max: 1.0, unit: "kg/kg"}
       - {name: C, min: 0.1, max: 1000, unit: "dimensionless"}
       - {name: K, min: 0.1, max: 1.0, unit: "dimensionless"}
+      - name: Q_iso
+        min: 0.0
+        max: 1000000.0
+        unit: J/mol
+        source: P1-21c-D backlog
     output:
       symbol: W
       min: 0
@@ -227,6 +272,21 @@ solvers:
       - {name: A_minus, min: 0, max: 1.0e+6, unit: "concentration"}
       - {name: HA_conc, min: 1.0e-15, max: 1.0e+6, unit: "concentration"}
       - {name: HA, min: 1.0e-15, max: 1.0e+6, unit: "concentration"}
+      - name: pKa1
+        min: -3.0
+        max: 16.0
+        unit: dimensionless
+        source: P1-21c-D backlog
+      - name: pKa2
+        min: -3.0
+        max: 16.0
+        unit: dimensionless
+        source: P1-21c-D backlog
+      - name: pKa3
+        min: -3.0
+        max: 16.0
+        unit: dimensionless
+        source: P1-21c-D backlog
     output:
       symbol: pH
       min: -2
