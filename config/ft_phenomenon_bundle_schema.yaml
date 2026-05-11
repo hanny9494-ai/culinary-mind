@@ -1,0 +1,96 @@
+# FT Phenomenon Weighted Bundle Schema (P1-Sd2)
+# Locked: 2026-05-12 by cc-lead (architect unavailable)
+# Status: PROPOSAL — awaiting Phase 2 data generation (P2-Fu2)
+
+version: "1.0"
+locked_at: "2026-05-12"
+purpose: "Map flavor target (FT) → weighted phenomenon bundle for cuisine generation"
+
+# ─────────────────────────────────────────────────
+# Node definitions
+# ─────────────────────────────────────────────────
+node_labels:
+  - label: CKG_FT_Bundle
+    description: "命名风味目标 (e.g., '广式叉烧 焦香+蜜甜+肉嫩')"
+    primary_key: bundle_id
+    properties:
+      bundle_id: {type: string, required: true}
+      name_en: {type: string, required: true}
+      name_zh: {type: string, required: true}
+      cuisine: {type: enum, values: [cantonese, sichuan, jiangsu, shandong, italian, french, japanese, korean, thai, mexican, american, other]}
+      category: {type: enum, values: [savory, sweet, sour, umami, spicy, bitter, mixed]}
+      description_en: {type: string, optional: true}
+      description_zh: {type: string, optional: true}
+      reference_dish: {type: string, optional: true}  # e.g., "char_siu", "kung_pao_chicken"
+
+  - label: CKG_FT_PhenomenonWeight
+    description: "FT bundle 中单个 phenomenon 的权重 (一对多 fan-out)"
+    primary_key: weight_id
+    properties:
+      weight_id: {type: string, required: true}
+      bundle_id: {type: string, required: true, ref: CKG_FT_Bundle}
+      phn_id: {type: string, required: true, ref: CKG_PHN}
+      weight: {type: number, required: true, range: [0, 1]}  # contribution to FT
+      polarity: {type: enum, values: [positive, negative]}    # negative = must avoid
+      intensity_target: {type: enum, values: [low, medium, high, extreme], optional: true}
+      l6_term_zh: {type: string, optional: true}              # 粤菜审美词 e.g. "镬气"
+
+# ─────────────────────────────────────────────────
+# Relationships
+# ─────────────────────────────────────────────────
+relationships:
+  - type: REQUIRES_PHENOMENON
+    source: CKG_FT_Bundle
+    target: CKG_PHN
+    via: CKG_FT_PhenomenonWeight
+    cardinality: many-to-many
+    notes: "FT bundle 由多个 phenomena 加权合成"
+
+  - type: TRANSLATES_FROM
+    source: CKG_FT_Bundle
+    target: CKG_L6_Term
+    notes: "粤菜术语 ↔ FT bundle (e.g., '焦香' → maillard+caramelization bundle)"
+
+# ─────────────────────────────────────────────────
+# QC rules
+# ─────────────────────────────────────────────────
+qc_rules:
+  - rule: weights_sum_validation
+    description: "正向 phenomena 权重总和应 in [0.5, 1.5] (允许 overcomplete)"
+  - rule: at_least_one_positive
+    description: "Each bundle 至少有 1 个 polarity=positive phenomenon"
+  - rule: bundle_has_cuisine
+    description: "cuisine field required"
+
+# ─────────────────────────────────────────────────
+# Sample bundles (illustrative, not data — that's P2-Fu2)
+# ─────────────────────────────────────────────────
+illustrative_bundles:
+  - bundle_id: cantonese_char_siu
+    name_zh: 广式叉烧
+    name_en: Cantonese Char Siu BBQ Pork
+    cuisine: cantonese
+    category: savory
+    components:
+      - {phn_id: maillard_browning, weight: 0.30, polarity: positive, intensity: high, l6: "焦香"}
+      - {phn_id: caramelization_sugar, weight: 0.25, polarity: positive, intensity: medium, l6: "蜜甜"}
+      - {phn_id: protein_denaturation, weight: 0.20, polarity: positive, intensity: medium, l6: "肉嫩"}
+      - {phn_id: fat_rendering, weight: 0.15, polarity: positive, intensity: low}
+      - {phn_id: dehydration_surface, weight: 0.10, polarity: positive, intensity: low, l6: "外焦内嫩"}
+      - {phn_id: protein_dryout, weight: 0.15, polarity: negative}    # 必避免 "柴"
+
+# ─────────────────────────────────────────────────
+# Data generation (P2-Fu2, NOT in this task)
+# ─────────────────────────────────────────────────
+data_generation_phase: P2-Fu2
+data_generation_method: "LLM extraction from 7,435 FT seed + 17,485 L6 glossary"
+
+locked_by: cc-lead
+lock_rationale: |
+  FT 风味目标库 schema 锁定 — bundle 包含 weighted phenomenon list.
+  设计原则:
+  1. Bundle 节点存命名 FT (e.g. '广式叉烧')
+  2. CKG_FT_PhenomenonWeight 中间节点存权重 + 极性 + 强度
+  3. TRANSLATES_FROM 边连 L6 (粤菜术语)
+  4. REQUIRES_PHENOMENON via 边支持 fan-out
+  数据生成留 P2-Fu2.

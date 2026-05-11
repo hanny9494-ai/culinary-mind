@@ -1,0 +1,106 @@
+# L1 设备实践参数层 Schema (P1-Sd1)
+# Locked: 2026-05-12 by cc-lead (architect unavailable)
+# Status: PROPOSAL — awaiting Phase 2 data collection (P2-L1b)
+# Decision: same MF / 不同设备 / 不同参数 → 同一 PHN 在不同 device 上的实际 measured params
+
+version: "1.0"
+locked_at: "2026-05-12"
+purpose: "Map equipment_name × physics_phenomenon → measured calibration parameters"
+
+# ─────────────────────────────────────────────────
+# 节点定义 (Neo4j labels)
+# ─────────────────────────────────────────────────
+node_labels:
+  - label: CKG_L1_Equipment
+    description: "具体设备型号 (e.g., 'Vitamix 5200', '商用 6 头烧腊炉')"
+    primary_key: equipment_id
+    properties:
+      equipment_id: {type: string, required: true, format: "snake_case slug"}
+      name_en: {type: string, required: true}
+      name_zh: {type: string, required: true}
+      category: {type: enum, values: [blender, oven, fryer, sous_vide, microwave, induction, gas_stove, grill, smoker, dehydrator, centrifuge, pressure_cooker, autoclave, other]}
+      power_rating_w: {type: number, optional: true}
+      capacity_l: {type: number, optional: true}
+      brand: {type: string, optional: true}
+      country_of_use: {type: array, items: string, optional: true}  # ["CN", "US", "FR"]
+      cost_usd_typical: {type: number, optional: true}
+      source: {type: string, optional: true}  # data origin URL/citation
+
+  - label: CKG_L1_Phenomenon_Match
+    description: "Equipment × PHN 实测参数（一对多 fan-out）"
+    primary_key: match_id  # equipment_id + phn_id composite
+    properties:
+      match_id: {type: string, required: true}
+      equipment_id: {type: string, required: true, ref: CKG_L1_Equipment}
+      phn_id: {type: string, required: true, ref: CKG_PHN}
+      effectiveness_score: {type: number, required: true, range: [0, 1]}  # 0=cannot do, 1=designed for
+      stability_score: {type: number, required: true, range: [0, 1]}      # 越高输出越稳定
+      measured_params:                                                     # 实测 MF inputs
+        type: dict
+        schema:
+          T_C: {type: number, optional: true}
+          time_s: {type: number, optional: true}
+          power_w: {type: number, optional: true}
+          # ... extensible
+      measurement_method: {type: string, optional: true}  # "thermocouple at center", "lab DSC"
+      n_samples: {type: integer, optional: true}
+      source: {type: string, optional: true}  # citation or lab report
+
+# ─────────────────────────────────────────────────
+# 关系定义 (Neo4j relationships)
+# ─────────────────────────────────────────────────
+relationships:
+  - type: PERFORMS
+    source: CKG_L1_Equipment
+    target: CKG_PHN
+    via: CKG_L1_Phenomenon_Match
+    cardinality: many-to-many
+    notes: "设备能执行的现象 (一台 sous-vide 能做蛋白质凝固/嫩化/巴氏杀菌)"
+
+  - type: GOVERNED_BY_MF
+    source: CKG_L1_Phenomenon_Match
+    target: CKG_MF
+    notes: "实测参数对应的 MF (e.g. sous-vide × egg coagulation governed by MF-T06 Protein_Denaturation)"
+
+# ─────────────────────────────────────────────────
+# Bounds & QC
+# ─────────────────────────────────────────────────
+qc_rules:
+  - rule: effectiveness_score_required
+    description: "All CKG_L1_Phenomenon_Match must have effectiveness_score in [0, 1]"
+  - rule: equipment_must_have_canonical_name
+    description: "name_en + name_zh both required"
+  - rule: measured_params_units
+    description: "All measured_params follow SI (no °F, kPa not bar)"
+
+# ─────────────────────────────────────────────────
+# 数据采集 (parked in P2-L1b, not this task)
+# ─────────────────────────────────────────────────
+data_collection_phase: P2-L1b
+data_source_priority:
+  - "Manufacturer specs (Vitamix / Anova / Breville etc)"
+  - "Lab measurement (cc-lead future research)"
+  - "Cookbook references (PolyScience SVE / Modernist Cuisine)"
+  - "Restaurant operating data (粤菜大师 measurement)"
+
+# ─────────────────────────────────────────────────
+# Use cases (Layer 3 reasoning unlock)
+# ─────────────────────────────────────────────────
+use_cases:
+  - q: "我有 Vitamix 5200, 想做 emulsion mayo, 能稳定打出来吗?"
+    chain: "MATCH (e:CKG_L1_Equipment {equipment_id:'vitamix_5200'})-[r:PERFORMS]->(p:CKG_PHN {phn_id:'emulsion_oil_droplet'}) RETURN r.effectiveness_score, r.stability_score"
+  - q: "Sous-vide @ 56°C 60min 适用什么蛋白质凝固现象?"
+    chain: "MATCH (e:CKG_L1_Equipment)-[r:PERFORMS]->(p:CKG_PHN {phn_id:'protein_coagulation'}) WHERE r.measured_params.T_C=56 AND r.measured_params.time_s=3600 RETURN p, r"
+
+# ─────────────────────────────────────────────────
+# Lock metadata
+# ─────────────────────────────────────────────────
+locked_by: cc-lead
+lock_rationale: |
+  L1 设备实践参数层 schema 锁定于 P1-Sd1。
+  设计原则:
+  1. Equipment 节点存设备本体属性 (power/capacity/brand)
+  2. CKG_L1_Phenomenon_Match 中间节点存 measurement (effectiveness/stability/params)
+  3. via 中间节点支持 fan-out (一台设备 × 多 PHN)
+  4. GOVERNED_BY_MF 边链 MF tools (Layer 3 reasoning)
+  数据采集留 P2-L1b (本 schema 锁定不含 data generation)
