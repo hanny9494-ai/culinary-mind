@@ -1872,5 +1872,275 @@
       "Lund_1984"
     ],
     "equation_latex": "\\alpha(t) = 1 - \\exp(-k(T) t^n)"
+  },
+  "MF-M07": {
+    "id": "MF-M07",
+    "canonical_name": "Solubility_Partition",
+    "display_name": "Octanol-Water Partition Coefficient (logP)",
+    "domains": [
+      "aroma_volatiles",
+      "lipid_science"
+    ],
+    "keywords_en": [
+      "logP",
+      "octanol-water",
+      "partition coefficient",
+      "solubility",
+      "lipophilicity"
+    ],
+    "keywords_zh": [
+      "油水分配",
+      "logP",
+      "溶解度",
+      "亲脂性"
+    ],
+    "parameter_names": [
+      "logP",
+      "S_water",
+      "T_C"
+    ],
+    "typical_statements": [
+      "K_partition = 10^logP"
+    ],
+    "source_books": [
+      "Sangster_1997",
+      "Hansch_Leo_QSAR_1995"
+    ],
+    "equation_latex": "K_{part} = 10^{\\log P}"
+  },
+  "MF-M08": {
+    "id": "MF-M08",
+    "canonical_name": "Gas_Permeability",
+    "display_name": "Gas/Vapor Permeability through Packaging Films",
+    "domains": [
+      "mass_transfer",
+      "equipment_physics"
+    ],
+    "keywords_en": [
+      "gas permeability",
+      "OTR",
+      "oxygen transmission",
+      "WVTR",
+      "packaging barrier"
+    ],
+    "keywords_zh": [
+      "气体渗透",
+      "氧气透过率",
+      "水蒸气渗透",
+      "包装阻隔"
+    ],
+    "parameter_names": [
+      "P_O2",
+      "P_CO2",
+      "thickness",
+      "delta_p",
+      "T_C",
+      "RH"
+    ],
+    "typical_statements": [
+      "Steady-state Fickian permeation: Q = P·ΔP/L"
+    ],
+    "source_books": [
+      "Robertson_Food_Packaging_2013",
+      "ASTM_D3985"
+    ],
+    "equation_latex": "Q = P \\cdot \\Delta p / L"
+  },
+  "MF-T08": {
+    "id": "MF-T08",
+    "canonical_name": "Ohmic_Heating",
+    "display_name": "Ohmic (Joule) Heating in Food",
+    "domains": [
+      "equipment_physics",
+      "thermal_dynamics"
+    ],
+    "keywords_en": [
+      "ohmic heating",
+      "joule heating",
+      "electrical conductivity",
+      "sigma"
+    ],
+    "keywords_zh": [
+      "欧姆加热",
+      "焦耳热",
+      "电导率"
+    ],
+    "parameter_names": [
+      "sigma_25",
+      "alpha",
+      "E_field",
+      "T_C"
+    ],
+    "typical_statements": [
+      "Q = σ(T)·E², σ(T) = σ_25·(1+α·(T-25))"
+    ],
+    "source_books": [
+      "Sastry_Barach_Ohmic_2000",
+      "Singh_Heldman_Ch5"
+    ],
+    "equation_latex": "Q = \\sigma(T) \\cdot |E|^2"
+  },
+  "MF-K07": {
+    "id": "MF-K07",
+    "canonical_name": "Binding_Equilibrium",
+    "display_name": "Ligand-Protein Binding Equilibrium",
+    "domains": [
+      "protein_science",
+      "aroma_volatiles"
+    ],
+    "keywords_en": [
+      "binding constant",
+      "association constant",
+      "Ka",
+      "ligand",
+      "affinity"
+    ],
+    "keywords_zh": [
+      "结合常数",
+      "亲和力",
+      "配体"
+    ],
+    "parameter_names": [
+      "K_a",
+      "K_d",
+      "L_total",
+      "P_total"
+    ],
+    "typical_statements": [
+      "1:1 binding, L_free ≈ L_total"
+    ],
+    "source_books": [
+      "Bell_Labuza_Moisture",
+      "Tinoco_PhysChem"
+    ],
+    "equation_latex": "f_{bound} = \\frac{K_a L}{1+K_a L}"
+  },
+  "MF-T09": {
+    "id": "MF-T09",
+    "canonical_name": "Respiration_Heat",
+    "display_name": "Postharvest Respiration Heat",
+    "domains": [
+      "equipment_physics"
+    ],
+    "keywords_en": [
+      "respiration heat",
+      "postharvest",
+      "cold storage",
+      "produce"
+    ],
+    "keywords_zh": [
+      "呼吸热",
+      "果蔬冷藏",
+      "采后"
+    ],
+    "parameter_names": [
+      "a",
+      "b",
+      "T_C"
+    ],
+    "typical_statements": [
+      "Q = a·exp(b·T)"
+    ],
+    "source_books": [
+      "ASHRAE_Refrigeration_2022",
+      "Becker_Misra_Fricke_1996"
+    ],
+    "equation_latex": "Q_{resp} = a \\cdot \\exp(b \\cdot T)"
+  },
+  "MF-M09": {
+    "id": "MF-M09",
+    "canonical_name": "Osmotic_Pressure",
+    "display_name": "Osmotic Pressure (van't Hoff)",
+    "domains": [
+      "mass_transfer"
+    ],
+    "keywords_en": [
+      "osmotic pressure",
+      "van't Hoff",
+      "osmosis"
+    ],
+    "keywords_zh": [
+      "渗透压",
+      "范特霍夫",
+      "渗透"
+    ],
+    "parameter_names": [
+      "M",
+      "T_K",
+      "i"
+    ],
+    "typical_statements": [
+      "π = i·M·R·T; M in mol/L → factor 1000 to convert to mol/m³"
+    ],
+    "source_books": [
+      "Atkins_PhysChem",
+      "Singh_Heldman_Osmotic"
+    ],
+    "equation_latex": "\\pi = i M R T"
+  },
+  "MF-M11": {
+    "id": "MF-M11",
+    "canonical_name": "SCFE_Solubility",
+    "display_name": "Supercritical CO2 Extraction Solubility (Chrastil)",
+    "domains": [
+      "mass_transfer"
+    ],
+    "keywords_en": [
+      "supercritical CO2",
+      "SCFE",
+      "Chrastil",
+      "supercritical extraction"
+    ],
+    "keywords_zh": [
+      "超临界 CO2",
+      "超临界萃取"
+    ],
+    "parameter_names": [
+      "rho_CO2",
+      "T_K",
+      "k",
+      "a",
+      "b"
+    ],
+    "typical_statements": [
+      "Chrastil 1982: ln(y) = k·ln(rho) + a/T + b"
+    ],
+    "source_books": [
+      "Chrastil_1982_JPhysChem",
+      "Brunner_Gas_Extraction"
+    ],
+    "equation_latex": "\\ln y = k \\ln \\rho + a/T + b"
+  },
+  "MF-M10": {
+    "id": "MF-M10",
+    "canonical_name": "Membrane_Transport",
+    "display_name": "Membrane Solute Flux (linear-driving-force)",
+    "domains": [
+      "mass_transfer"
+    ],
+    "keywords_en": [
+      "membrane permeability",
+      "solute flux",
+      "ultrafiltration",
+      "membrane transport"
+    ],
+    "keywords_zh": [
+      "膜传质",
+      "膜分离",
+      "超滤"
+    ],
+    "parameter_names": [
+      "P_solute",
+      "thickness",
+      "dC"
+    ],
+    "typical_statements": [
+      "J = P·ΔC/L"
+    ],
+    "source_books": [
+      "Mulder_Membrane_1996",
+      "Cheryan_UF_MF_1998"
+    ],
+    "equation_latex": "J = P \\Delta C / L"
   }
 }

@@ -630,3 +630,144 @@
   applicable_range: {T_C: {min: 0, max: 150, unit: "°C"}, water_content: {min: 0.30, max: 1.0, soft: true}}
   source_books: ["BeMiller_Whistler_Starch_Ch7", "Marabi_2003_JFE", "Lund_1984"]
   notes: "Avrami-Erofeev-style; k(T) follows Arrhenius. water_content < 0.30 emits advisory warning. P3 Tier 1."
+
+# ═══════════════════════════════════════════════════════════
+# Tier 3 (Tier 2 of P1-21c-D Backlog) — Added 2026-05-11 cc-lead
+# Record counts: M07=198, M08=181, T08=134, K07=110
+# ═══════════════════════════════════════════════════════════
+
+- id: MF-M07
+  canonical_name: Solubility_Partition
+  display_name: "Octanol-Water Partition Coefficient"
+  equation_latex: "K_{part} = 10^{\\log P}"
+  sympy_expression: "10**logP"
+  domain: [aroma_volatiles, lipid_science]
+  output_symbol: K_partition
+  runtime_variables: []
+  one_of_inputs:
+    - [logP]
+  constants: []
+  units: {logP: "dimensionless", S_water: "mol/L", T_C: "°C", K_partition: "dimensionless"}
+  applicable_range: {logP: {min: -5, max: 10}}
+  source_books: ["Sangster_1997", "Hansch_Leo_1995"]
+  notes: "K_partition = 10^logP. logP>0 hydrophobic, <0 hydrophilic. P3 Tier 2."
+
+- id: MF-M08
+  canonical_name: Gas_Permeability
+  display_name: "Gas/Vapor Permeability through Packaging"
+  equation_latex: "Q = P \\cdot \\Delta p / L"
+  sympy_expression: "permeability * delta_p / thickness"
+  domain: [mass_transfer, equipment_physics]
+  output_symbol: Q_perm
+  runtime_variables: [delta_p]
+  one_of_inputs:
+    - [P_O2, thickness]
+    - [P_CO2, thickness]
+    - [permeability, thickness]
+  constants: []
+  units: {P_O2: "cm³·mil/(m²·day·atm)", P_CO2: "cm³·mil/(m²·day·atm)", thickness: "m", delta_p: "atm", Q_perm: "permeability·atm/m"}
+  applicable_range: {T_C: {min: -30, max: 60, unit: "°C"}, RH: {min: 0, max: 100, unit: "%"}}
+  source_books: ["Robertson_Food_Packaging_2013", "ASTM_D3985"]
+  notes: "Steady-state Fickian permeation. P3 Tier 2."
+
+- id: MF-T08
+  canonical_name: Ohmic_Heating
+  display_name: "Ohmic (Joule) Heating in Food"
+  equation_latex: "Q = \\sigma(T) \\cdot |E|^2"
+  sympy_expression: "sigma_25 * (1 + alpha * (T_C - 25)) * E_field**2"
+  domain: [equipment_physics, thermal_dynamics]
+  output_symbol: Q_dot
+  runtime_variables: [T_C]
+  one_of_inputs:
+    - [sigma_25, E_field]
+  constants: [alpha]
+  units: {sigma_25: "S/m", alpha: "1/°C", E_field: "V/m", T_C: "°C", Q_dot: "W/m³"}
+  applicable_range: {sigma_25: {min: 0.001, max: 10, unit: "S/m"}, T_C: {min: 0, max: 150, unit: "°C"}}
+  source_books: ["Sastry_Barach_Ohmic_2000", "Singh_Heldman_Ch5"]
+  notes: "Linear T-dependence: σ(T) = σ_25·(1+α·(T-25)). P3 Tier 2."
+
+- id: MF-K07
+  canonical_name: Binding_Equilibrium
+  display_name: "Ligand-Protein Binding (Single-Site)"
+  equation_latex: "f_{bound} = \\frac{K_a L}{1+K_a L}"
+  sympy_expression: "(K_a * L_total) / (1 + K_a * L_total)"
+  domain: [protein_science, aroma_volatiles]
+  output_symbol: f_bound
+  runtime_variables: [L_total, P_total]
+  one_of_inputs:
+    - [K_a, L_total]
+    - [K_d, L_total]
+  constants: []
+  units: {K_a: "L/mol", K_d: "mol/L", L_total: "mol/L", P_total: "mol/L", f_bound: "dimensionless"}
+  applicable_range: {K_a: {min: 1, max: 1.0e9, unit: "L/mol"}}
+  source_books: ["Bell_Labuza_Moisture", "Tinoco_PhysChem"]
+  notes: "1:1 binding, L_free ≈ L_total when L >> P. K_a = 1/K_d. P3 Tier 2."
+
+# ═══════════════════════════════════════════════════════════
+# Tier 4 (Tier 3 of P1-21c-D Backlog) — Added 2026-05-11 cc-lead
+# Record counts: T09=87, M09=60, M11=55, M10=41
+# ═══════════════════════════════════════════════════════════
+
+- id: MF-T09
+  canonical_name: Respiration_Heat
+  display_name: "Postharvest Respiration Heat (Empirical Exponential)"
+  equation_latex: "Q_{resp} = a \\cdot \\exp(b \\cdot T)"
+  sympy_expression: "a * exp(b * T_C)"
+  domain: [equipment_physics]
+  output_symbol: Q_resp
+  runtime_variables: [T_C]
+  one_of_inputs:
+    - [a, b]
+  constants: []
+  units: {a: "W/kg", b: "1/°C", T_C: "°C", Q_resp: "W/kg"}
+  applicable_range: {T_C: {min: -5, max: 35, unit: "°C"}}
+  source_books: ["ASHRAE_Refrigeration_2022", "Becker_Misra_Fricke_1996"]
+  notes: "Empirical exponential T-dependence for cold storage cooling load. P3 Tier 3."
+
+- id: MF-M09
+  canonical_name: Osmotic_Pressure
+  display_name: "Osmotic Pressure (van't Hoff)"
+  equation_latex: "\\pi = i M R T"
+  sympy_expression: "i * M * R * T_K"
+  domain: [mass_transfer]
+  output_symbol: pi
+  runtime_variables: [M, T_K, T_C]
+  one_of_inputs:
+    - [M]
+  constants: [R, i]
+  units: {M: "mol/L", T_K: "K", T_C: "°C", i: "dimensionless", pi: "Pa"}
+  applicable_range: {M: {min: 0, max: 10, unit: "mol/L"}}
+  source_books: ["Atkins_PhysChem", "Singh_Heldman_Osmotic"]
+  notes: "M [mol/L] → M·1000 [mol/m³] for SI. van't Hoff factor i for ionic solutes. P3 Tier 3."
+
+- id: MF-M11
+  canonical_name: SCFE_Solubility
+  display_name: "Supercritical CO2 Extraction Solubility (Chrastil 1982)"
+  equation_latex: "\\ln y = k \\ln \\rho + a/T + b"
+  sympy_expression: "exp(k * log(rho_CO2) + a / T_K + b)"
+  domain: [mass_transfer]
+  output_symbol: y_solute
+  runtime_variables: [rho_CO2, T_K, T_C]
+  one_of_inputs:
+    - [rho_CO2, T_K]
+  constants: [k, a, b]
+  units: {rho_CO2: "kg/m³", T_K: "K", T_C: "°C", y_solute: "mole fraction"}
+  applicable_range: {rho_CO2: {min: 200, max: 1100, unit: "kg/m³"}, T_K: {min: 304, max: 500, unit: "K"}}
+  source_books: ["Chrastil_1982_JPhysChem", "Brunner_Gas_Extraction"]
+  notes: "Chrastil empirical correlation. Above CO2 critical point (304 K, 7.4 MPa). P3 Tier 3."
+
+- id: MF-M10
+  canonical_name: Membrane_Transport
+  display_name: "Membrane Solute Flux (Linear-Driving-Force)"
+  equation_latex: "J = P \\Delta C / L"
+  sympy_expression: "P_solute * dC / thickness"
+  domain: [mass_transfer]
+  output_symbol: J_solute
+  runtime_variables: [dC]
+  one_of_inputs:
+    - [P_solute, thickness]
+  constants: []
+  units: {P_solute: "m/s", thickness: "m", dC: "mol/m³", J_solute: "mol/(m²·s)"}
+  applicable_range: {P_solute: {min: 1.0e-12, max: 1.0e-4, unit: "m/s"}}
+  source_books: ["Mulder_Membrane_1996", "Cheryan_UF_MF_1998"]
+  notes: "Steady-state diffusion through homogeneous membrane. P3 Tier 3."
