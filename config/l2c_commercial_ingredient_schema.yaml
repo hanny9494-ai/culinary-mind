@@ -1,0 +1,122 @@
+# L2c Commercial Ingredient Database Schema (P1-Sd3)
+# Locked: 2026-05-12 by cc-lead (architect unavailable)
+# Status: PROPOSAL — awaiting Phase 3 data load (P3-Lc1)
+
+version: "1.0"
+locked_at: "2026-05-12"
+purpose: "Map brand/model SKU → detailed nutritional/functional composition"
+
+# ─────────────────────────────────────────────────
+# Node definitions
+# ─────────────────────────────────────────────────
+node_labels:
+  - label: CKG_L2C_Product
+    description: "具体商业食材产品 (e.g., 'Plugra 黄油 unsalted 1lb stick')"
+    primary_key: sku_id
+    properties:
+      sku_id: {type: string, required: true, format: "brand_product_size slug"}
+      name_en: {type: string, required: true}
+      name_zh: {type: string, required: true}
+      brand: {type: string, required: true}
+      product_line: {type: string, optional: true}
+      sku: {type: string, optional: true}  # UPC/GTIN
+      l2a_ingredient_id: {type: string, required: true, ref: CKG_L2A_Ingredient}
+      category: {type: enum, values: [dairy, meat, seafood, produce, grain, oil_fat, spice, condiment, sweetener, alcohol, beverage, other]}
+      country_of_origin: {type: string, optional: true}
+      certifications: {type: array, items: string, optional: true}  # ["organic", "kosher", "halal"]
+      cost_usd_per_kg: {type: number, optional: true}
+      cost_currency: {type: string, optional: true}
+
+  - label: CKG_L2C_Composition
+    description: "营养/功能成分细分（一对多 fan-out 到具体营养素）"
+    primary_key: composition_id
+    properties:
+      composition_id: {type: string, required: true}
+      sku_id: {type: string, required: true, ref: CKG_L2C_Product}
+      nutrient_id: {type: string, required: true}  # ref: CKG_Nutrient (separate node)
+      value: {type: number, required: true}
+      unit: {type: string, required: true, format: "SI (kJ, mg/100g, etc)"}
+      measurement_basis: {type: enum, values: [per_100g, per_serving, per_unit]}
+      n_samples: {type: integer, optional: true}
+      source: {type: string, optional: true}  # USDA / Manufacturer / Lab measurement
+      lab_method: {type: string, optional: true}  # AOAC / proximate / HPLC
+
+  - label: CKG_Nutrient
+    description: "营养素/功能成分本体 (separate from product instance)"
+    primary_key: nutrient_id
+    properties:
+      nutrient_id: {type: string, required: true}
+      name_en: {type: string, required: true}
+      name_zh: {type: string, required: true}
+      category: {type: enum, values: [macronutrient, vitamin, mineral, amino_acid, fatty_acid, bioactive, contaminant]}
+      reference_unit: {type: string, required: true}  # e.g., "mg" for nutrients
+      rda_per_day: {type: number, optional: true}     # if applicable
+      upper_limit: {type: number, optional: true}     # safety upper
+
+# ─────────────────────────────────────────────────
+# Relationships
+# ─────────────────────────────────────────────────
+relationships:
+  - type: VARIANT_OF
+    source: CKG_L2C_Product
+    target: CKG_L2A_Ingredient
+    notes: "Plugra 黄油 VARIANT_OF butter (L2a generic)"
+
+  - type: HAS_COMPOSITION
+    source: CKG_L2C_Product
+    target: CKG_Nutrient
+    via: CKG_L2C_Composition
+    cardinality: many-to-many
+    notes: "Product × Nutrient 量化关系"
+
+  - type: CONTAINS_ALLERGEN
+    source: CKG_L2C_Product
+    target: CKG_Allergen  # separate node, future
+    notes: "Allergen labels (优先级 P3+)"
+
+# ─────────────────────────────────────────────────
+# QC rules
+# ─────────────────────────────────────────────────
+qc_rules:
+  - rule: must_link_to_l2a
+    description: "Every L2C product 必须 VARIANT_OF L2a generic"
+  - rule: composition_si_units
+    description: "All composition values in SI (mg/kg, % w/w, etc)"
+  - rule: brand_required
+    description: "brand field non-empty"
+
+# ─────────────────────────────────────────────────
+# Sample products (illustrative)
+# ─────────────────────────────────────────────────
+illustrative_products:
+  - sku_id: plugra_butter_unsalted_454g
+    name_zh: Plugra 无盐黄油 454g
+    brand: Plugra
+    l2a_ingredient_id: butter
+    category: dairy
+    country_of_origin: USA
+    compositions:
+      - {nutrient_id: fat_total, value: 82.0, unit: "g/100g"}
+      - {nutrient_id: protein, value: 0.9, unit: "g/100g"}
+      - {nutrient_id: water, value: 16.0, unit: "g/100g"}
+      - {nutrient_id: vitamin_a, value: 0.68, unit: "mg/100g"}
+
+# ─────────────────────────────────────────────────
+# Data load (P3-Lc1, NOT in this task)
+# ─────────────────────────────────────────────────
+data_load_phase: P3-Lc1
+data_sources:
+  - USDA FoodData Central (公开)
+  - Manufacturer nutrition labels (web scrape)
+  - 中国食品成分表 (CICN 2018)
+  - Lab measurement (cost: $50-200 per product)
+
+locked_by: cc-lead
+lock_rationale: |
+  L2c 商业食材 schema 锁定 — Product instance + Composition fan-out + Nutrient ontology.
+  设计原则:
+  1. Product 节点存 SKU-level instance (brand + model)
+  2. CKG_Nutrient 本体跟 Product 解耦 (营养素是 ontology, product 是 instance)
+  3. CKG_L2C_Composition 中间节点存量化 measurement
+  4. VARIANT_OF 链回 L2a generic (一般 'butter' 跟 'Plugra' 不同 specific instance)
+  数据 load 留 P3-Lc1.

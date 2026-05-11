@@ -1,0 +1,113 @@
+# P1-Px1: Prompt Registry (cc-lead schema)
+# Locked 2026-05-12 — version-controlled prompt artifact registry
+# Diff/regression test via tests/prompts/test_prompt_consistency.py
+
+version: "1.0"
+locked_at: "2026-05-12"
+purpose: "Single source of truth for LLM prompts used in pipelines"
+
+# ─────────────────────────────────────────────────
+# Schema
+# ─────────────────────────────────────────────────
+prompt_schema:
+  id: {type: string, required: true, format: "snake_case slug"}
+  version: {type: string, required: true, format: "semver e.g. 1.0.0"}
+  status: {type: enum, values: [draft, production, deprecated]}
+  model: {type: string, required: true}      # gpt-5.4 / gemini-3.1-pro / qwen3.5
+  temperature: {type: number, optional: true}
+  reasoning_effort: {type: enum, values: [low, medium, high], optional: true}
+  template_file: {type: string, required: true}  # relative path to .md
+  output_schema: {type: string, optional: true}  # JSON schema file or inline
+  created_at: {type: string, required: true}
+  last_modified: {type: string, required: true}
+  modified_by: {type: string, required: true}
+  changelog: {type: array, items: string}
+  test_coverage: {type: enum, values: [none, unit, regression, fuzzed]}
+
+# ─────────────────────────────────────────────────
+# Active prompts (curated; not exhaustive)
+# ─────────────────────────────────────────────────
+prompts:
+  - id: skill_a_ontology_v1
+    version: "1.0.0"
+    status: production
+    model: gpt-5.4
+    reasoning_effort: low
+    template_file: prompts/skill_a_ontology_v1.md
+    output_schema: prompts/schemas/ontology_mapping.json
+    created_at: "2026-05-11"
+    last_modified: "2026-05-11"
+    modified_by: cc-lead
+    changelog:
+      - "2026-05-11 v1.0.0 — initial: within-MF (single formula_id context) parameter ontology mapping"
+    test_coverage: regression
+    notes: "P1-21c-D v1 — 21,076 unique pairs mapped, 4,394 records auto-accepted"
+
+  - id: skill_a_ontology_v2_crossmf
+    version: "2.0.0"
+    status: production
+    model: gpt-5.4
+    reasoning_effort: low
+    template_file: prompts/skill_a_ontology_v2_crossmf.md
+    output_schema: prompts/schemas/ontology_mapping_v2.json
+    created_at: "2026-05-11"
+    last_modified: "2026-05-11"
+    modified_by: cc-lead
+    changelog:
+      - "2026-05-11 v2.0.0 — cross-MF rescue (search all 28 MFs); add new_mf_candidate detection"
+    test_coverage: regression
+    notes: "P1-21c-D v2 — rescued 5,008 records + 13,080 new MF candidates"
+
+  - id: l2a_food_tree_node_role
+    version: "1.0.0"
+    status: production
+    model: gpt-5.4
+    template_file: prompts/l2a_node_role_v1.md
+    created_at: "2026-05-08"
+    last_modified: "2026-05-09"
+    modified_by: architect
+    changelog:
+      - "2026-05-08 v0.9 — Option D Hybrid Python pre-filter + LLM"
+      - "2026-05-09 v1.0 — production lock"
+    test_coverage: unit
+    notes: "P1-13 ETL prefilter classification"
+
+  - id: l0_causal_chain_extraction
+    version: "1.2.0"
+    status: production
+    model: ollama_qwen3.5-27b
+    template_file: prompts/l0_causal_chain_v1.2.md
+    created_at: "2026-04-13"
+    last_modified: "2026-04-30"
+    modified_by: architect
+    test_coverage: unit
+    notes: "Stage 4 L0 causal chain — 47 books extracted"
+
+# ─────────────────────────────────────────────────
+# Deprecated (kept for audit)
+# ─────────────────────────────────────────────────
+deprecated_prompts:
+  - id: skill_a_ontology_v0_pilot
+    version: "0.1.0"
+    status: deprecated
+    deprecated_reason: "superseded by v1; canary only"
+
+# ─────────────────────────────────────────────────
+# Test regression rules
+# ─────────────────────────────────────────────────
+test_rules:
+  - rule: production_must_have_test_coverage
+    description: "status=production must have test_coverage != none"
+  - rule: model_version_required
+    description: "model field must specify version (e.g. gpt-5.4 not gpt)"
+  - rule: changelog_per_version
+    description: "Each version entry in changelog"
+
+# ─────────────────────────────────────────────────
+# Storage convention
+# ─────────────────────────────────────────────────
+storage:
+  templates: config/prompts/templates/*.md
+  schemas: config/prompts/schemas/*.json
+  registry: config/prompts/registry.yaml
+  test: tests/prompts/test_prompt_registry.py
