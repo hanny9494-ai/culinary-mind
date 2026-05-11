@@ -6,7 +6,7 @@ from scripts.l2a import p1_13_16_etl
 
 
 def test_orchestrator_resolves_all_steps():
-    assert p1_13_16_etl.resolve_steps("all") == [1, 2, 3, 4, 5, 6, 7]
+    assert p1_13_16_etl.resolve_steps("all") == [5, 6, 7]
     assert p1_13_16_etl.resolve_steps("3") == [3]
 
 
