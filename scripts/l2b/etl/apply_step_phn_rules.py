@@ -18,20 +18,24 @@ def step_matches_rule(step, rule, recipe_ingredients):
     if "action_in" in cond:
         if action not in [a.lower() for a in cond["action_in"]]:
             return False
-    # Temp
-    try:
-        temp = float(step.get("temp_c", "") or "nan")
-    except: temp = None
+    # P0 fix (Codex): parse numerics safely to None, not NaN
+    def _parse_float(v):
+        if v is None or v == "": return None
+        try:
+            f = float(v)
+            import math
+            return f if math.isfinite(f) else None
+        except (ValueError, TypeError):
+            return None
+
+    temp = _parse_float(step.get("temp_c"))
     if "temp_c_gte" in cond:
         if temp is None or temp < cond["temp_c_gte"]:
             return False
     if "temp_c_lte" in cond:
         if temp is None or temp > cond["temp_c_lte"]:
             return False
-    # Duration
-    try:
-        dur = float(step.get("duration_min", "") or "nan")
-    except: dur = None
+    dur = _parse_float(step.get("duration_min"))
     if "duration_min_gte" in cond:
         if dur is None or dur < cond["duration_min_gte"]:
             return False
@@ -56,9 +60,10 @@ def main():
         for row in csv.DictReader(f):
             recipe_ingredients.setdefault(row["recipe_id"], []).append(row["ingredient_slug"])
 
-    edges = []
+    # P1 fix (Codex): dedup (step_id, phn_id) by keeping highest-confidence rule
+    edge_map = {}  # (step_id, phn_id) -> edge dict
     matches_per_rule = Counter()
-    matched_steps = 0
+    matched_step_ids = set()
     total_steps = 0
 
     with open(STEPS_FILE) as f:
@@ -66,16 +71,29 @@ def main():
             total_steps += 1
             for rule in rules:
                 if step_matches_rule(step, rule, recipe_ingredients):
-                    edges.append({
+                    key = (step["step_id"], rule["triggers_phn"])
+                    new_edge = {
                         "step_id": step["step_id"],
                         "phn_id": rule["triggers_phn"],
                         "rule_id": rule["id"],
                         "confidence": rule["confidence"],
                         "governed_by_mfs": ",".join(rule.get("governed_by_mf", [])),
-                    })
+                    }
+                    if key in edge_map:
+                        # Keep higher confidence; merge rule_ids
+                        existing = edge_map[key]
+                        if rule["confidence"] > existing["confidence"]:
+                            existing["confidence"] = rule["confidence"]
+                            existing["rule_id"] = f"{existing['rule_id']}+{rule['id']}"
+                        else:
+                            existing["rule_id"] = f"{existing['rule_id']}+{rule['id']}"
+                    else:
+                        edge_map[key] = new_edge
                     matches_per_rule[rule["id"]] += 1
-                    matched_steps += 1
-                    # break  # single PHN per step; allow multi for now
+                    matched_step_ids.add(step["step_id"])
+    
+    edges = list(edge_map.values())
+    matched_steps = len(matched_step_ids)
 
     # Write edges CSV
     OUT_EDGES.parent.mkdir(parents=True, exist_ok=True)

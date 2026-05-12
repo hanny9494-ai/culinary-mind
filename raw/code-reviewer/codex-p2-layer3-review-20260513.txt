@@ -1,0 +1,1437 @@
+Reading additional input from stdin...
+OpenAI Codex v0.128.0-alpha.1 (research preview)
+--------
+workdir: /Users/jeff/culinary-mind
+model: gpt-5.4
+provider: openai
+approval: never
+sandbox: danger-full-access
+reasoning effort: medium
+reasoning summaries: none
+session id: 019e1d0b-e3bb-7a11-a796-aa9461ee39c9
+--------
+user
+You are a code reviewer for a food-science knowledge graph ETL + Layer 3 reasoning pipeline.
+
+Focus on:
+1. **Data correctness** (recipe_id/step_id uniqueness, atom_id matching, schema integrity)
+2. **Cypher safety** (LOAD CSV gotchas, idempotency, atomic writes, MERGE vs CREATE)
+3. **Edge integrity** (step→PHN, L0→PHN, MF→PHN alias mapping correctness)
+4. **step_phn_rules.yaml semantic correctness** — does each rule reflect real food science?
+5. **Smoke test query correctness** — do queries miss/over-match anything?
+6. **Production hardening** (silent skips, error handling, large-data edge cases)
+
+For each file:
+- VERDICT: APPROVE / APPROVE_WITH_NOTES / REJECT
+- BUGS (P0/P1/P2) with line numbers if possible
+- IMPROVEMENTS
+
+Output strict markdown. Start with `## extract_recipes.py` etc. NO prose preamble.
+
+---
+
+
+=== scripts/l2b/etl/extract_recipes.py ===
+#!/usr/bin/env python3
+"""P2-Lb1 Step 1: Extract 54K recipes from Stage5 → flat CSVs for Neo4j LOAD.
+
+Schema (temp namespace CKG_L2B_TMP_*):
+- CKG_L2B_TMP_Recipe: recipe_id / name / book_id / yield_text / recipe_type
+- CKG_L2B_TMP_Step: step_id / recipe_id / order / text / action / duration_min / temp_c
+- CKG_L2B_TMP_Ingredient: ingredient_id (=lowercase item slug) / item / qty / unit / note
+
+Edges:
+- HAS_STEP: Recipe → Step (kind=ordered)
+- USES_INGREDIENT: Recipe → Ingredient
+- HAS_EQUIPMENT: Recipe → Equipment (later via P2-Ic6)
+
+Output: output/l2b/etl/{recipes,steps,ingredients}.csv + has_step_edges.csv + uses_ingredient_edges.csv + cypher
+
+Idempotent: each recipe gets stable recipe_id (book + chunk_idx + recipe_index).
+"""
+import csv
+import json
+import re
+from pathlib import Path
+from collections import defaultdict
+
+ROOT = Path("/Users/jeff/culinary-mind")
+OUT_DIR = ROOT / "output/l2b/etl"
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+def slugify(s, max_len=80):
+    if not s: return ""
+    s = re.sub(r'[^\w\s-]', '', s.lower(), flags=re.UNICODE)
+    s = re.sub(r'\s+', '_', s.strip())
+    return s[:max_len]
+
+def main():
+    recipe_rows = []
+    step_rows = []
+    ingredient_rows = []   # unique per (recipe_id, ingredient_slug)
+    has_step_edges = []
+    uses_ingredient_edges = []
+
+    unique_ingredient_slugs = set()  # global ingredient pool (dedup)
+    ingredient_node_rows = {}        # slug → first occurrence row
+
+    total_recipes = 0
+    total_steps = 0
+    total_uses = 0
+    books_seen = set()
+
+    for stage5_path in sorted(ROOT.glob("output/*/stage5/stage5_results.jsonl")) + \
+                      sorted(ROOT.glob("output/*/l2b/stage5_results.jsonl")):
+        # Book name: parent of parent (output/{book}/stage5/...)
+        book_id = stage5_path.parents[1].name
+        books_seen.add(book_id)
+        with open(stage5_path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    chunk = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not chunk.get("recipes"):
+                    continue
+                chunk_idx = chunk.get("chunk_idx", 0)
+                for rec_idx, rec in enumerate(chunk["recipes"]):
+                    # recipe_id: stable across runs
+                    name_slug = slugify(rec.get("name", ""), 60)
+                    raw_key = f"{book_id}|{chunk_idx}|{rec_idx}|{name_slug}"
+                    import hashlib
+                    short_hash = hashlib.md5(raw_key.encode()).hexdigest()[:6]
+                    recipe_id = f"{book_id}__c{chunk_idx}_r{rec_idx}_{short_hash}"
+                    total_recipes += 1
+                    recipe_rows.append({
+                        "recipe_id": recipe_id,
+                        "name": rec.get("name", ""),
+                        "book_id": book_id,
+                        "yield_text": rec.get("yield_text", "") or "",
+                        "recipe_type": rec.get("recipe_type", "") or "",
+                        "n_steps": len(rec.get("steps", [])),
+                        "n_ingredients": len(rec.get("ingredients", [])),
+                    })
+
+                    # Steps
+                    for step_idx, step in enumerate(rec.get("steps", [])):
+                        order = step.get("order", 0)
+                        step_id = f"{recipe_id}__s{step_idx}"
+                        total_steps += 1
+                        step_rows.append({
+                            "step_id": step_id,
+                            "recipe_id": recipe_id,
+                            "order": order,
+                            "text": (step.get("text") or "")[:500],
+                            "action": (step.get("action") or "")[:50],
+                            "duration_min": step.get("duration_min") or "",
+                            "temp_c": step.get("temp_c") or "",
+                        })
+                        has_step_edges.append({"recipe_id": recipe_id, "step_id": step_id, "order": order})
+
+                    # Ingredients
+                    for ing in rec.get("ingredients", []):
+                        item = (ing.get("item") or "").strip()
+                        if not item:
+                            continue
+                        ing_slug = slugify(item, 80)
+                        if not ing_slug:
+                            continue
+                        # Track unique ingredient nodes
+                        if ing_slug not in unique_ingredient_slugs:
+                            unique_ingredient_slugs.add(ing_slug)
+                            ingredient_node_rows[ing_slug] = {
+                                "ingredient_slug": ing_slug,
+                                "item_raw": item,
+                            }
+                        # Edge: recipe → ingredient
+                        total_uses += 1
+                        uses_ingredient_edges.append({
+                            "recipe_id": recipe_id,
+                            "ingredient_slug": ing_slug,
+                            "qty": ing.get("qty") or "",
+                            "unit": ing.get("unit") or "",
+                            "note": (ing.get("note") or "")[:200],
+                        })
+
+    # Write CSVs (atomic)
+    def write_csv(name, rows, fields):
+        if not rows: 
+            print(f"  ! {name}: empty"); return
+        p = OUT_DIR / name
+        tmp = p.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fields)
+            w.writeheader()
+            for r in rows: w.writerow(r)
+        tmp.rename(p)
+        print(f"  ✅ {name}: {len(rows):,} rows")
+
+    write_csv("recipes.csv", recipe_rows, ["recipe_id", "name", "book_id", "yield_text", "recipe_type", "n_steps", "n_ingredients"])
+    write_csv("steps.csv", step_rows, ["step_id", "recipe_id", "order", "text", "action", "duration_min", "temp_c"])
+    write_csv("ingredients.csv", list(ingredient_node_rows.values()), ["ingredient_slug", "item_raw"])
+    write_csv("has_step_edges.csv", has_step_edges, ["recipe_id", "step_id", "order"])
+    write_csv("uses_ingredient_edges.csv", uses_ingredient_edges, ["recipe_id", "ingredient_slug", "qty", "unit", "note"])
+
+    print(f"\n=== Summary ===")
+    print(f"Books: {len(books_seen)}")
+    print(f"Recipes: {total_recipes:,}")
+    print(f"Steps: {total_steps:,}")
+    print(f"Unique ingredient slugs: {len(unique_ingredient_slugs):,}")
+    print(f"USES_INGREDIENT edges: {total_uses:,}")
+
+if __name__ == "__main__":
+    main()
+
+=== scripts/l2b/etl/apply_step_phn_rules.py ===
+#!/usr/bin/env python3
+"""Apply step_phn_rules.yaml to 80K steps → generate TRIGGERS_PHN edges."""
+import csv
+import yaml
+import re
+from pathlib import Path
+from collections import Counter
+
+ROOT = Path("/Users/jeff/culinary-mind")
+RULES_FILE = ROOT / "config/step_phn_rules.yaml"
+STEPS_FILE = ROOT / "output/l2b/etl/steps.csv"
+USES_INGR = ROOT / "output/l2b/etl/uses_ingredient_edges.csv"
+OUT_EDGES = ROOT / "output/l2b/etl/triggers_phn_edges.csv"
+
+def step_matches_rule(step, rule, recipe_ingredients):
+    cond = rule["conditions"]
+    action = (step.get("action") or "").lower().strip()
+    if "action_in" in cond:
+        if action not in [a.lower() for a in cond["action_in"]]:
+            return False
+    # Temp
+    try:
+        temp = float(step.get("temp_c", "") or "nan")
+    except: temp = None
+    if "temp_c_gte" in cond:
+        if temp is None or temp < cond["temp_c_gte"]:
+            return False
+    if "temp_c_lte" in cond:
+        if temp is None or temp > cond["temp_c_lte"]:
+            return False
+    # Duration
+    try:
+        dur = float(step.get("duration_min", "") or "nan")
+    except: dur = None
+    if "duration_min_gte" in cond:
+        if dur is None or dur < cond["duration_min_gte"]:
+            return False
+    # Ingredient (for starch_gel rule)
+    if "ingredient_contains_any" in cond:
+        keywords = [k.lower() for k in cond["ingredient_contains_any"]]
+        # Look up ingredients of this recipe
+        recipe_id = step.get("recipe_id")
+        ings = recipe_ingredients.get(recipe_id, [])
+        ing_text = " ".join(ings).lower()
+        if not any(k in ing_text for k in keywords):
+            return False
+    return True
+
+def main():
+    rules = yaml.safe_load(open(RULES_FILE))["rules"]
+    print(f"Loaded {len(rules)} rules")
+
+    # Build recipe → ingredients lookup
+    recipe_ingredients = {}
+    with open(USES_INGR) as f:
+        for row in csv.DictReader(f):
+            recipe_ingredients.setdefault(row["recipe_id"], []).append(row["ingredient_slug"])
+
+    edges = []
+    matches_per_rule = Counter()
+    matched_steps = 0
+    total_steps = 0
+
+    with open(STEPS_FILE) as f:
+        for step in csv.DictReader(f):
+            total_steps += 1
+            for rule in rules:
+                if step_matches_rule(step, rule, recipe_ingredients):
+                    edges.append({
+                        "step_id": step["step_id"],
+                        "phn_id": rule["triggers_phn"],
+                        "rule_id": rule["id"],
+                        "confidence": rule["confidence"],
+                        "governed_by_mfs": ",".join(rule.get("governed_by_mf", [])),
+                    })
+                    matches_per_rule[rule["id"]] += 1
+                    matched_steps += 1
+                    # break  # single PHN per step; allow multi for now
+
+    # Write edges CSV
+    OUT_EDGES.parent.mkdir(parents=True, exist_ok=True)
+    tmp = OUT_EDGES.with_suffix(".tmp")
+    with open(tmp, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["step_id", "phn_id", "rule_id", "confidence", "governed_by_mfs"])
+        w.writeheader()
+        for r in edges: w.writerow(r)
+    tmp.rename(OUT_EDGES)
+
+    print(f"\n=== Results ===")
+    print(f"Total steps: {total_steps:,}")
+    print(f"Matched steps (≥1 PHN): ~{matched_steps:,}")
+    print(f"TRIGGERS_PHN edges: {len(edges):,}")
+    print(f"\nTop rule matches:")
+    for rule_id, n in matches_per_rule.most_common(10):
+        print(f"  {rule_id}: {n:,}")
+    print(f"\n✅ Wrote: {OUT_EDGES}")
+
+if __name__ == "__main__":
+    main()
+
+=== scripts/l2b/etl/extract_phn_mf_edges.py ===
+#!/usr/bin/env python3
+"""Build PHN nodes, MF nodes, L0→PHN edges, MF→PHN edges, Step→PHN edges."""
+import csv
+import json
+import yaml
+from pathlib import Path
+from collections import defaultdict, Counter
+
+ROOT = Path("/Users/jeff/culinary-mind")
+OUT_DIR = ROOT / "output/l2b/etl"
+
+# 1. PHN nodes from l0_phn_routing_v3.jsonl distinct tags
+phns = Counter()
+l0_to_phn = []  # (l0_atom_id, phn_id, score)
+with open(ROOT / "output/phase1/l0_phn_routing_v3.jsonl") as f:
+    for line in f:
+        try:
+            r = json.loads(line)
+            tags = r.get("phenomenon_tags") or []
+            atom_id = r.get("source_chunk_id") or r.get("_atom_id") or r.get("id")
+            scores = r.get("phn_scores", {})
+            for tag in tags:
+                phns[tag] += 1
+                if atom_id:
+                    l0_to_phn.append({
+                        "l0_atom_id": atom_id,
+                        "phn_id": tag,
+                        "score": scores.get(tag, 0.5) if isinstance(scores, dict) else 0.5,
+                    })
+        except: pass
+
+# Write PHN nodes
+phn_rows = []
+for phn_id, count in phns.most_common():
+    phn_rows.append({
+        "phn_id": phn_id,
+        "name_en": phn_id.replace("_", " ").title(),
+        "l0_atom_count": count,
+    })
+with open(OUT_DIR / "phn_nodes.csv", "w", newline="", encoding="utf-8") as f:
+    w = csv.DictWriter(f, fieldnames=["phn_id", "name_en", "l0_atom_count"])
+    w.writeheader()
+    [w.writerow(r) for r in phn_rows]
+print(f"✅ PHN nodes: {len(phn_rows)}")
+
+# 2. MF nodes from config/solver_bounds.yaml (40 MFs)
+bounds = yaml.safe_load(open(ROOT / "config/solver_bounds.yaml"))
+mf_rows = []
+for mf_id, spec in sorted(bounds["solvers"].items()):
+    if mf_id == "MF-T02": continue  # parent_only
+    mf_rows.append({
+        "mf_id": mf_id,
+        "canonical_name": spec.get("canonical_name", ""),
+        "n_inputs": len(spec.get("inputs", [])),
+    })
+with open(OUT_DIR / "mf_nodes.csv", "w", newline="", encoding="utf-8") as f:
+    w = csv.DictWriter(f, fieldnames=["mf_id", "canonical_name", "n_inputs"])
+    w.writeheader()
+    [w.writerow(r) for r in mf_rows]
+print(f"✅ MF nodes: {len(mf_rows)}")
+
+# 3. L0→PHN edges from step_phn_rules backed by V3 routing
+with open(OUT_DIR / "l0_phn_edges.csv", "w", newline="", encoding="utf-8") as f:
+    w = csv.DictWriter(f, fieldnames=["l0_atom_id", "phn_id", "score"])
+    w.writeheader()
+    [w.writerow(r) for r in l0_to_phn]
+print(f"✅ L0→PHN edges: {len(l0_to_phn)} (will only match existing L0 in Neo4j)")
+
+# 4. MF→PHN edges (GOVERNS) from step_phn_rules
+rules = yaml.safe_load(open(ROOT / "config/step_phn_rules.yaml"))["rules"]
+mf_phn_pairs = set()
+for rule in rules:
+    phn = rule["triggers_phn"]
+    for mf in rule.get("governed_by_mf", []):
+        mf_phn_pairs.add((mf, phn))
+mf_phn_rows = [{"mf_id": m, "phn_id": p} for m, p in sorted(mf_phn_pairs)]
+with open(OUT_DIR / "mf_phn_edges.csv", "w", newline="", encoding="utf-8") as f:
+    w = csv.DictWriter(f, fieldnames=["mf_id", "phn_id"])
+    w.writeheader()
+    [w.writerow(r) for r in mf_phn_rows]
+print(f"✅ MF→PHN edges (GOVERNS_PHN): {len(mf_phn_rows)}")
+
+# Print summary
+print(f"\n=== Summary ===")
+print(f"PHN nodes: {len(phn_rows)}")
+print(f"MF nodes: {len(mf_rows)}")
+print(f"L0→PHN edges: {len(l0_to_phn):,}")
+print(f"MF→PHN edges: {len(mf_phn_rows)}")
+
+=== scripts/l2b/etl/extract_l0_tmp.py ===
+#!/usr/bin/env python3
+"""P2-Ic3: Import 39,888 tagged L0 atoms to CKG_L0_TMP_Principle + TAGGED_BY_PHN edges.
+
+Avoid clashing with existing 146 P1-33 prototype L0 nodes (CKG_L0_Principle).
+"""
+import csv
+import json
+from pathlib import Path
+
+ROOT = Path("/Users/jeff/culinary-mind")
+OUT_DIR = ROOT / "output/l2b/etl"
+
+l0_rows = []
+l0_phn_rows = []
+seen_atom_ids = set()
+
+with open(ROOT / "output/phase1/l0_phn_routing_v3.jsonl") as f:
+    for line in f:
+        try:
+            r = json.loads(line)
+        except: continue
+        # Use source_chunk_id + book as composite id
+        book = r.get("_book_id", "unknown")
+        chunk = r.get("source_chunk_id", "")
+        atom_id = f"{book}__{chunk}"
+        if atom_id in seen_atom_ids: continue
+        seen_atom_ids.add(atom_id)
+        tags = r.get("phenomenon_tags") or []
+        if not tags: continue
+        l0_rows.append({
+            "atom_id": atom_id,
+            "scientific_statement": (r.get("scientific_statement") or "")[:500],
+            "causal_chain_text": (r.get("causal_chain_text") or "")[:300],
+            "domain": r.get("domain") or "",
+            "confidence": r.get("confidence") or 0.0,
+            "book_id": book,
+            "n_phn": len(tags),
+        })
+        scores = r.get("phn_scores", {})
+        for tag in tags:
+            l0_phn_rows.append({
+                "atom_id": atom_id,
+                "phn_id": tag,
+                "score": scores.get(tag, 0.5) if isinstance(scores, dict) else 0.5,
+            })
+
+# Write CSVs (atomic)
+def write_csv(name, rows, fields):
+    p = OUT_DIR / name
+    tmp = p.with_suffix(".tmp")
+    with open(tmp, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        for r in rows: w.writerow(r)
+    tmp.rename(p)
+    print(f"  ✅ {name}: {len(rows):,} rows")
+
+write_csv("l0_tmp_nodes.csv", l0_rows, ["atom_id","scientific_statement","causal_chain_text","domain","confidence","book_id","n_phn"])
+write_csv("l0_tmp_phn_edges.csv", l0_phn_rows, ["atom_id", "phn_id", "score"])
+print(f"\n=== Summary ===")
+print(f"L0 TMP atoms: {len(l0_rows):,}")
+print(f"L0 → PHN edges: {len(l0_phn_rows):,}")
+
+=== scripts/l2b/smoke_test_recipe_reasoning.py ===
+#!/usr/bin/env python3
+"""SMOKE TEST: Recipe → Step → PHN → MF → real solver invocation.
+
+Full reasoning chain through Neo4j graph + MF solver tools.
+Pick 3 real recipes from L2b, traverse to MFs, invoke solvers with derived params.
+"""
+import sys
+import json
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from engine.agent.tool_registry import get_mf_tool
+
+try:
+    from neo4j import GraphDatabase
+except ImportError:
+    print("Install neo4j driver: pip install neo4j")
+    sys.exit(1)
+
+
+def find_recipes_with_full_chain(session, limit=3):
+    """Find recipes that have Recipe → Step → PHN → MF complete chain."""
+    q = """
+    MATCH (r:CKG_L2B_TMP_Recipe)-[:HAS_STEP]->(s:CKG_L2B_TMP_Step)
+          -[:TRIGGERS_PHN]->(p:CKG_PHN)<-[:GOVERNS_PHN]-(m:CKG_MF)
+    WHERE s.temp_c IS NOT NULL AND s.duration_min IS NOT NULL
+    WITH r, count(DISTINCT s) AS n_active_steps,
+         collect(DISTINCT p.phn_id) AS phns,
+         collect(DISTINCT m.mf_id) AS mfs
+    WHERE n_active_steps >= 2
+    RETURN r.recipe_id AS recipe_id, r.name AS name, r.book_id AS book,
+           n_active_steps, phns, mfs
+    ORDER BY n_active_steps DESC
+    LIMIT $limit
+    """
+    return list(session.run(q, limit=limit))
+
+
+def get_recipe_full_chain(session, recipe_id):
+    """Walk full chain for a specific recipe."""
+    q = """
+    MATCH (r:CKG_L2B_TMP_Recipe {recipe_id: $rid})-[:HAS_STEP]->(s:CKG_L2B_TMP_Step)
+    OPTIONAL MATCH (s)-[t:TRIGGERS_PHN]->(p:CKG_PHN)
+    OPTIONAL MATCH (m:CKG_MF)-[:GOVERNS_PHN]->(p)
+    RETURN s.order AS order, s.text AS text, s.action AS action,
+           s.temp_c AS temp_c, s.duration_min AS duration_min,
+           p.phn_id AS phn,
+           collect(DISTINCT m.mf_id) AS mfs,
+           t.rule_id AS rule
+    ORDER BY s.order
+    """
+    return list(session.run(q, rid=recipe_id))
+
+
+def invoke_mf_with_step_params(mf_id, step):
+    """Invoke MF solver with parameters derived from step."""
+    try:
+        tool = get_mf_tool(mf_id)
+    except KeyError:
+        return None, f"MF tool {mf_id} not registered"
+
+    # Build params based on step + MF type
+    params = {}
+    if mf_id == "MF-T03":  # Arrhenius
+        if step.get("temp_c") is not None:
+            params["T_K"] = step["temp_c"] + 273.15
+            # Default Ea + A for thermal degradation
+            params["A"] = 1.0e10
+            params["Ea"] = 80000.0
+    elif mf_id == "MF-T01":  # Fourier 1D
+        if step.get("temp_c") is not None:
+            params = {"T_init": 25.0, "T_boundary": step["temp_c"],
+                      "time": (step.get("duration_min") or 10) * 60,
+                      "x_position": 0.01, "thickness": 0.02,
+                      "alpha": 1.4e-7, "k": 0.5, "rho": 1000.0, "Cp": 3800.0}
+    elif mf_id == "MF-T06":  # Protein denat
+        if step.get("temp_c") is not None:
+            params = {"T_d": 65.0, "dH_d": 400.0, "T_C": step["temp_c"]}
+    elif mf_id == "MF-K02":  # D-value
+        if step.get("duration_min") is not None:
+            params = {"t": step["duration_min"] * 60, "N0": 1.0e6, "N": 1.0}
+    elif mf_id == "MF-T10":  # Starch gelat
+        if step.get("temp_c") is not None and step.get("duration_min") is not None:
+            params = {"T_C": step["temp_c"], "time": step["duration_min"] * 60,
+                      "A": 1.0e8, "Ea": 80000.0, "n": 1.5}
+    elif mf_id == "MF-K05":  # Gompertz
+        if step.get("duration_min") is not None:
+            params = {"A": 7.0, "mu_max": 0.5, "lambda": 1.0, "t": step["duration_min"] / 60}
+    else:
+        return None, f"No param recipe for {mf_id}"
+
+    if not params:
+        return None, "no temp_c/duration_min in step"
+
+    out = tool.run(params)
+    return out, None
+
+
+def main():
+    driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "cmind_p1_33_proto"))
+    with driver.session() as sess:
+        print("=" * 90)
+        print("SMOKE TEST: Recipe → Step → PHN → MF → Solver (end-to-end Neo4j + Layer 3)")
+        print("=" * 90)
+
+        # Find 3 recipes with rich chain
+        rich_recipes = find_recipes_with_full_chain(sess, limit=3)
+        print(f"\nFound {len(rich_recipes)} recipes with full chain (≥2 steps with temp_c+duration+PHN+MF):\n")
+
+        for r in rich_recipes:
+            print(f"  - {r['name']} ({r['book']})")
+            print(f"    {r['n_active_steps']} active steps, PHNs: {r['phns']}, MFs: {r['mfs']}")
+
+        print()
+        print("=" * 90)
+        for r in rich_recipes:
+            print(f"\n### Recipe: {r['name']}  [{r['book']}]")
+            print("-" * 90)
+            chain = get_recipe_full_chain(sess, r["recipe_id"])
+            for row in chain:
+                if not row["phn"]: continue  # only show steps with PHN
+                print(f"\nStep {row['order']}: action={row['action']}, temp={row['temp_c']}°C, dur={row['duration_min']}min")
+                print(f"  Text: {row['text'][:120]}...")
+                print(f"  → PHN: {row['phn']} (rule: {row['rule']})")
+                print(f"  → MFs available: {row['mfs']}")
+                for mf in row["mfs"]:
+                    step_dict = {"temp_c": row["temp_c"], "duration_min": row["duration_min"]}
+                    result, err = invoke_mf_with_step_params(mf, step_dict)
+                    if err:
+                        print(f"    {mf}: skipped ({err})")
+                    elif result and result["validity"]["passed"]:
+                        sym = result["result"]["symbol"]
+                        val = result["result"]["value"]
+                        unit = result["result"]["unit"]
+                        print(f"    ✅ {mf} → {sym}={val:.3g} {unit}")
+                    elif result:
+                        print(f"    ⚠️  {mf} → validity FAIL: {result['validity']['issues'][:1]}")
+
+        print()
+        print("=" * 90)
+        print("✅ Smoke test complete — full graph traversal + solver invocation works")
+        print("   Layer 3 reasoning pipeline LIVE")
+        print("=" * 90)
+    driver.close()
+
+
+if __name__ == "__main__":
+    main()
+
+=== scripts/l2b/smoke_test_full_chain.py ===
+#!/usr/bin/env python3
+"""Advanced smoke test: Recipe → Step → PHN ← L0 (evidence) + MF (tool).
+
+For a real recipe, walk:
+  Recipe → Step → PHN  ← L0 (causal evidence)
+                  ← MF (computational tool, invoked with step params)
+"""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from engine.agent.tool_registry import get_mf_tool
+from neo4j import GraphDatabase
+
+
+def show_recipe(session, recipe_id):
+    q_recipe = """
+    MATCH (r:CKG_L2B_TMP_Recipe {recipe_id: $rid})
+    OPTIONAL MATCH (r)-[:USES_INGREDIENT]->(ing:CKG_L2B_TMP_Ingredient)
+    RETURN r.name AS name, r.book_id AS book, r.yield_text AS yield_text,
+           collect(DISTINCT ing.item_raw)[..10] AS ingredients
+    """
+    return session.run(q_recipe, rid=recipe_id).single()
+
+
+def get_full_chain(session, recipe_id):
+    q = """
+    MATCH (r:CKG_L2B_TMP_Recipe {recipe_id: $rid})-[:HAS_STEP]->(s:CKG_L2B_TMP_Step)
+          -[:TRIGGERS_PHN]->(p:CKG_PHN)
+    OPTIONAL MATCH (m:CKG_MF)-[:GOVERNS_PHN]->(p)
+    OPTIONAL MATCH (l:CKG_L0_TMP_Principle)-[:TAGGED_BY_PHN]->(p)
+    WITH s, p, collect(DISTINCT m.mf_id)[..3] AS mfs,
+         collect(DISTINCT l.scientific_statement)[..2] AS l0_evidence,
+         count(DISTINCT l) AS n_l0
+    RETURN s.order AS order, s.text AS text, s.action AS action,
+           s.temp_c AS temp_c, s.duration_min AS duration_min,
+           p.phn_id AS phn,
+           mfs, l0_evidence, n_l0
+    ORDER BY s.order
+    """
+    return list(session.run(q, rid=recipe_id))
+
+
+def find_richest_recipes(session, n=3):
+    q = """
+    MATCH (r:CKG_L2B_TMP_Recipe)-[:HAS_STEP]->(s:CKG_L2B_TMP_Step)
+          -[:TRIGGERS_PHN]->(p:CKG_PHN)<-[:TAGGED_BY_PHN]-(l:CKG_L0_TMP_Principle)
+    WHERE s.temp_c IS NOT NULL
+    WITH r, count(DISTINCT s) AS n_steps, count(DISTINCT p) AS n_phn,
+         count(DISTINCT l) AS n_l0_evidence
+    WHERE n_steps >= 2 AND n_l0_evidence >= 5
+    RETURN r.recipe_id AS recipe_id, r.name AS name, r.book_id AS book,
+           n_steps, n_phn, n_l0_evidence
+    ORDER BY n_l0_evidence DESC, n_steps DESC
+    LIMIT $n
+    """
+    return list(session.run(q, n=n))
+
+
+def invoke_with_step(mf_id, step):
+    try:
+        tool = get_mf_tool(mf_id)
+    except KeyError: return None
+    t = step.get("temp_c"); d = step.get("duration_min")
+    params = None
+    if mf_id == "MF-T03" and t is not None:
+        params = {"A": 1e10, "Ea": 80000, "T_K": t + 273.15}
+    elif mf_id == "MF-T06" and t is not None:
+        params = {"T_d": 65, "dH_d": 400, "T_C": t}
+    elif mf_id == "MF-T10" and t is not None and d is not None:
+        params = {"T_C": t, "time": d*60, "A": 1e8, "Ea": 80000, "n": 1.5}
+    elif mf_id == "MF-K02" and d is not None:
+        params = {"t": d*60, "N0": 1e6, "N": 1.0}
+    if params:
+        out = tool.run(params)
+        return out
+    return None
+
+
+def main():
+    driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "cmind_p1_33_proto"))
+    with driver.session() as sess:
+        print("=" * 95)
+        print("FULL-CHAIN SMOKE TEST: Recipe → Step → PHN ← {L0 evidence, MF tools}")
+        print("=" * 95)
+        print()
+        recipes = find_richest_recipes(sess, 3)
+        if not recipes:
+            print("No recipes with L0+MF rich chain. Trying without L0 evidence filter.")
+            return
+        for r in recipes:
+            print(f"\n### {r['name']} ({r['book']})")
+            print(f"    {r['n_steps']} active steps × {r['n_phn']} PHNs × {r['n_l0_evidence']} L0 evidence")
+            print("-" * 95)
+            for row in get_full_chain(sess, r["recipe_id"]):
+                print(f"\nStep {row['order']}: [{row['action']}] {row['temp_c']}°C × {row['duration_min']}min")
+                print(f"  Text: {(row['text'] or '')[:100]}")
+                print(f"  → PHN: {row['phn']}")
+                if row['l0_evidence']:
+                    print(f"  → L0 evidence ({row['n_l0']} statements):")
+                    for ev in row['l0_evidence'][:2]:
+                        print(f"    · {(ev or '')[:120]}")
+                if row['mfs']:
+                    print(f"  → MF tools available: {row['mfs']}")
+                    for mf in row['mfs']:
+                        out = invoke_with_step(mf, dict(row))
+                        if out and out["validity"]["passed"]:
+                            v = out["result"]["value"]; sym = out["result"]["symbol"]
+                            print(f"    ✅ {mf} → {sym}={v:.3g} {out['result']['unit']}")
+                        elif out:
+                            print(f"    ⚠️  {mf} → {out['validity']['issues'][:1]}")
+        print()
+        print("=" * 95)
+        print("✅ Full graph reasoning chain: Recipe ←→ Step ←→ PHN ←→ {L0, MF, solver}")
+        print("=" * 95)
+    driver.close()
+
+if __name__ == "__main__":
+    main()
+
+=== scripts/l2b/multi_case_examples.py ===
+#!/usr/bin/env python3
+"""Multi-case real-recipe queries through Layer 3 reasoning graph.
+
+Examples:
+1. Find recipes with HIGH temperature + LONG duration → likely Maillard heavy
+2. Find recipes with fermentation → microbial PHN
+3. Find recipes with freeze + thaw → ice crystal PHN
+4. Cross-cuisine comparison: same ingredient + different methods
+"""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from neo4j import GraphDatabase
+
+
+def main():
+    driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "cmind_p1_33_proto"))
+    with driver.session() as sess:
+
+        # ==== Case 1: High-heat Maillard recipes ====
+        print("=" * 90)
+        print("Q1: Top 5 recipes with HIGH-temp Maillard browning (≥180°C bake/roast/sear)")
+        print("=" * 90)
+        q1 = """
+        MATCH (r:CKG_L2B_TMP_Recipe)-[:HAS_STEP]->(s:CKG_L2B_TMP_Step)
+              -[:TRIGGERS_PHN]->(p:CKG_PHN {phn_id: 'maillard_browning'})
+        WHERE s.temp_c >= 180 AND s.duration_min >= 10
+        RETURN r.name AS recipe, r.book_id AS book,
+               s.action AS action, s.temp_c AS temp, s.duration_min AS dur
+        ORDER BY s.temp_c DESC, s.duration_min DESC
+        LIMIT 5
+        """
+        for r in sess.run(q1):
+            print(f"  {(r['recipe'] or 'Unnamed')[:55]:<55} [{(r['book'] or 'unk')[:25]}]")
+            print(f"    Step: {r['action']} {r['temp']}°C × {r['dur']}min")
+
+        # ==== Case 2: Fermentation recipes ====
+        print("\n" + "=" * 90)
+        print("Q2: Top 5 fermentation recipes (microbial PHN)")
+        print("=" * 90)
+        q2 = """
+        MATCH (r:CKG_L2B_TMP_Recipe)-[:HAS_STEP]->(s:CKG_L2B_TMP_Step)
+              -[:TRIGGERS_PHN]->(p:CKG_PHN) WHERE p.phn_id IN ['lactic_acid_fermentation', 'alcoholic_fermentation', 'koji_mold_fermentation', 'acetic_acid_fermentation']
+        RETURN r.name AS recipe, r.book_id AS book,
+               s.action AS action, s.duration_min AS dur
+        ORDER BY s.duration_min DESC
+        LIMIT 5
+        """
+        for r in sess.run(q2):
+            print(f"  {(r['recipe'] or 'Unnamed')[:55]:<55} [{(r['book'] or 'unk')[:25]}]")
+            print(f"    Step: {r['action']} {r['dur']}min")
+
+        # ==== Case 3: Recipes that exercise the MOST MF tools ====
+        print("\n" + "=" * 90)
+        print("Q3: Recipes exercising the MOST MF tools (broad reasoning surface)")
+        print("=" * 90)
+        q3 = """
+        MATCH (r:CKG_L2B_TMP_Recipe)-[:HAS_STEP]->(s:CKG_L2B_TMP_Step)
+              -[:TRIGGERS_PHN]->(p:CKG_PHN)<-[:GOVERNS_PHN]-(m:CKG_MF)
+        WITH r, collect(DISTINCT m.mf_id) AS unique_mfs, count(DISTINCT p) AS n_phn
+        WHERE size(unique_mfs) >= 3 AND r.name IS NOT NULL AND r.name <> ''
+        RETURN r.name AS recipe, r.book_id AS book,
+               unique_mfs, n_phn
+        ORDER BY size(unique_mfs) DESC
+        LIMIT 5
+        """
+        for r in sess.run(q3):
+            print(f"  {(r['recipe'] or 'Unnamed')[:55]:<55} [{(r['book'] or 'unk')[:25]}]")
+            print(f"    {len(r['unique_mfs'])} MFs: {r['unique_mfs']}, {r['n_phn']} PHNs")
+
+        # ==== Case 4: PHN ordering — what gets triggered most ====
+        print("\n" + "=" * 90)
+        print("Q4: Most-triggered PHNs across all recipes")
+        print("=" * 90)
+        q4 = """
+        MATCH (s:CKG_L2B_TMP_Step)-[:TRIGGERS_PHN]->(p:CKG_PHN)
+        RETURN p.phn_id AS phn, p.l0_atom_count AS l0_evidence_count,
+               count(DISTINCT s) AS step_triggers
+        ORDER BY step_triggers DESC
+        LIMIT 10
+        """
+        print(f"  {'PHN':<35} {'Step triggers':>13} {'L0 evidence':>13}")
+        print(f"  {'-'*35} {'-'*13} {'-'*13}")
+        for r in sess.run(q4):
+            print(f"  {r['phn']:<35} {r['step_triggers']:>13} {r['l0_evidence_count']:>13}")
+
+        # ==== Case 5: Cross-book PHN comparison ====
+        print("\n" + "=" * 90)
+        print("Q5: Books with most diverse PHN coverage (Maillard/protein/starch/etc)")
+        print("=" * 90)
+        q5 = """
+        MATCH (r:CKG_L2B_TMP_Recipe)-[:HAS_STEP]->(s:CKG_L2B_TMP_Step)
+              -[:TRIGGERS_PHN]->(p:CKG_PHN)
+        WITH r.book_id AS book, count(DISTINCT p) AS unique_phn,
+             count(DISTINCT r) AS n_recipes
+        RETURN book, unique_phn, n_recipes
+        ORDER BY unique_phn DESC
+        LIMIT 10
+        """
+        print(f"  {'Book':<35} {'unique PHNs':>11} {'Recipes':>9}")
+        print(f"  {'-'*35} {'-'*11} {'-'*9}")
+        for r in sess.run(q5):
+            print(f"  {r['book'][:35]:<35} {r['unique_phn']:>11} {r['n_recipes']:>9}")
+
+        print("\n" + "=" * 90)
+        print("✅ Multi-case queries SUCCESS — Layer 3 graph supports diverse analytical reasoning")
+        print("=" * 90)
+    driver.close()
+
+
+if __name__ == "__main__":
+    main()
+
+=== config/step_phn_rules.yaml ===
+# Step → PHN Mapping Rules
+# Locked 2026-05-13 by cc-lead (D71 design, refreshed for 40 MFs)
+# Each rule: if step matches conditions → emit PHN edge (TRIGGERS_PHN)
+# PHN labels match existing 76 PHN library (config/phn/*.yaml)
+# Each PHN then chains to L0 (P2-Ic3) and MF tools (P2-Ic4)
+
+version: "1.0"
+locked_at: "2026-05-13"
+
+rules:
+  # --- Maillard / Browning ---
+  - id: maillard_dry_heat
+    description: "Dry-heat cooking above 140°C triggers Maillard browning"
+    conditions:
+      action_in: [roast, bake, fry, grill, sear, broil, brown, sauté, saute, pan-fry, deep-fry]
+      temp_c_gte: 140
+    triggers_phn: maillard_browning
+    governed_by_mf: [MF-T03, MF-T01]   # Arrhenius rate + Fourier center temp
+    confidence: 0.95
+
+  - id: maillard_low_water
+    description: "Dehydration/dry-heat brown without explicit temp"
+    conditions:
+      action_in: [toast, dry, crisp, char]
+    triggers_phn: maillard_browning
+    governed_by_mf: [MF-T03]
+    confidence: 0.75
+
+  # --- Caramelization ---
+  - id: caramelize_sugar
+    description: "Sugar/syrup heated > 160°C"
+    conditions:
+      action_in: [caramelize, candy, glaze]
+    triggers_phn: caramelization_sugar
+    governed_by_mf: [MF-T03]
+    confidence: 0.95
+
+  # --- Protein denaturation ---
+  - id: protein_coagulate_egg
+    description: "Egg/protein cooked between 60-85°C"
+    conditions:
+      action_in: [poach, coddle, steam, simmer, sous-vide]
+      temp_c_gte: 60
+      temp_c_lte: 90
+    triggers_phn: protein_denaturation
+    governed_by_mf: [MF-T06, MF-T03]   # van't Hoff sigmoid + rate
+    confidence: 0.92
+
+  - id: protein_high_temp
+    description: "Protein cooked at high temperature (boil/braise)"
+    conditions:
+      action_in: [boil, braise, stew, simmer]
+      temp_c_gte: 90
+    triggers_phn: protein_denaturation
+    governed_by_mf: [MF-T06, MF-T01]
+    confidence: 0.85
+
+  # --- Thermal kill / pasteurization ---
+  - id: thermal_kill_pathogen
+    description: "Heat treatment that kills pathogens"
+    conditions:
+      action_in: [pasteurize, sterilize, boil]
+      temp_c_gte: 60
+      duration_min_gte: 1
+    triggers_phn: thermal_inactivation
+    governed_by_mf: [MF-K02, MF-K04]   # D-value + F-value
+    confidence: 0.90
+
+  # --- Microbial fermentation ---
+  - id: ferment_warm
+    description: "Microbial fermentation at warm temperature"
+    conditions:
+      action_in: [ferment, culture, leaven, proof, sourdough, yogurt, brew]
+    triggers_phn: microbial_fermentation
+    governed_by_mf: [MF-K05, MF-T03]   # Gompertz + rate
+    confidence: 0.90
+
+  # --- Freezing / Ice crystallization ---
+  - id: freeze
+    description: "Water freezing into ice crystals"
+    conditions:
+      action_in: [freeze, chill-freeze]
+      temp_c_lte: 0
+    triggers_phn: ice_crystallization
+    governed_by_mf: [MF-T05]
+    confidence: 0.95
+
+  # --- Diffusion / mass transfer ---
+  - id: marinate_diffusion
+    description: "Solute diffusion into food (marinade/brine/cure)"
+    conditions:
+      action_in: [marinate, brine, cure, pickle, soak]
+    triggers_phn: mass_transfer_diffusion
+    governed_by_mf: [MF-M01]   # Fick 2nd
+    confidence: 0.85
+
+  # --- Drying / dehydration ---
+  - id: drying
+    description: "Water removal from food"
+    conditions:
+      action_in: [dry, dehydrate, desiccate]
+    triggers_phn: dehydration_moisture
+    governed_by_mf: [MF-M01, MF-M02]   # Fick + GAB isotherm
+    confidence: 0.90
+
+  # --- Starch gelatinization ---
+  - id: starch_gel
+    description: "Starch hydration + heat → gelatinization"
+    conditions:
+      action_in: [boil, simmer, steam, cook]
+      ingredient_contains_any: [rice, flour, starch, pasta, potato]
+      temp_c_gte: 60
+    triggers_phn: starch_gelatinization
+    governed_by_mf: [MF-T10]
+    confidence: 0.90
+
+  # --- Emulsion ---
+  - id: emulsify_mechanical
+    description: "Mechanical emulsion (mayonnaise, vinaigrette)"
+    conditions:
+      action_in: [whisk, blend, emulsify, beat]
+    triggers_phn: emulsion_formation
+    governed_by_mf: [MF-C01, MF-R01]   # Stokes + Power Law
+    confidence: 0.80
+
+  # --- Microwave heating ---
+  - id: microwave_heating
+    description: "Microwave/RF heating"
+    conditions:
+      action_in: [microwave, nuke, mw]
+    triggers_phn: dielectric_heating
+    governed_by_mf: [MF-T07, MF-T01]
+    confidence: 0.95
+
+  # --- Aroma volatile release ---
+  - id: aroma_release
+    description: "Volatile aroma release on heating"
+    conditions:
+      action_in: [fry, sauté, sizzle, smoke, infuse]
+    triggers_phn: aroma_volatilization
+    governed_by_mf: [MF-M05]   # Henry law
+    confidence: 0.75
+
+  # --- Rheology change (paste/dough) ---
+  - id: rheology_knead
+    description: "Mechanical work on dough/paste"
+    conditions:
+      action_in: [knead, fold, pound, mash]
+    triggers_phn: rheology_change
+    governed_by_mf: [MF-R01, MF-R05]
+    confidence: 0.70
+
+  # --- Acid-base reactions ---
+  - id: acid_curd
+    description: "Acid-induced protein coagulation (curdling)"
+    conditions:
+      action_in: [curdle, sour, acidify]
+    triggers_phn: acid_coagulation
+    governed_by_mf: [MF-M04, MF-T06]   # Henderson-Hasselbalch + denat
+    confidence: 0.85
+
+=== output/l2b/etl/seed_recipes.cypher ===
+// P2-Lb1: Load 23,584 recipes + 80,056 steps + 22,212 ingredients + 200K edges
+// Temporary namespace: CKG_L2B_TMP_* (migrate to CKG_L2B_* after architect schema lock)
+
+// Unique constraints
+CREATE CONSTRAINT ckg_l2b_tmp_recipe_id_unique IF NOT EXISTS
+  FOR (r:CKG_L2B_TMP_Recipe) REQUIRE r.recipe_id IS UNIQUE;
+CREATE CONSTRAINT ckg_l2b_tmp_step_id_unique IF NOT EXISTS
+  FOR (s:CKG_L2B_TMP_Step) REQUIRE s.step_id IS UNIQUE;
+CREATE CONSTRAINT ckg_l2b_tmp_ingredient_slug_unique IF NOT EXISTS
+  FOR (i:CKG_L2B_TMP_Ingredient) REQUIRE i.ingredient_slug IS UNIQUE;
+
+// Recipes
+LOAD CSV WITH HEADERS FROM 'file:///recipes.csv' AS row
+CREATE (:CKG_L2B_TMP_Recipe {
+  recipe_id: row.recipe_id,
+  name: row.name,
+  book_id: row.book_id,
+  yield_text: row.yield_text,
+  recipe_type: row.recipe_type,
+  n_steps: toInteger(row.n_steps),
+  n_ingredients: toInteger(row.n_ingredients)
+});
+
+// Steps
+LOAD CSV WITH HEADERS FROM 'file:///steps.csv' AS row
+CREATE (:CKG_L2B_TMP_Step {
+  step_id: row.step_id,
+  recipe_id: row.recipe_id,
+  order: toInteger(row.order),
+  text: row.text,
+  action: row.action,
+  duration_min: CASE WHEN row.duration_min = '' THEN NULL ELSE toFloat(row.duration_min) END,
+  temp_c: CASE WHEN row.temp_c = '' THEN NULL ELSE toFloat(row.temp_c) END
+});
+
+// Ingredients (TMP — to be merged with L2a after P2-Ic5 fuzzy match)
+LOAD CSV WITH HEADERS FROM 'file:///ingredients.csv' AS row
+CREATE (:CKG_L2B_TMP_Ingredient {
+  ingredient_slug: row.ingredient_slug,
+  item_raw: row.item_raw
+});
+
+// HAS_STEP edges
+LOAD CSV WITH HEADERS FROM 'file:///has_step_edges.csv' AS row
+MATCH (r:CKG_L2B_TMP_Recipe {recipe_id: row.recipe_id})
+MATCH (s:CKG_L2B_TMP_Step {step_id: row.step_id})
+CREATE (r)-[:HAS_STEP {order: toInteger(row.order)}]->(s);
+
+// USES_INGREDIENT edges
+LOAD CSV WITH HEADERS FROM 'file:///uses_ingredient_edges.csv' AS row
+MATCH (r:CKG_L2B_TMP_Recipe {recipe_id: row.recipe_id})
+MATCH (i:CKG_L2B_TMP_Ingredient {ingredient_slug: row.ingredient_slug})
+CREATE (r)-[:USES_INGREDIENT {
+  qty: row.qty,
+  unit: row.unit,
+  note: row.note
+}]->(i);
+
+// Indices
+CREATE INDEX ckg_l2b_recipe_book IF NOT EXISTS FOR (r:CKG_L2B_TMP_Recipe) ON (r.book_id);
+CREATE INDEX ckg_l2b_step_action IF NOT EXISTS FOR (s:CKG_L2B_TMP_Step) ON (s.action);
+CREATE INDEX ckg_l2b_step_temp IF NOT EXISTS FOR (s:CKG_L2B_TMP_Step) ON (s.temp_c);
+
+=== output/l2b/etl/seed_phn_mf_edges.cypher ===
+// P2-Lb1 Phase 2: PHN nodes + MF nodes + edges
+
+// Constraints
+CREATE CONSTRAINT ckg_phn_id_unique IF NOT EXISTS FOR (p:CKG_PHN) REQUIRE p.phn_id IS UNIQUE;
+CREATE CONSTRAINT ckg_mf_id_unique IF NOT EXISTS FOR (m:CKG_MF) REQUIRE m.mf_id IS UNIQUE;
+
+// PHN nodes (MERGE so existing 5 P1-33 seeds preserved)
+LOAD CSV WITH HEADERS FROM 'file:///phn_nodes.csv' AS row
+MERGE (p:CKG_PHN {phn_id: row.phn_id})
+SET p.name_en = row.name_en,
+    p.l0_atom_count = toInteger(row.l0_atom_count);
+
+// MF nodes (MERGE)
+LOAD CSV WITH HEADERS FROM 'file:///mf_nodes.csv' AS row
+MERGE (m:CKG_MF {mf_id: row.mf_id})
+SET m.canonical_name = row.canonical_name,
+    m.n_inputs = toInteger(row.n_inputs);
+
+// L0 → PHN edges (only for L0 atoms already in graph)
+LOAD CSV WITH HEADERS FROM 'file:///l0_phn_edges.csv' AS row
+MATCH (l:CKG_L0_Principle {l0_atom_id: row.l0_atom_id})
+MATCH (p:CKG_PHN {phn_id: row.phn_id})
+MERGE (l)-[r:TAGGED_BY_PHN]->(p)
+SET r.score = toFloat(row.score);
+
+// MF → PHN edges (GOVERNS_PHN)
+LOAD CSV WITH HEADERS FROM 'file:///mf_phn_edges.csv' AS row
+MATCH (m:CKG_MF {mf_id: row.mf_id})
+MATCH (p:CKG_PHN {phn_id: row.phn_id})
+MERGE (m)-[:GOVERNS_PHN]->(p);
+
+// Step → PHN edges (TRIGGERS_PHN from rules)
+LOAD CSV WITH HEADERS FROM 'file:///triggers_phn_edges.csv' AS row
+MATCH (s:CKG_L2B_TMP_Step {step_id: row.step_id})
+MATCH (p:CKG_PHN {phn_id: row.phn_id})
+MERGE (s)-[r:TRIGGERS_PHN]->(p)
+SET r.rule_id = row.rule_id, r.confidence = toFloat(row.confidence), r.governed_by_mfs = row.governed_by_mfs;
+
+=== output/l2b/etl/seed_l0_tmp.cypher ===
+CREATE CONSTRAINT ckg_l0_tmp_atom_id_unique IF NOT EXISTS
+  FOR (l:CKG_L0_TMP_Principle) REQUIRE l.atom_id IS UNIQUE;
+
+// L0 TMP nodes
+LOAD CSV WITH HEADERS FROM 'file:///l0_tmp_nodes.csv' AS row
+CREATE (:CKG_L0_TMP_Principle {
+  atom_id: row.atom_id,
+  scientific_statement: row.scientific_statement,
+  causal_chain_text: row.causal_chain_text,
+  domain: row.domain,
+  confidence: toFloat(row.confidence),
+  book_id: row.book_id,
+  n_phn: toInteger(row.n_phn)
+});
+
+// L0 TMP → PHN edges
+LOAD CSV WITH HEADERS FROM 'file:///l0_tmp_phn_edges.csv' AS row
+MATCH (l:CKG_L0_TMP_Principle {atom_id: row.atom_id})
+MATCH (p:CKG_PHN {phn_id: row.phn_id})
+CREATE (l)-[:TAGGED_BY_PHN {score: toFloat(row.score)}]->(p);
+
+// Index
+CREATE INDEX ckg_l0_tmp_domain IF NOT EXISTS FOR (l:CKG_L0_TMP_Principle) ON (l.domain);
+
+Now provide the review.
+codex
+Reviewing each ETL and Cypher artifact against the six focus areas. I’m checking for correctness first, then whether the graph writes are actually safe and repeatable.
+codex
+## extract_recipes.py
+**VERDICT:** REJECT
+
+**BUGS**
+- P1 (lines 94-110): The comment says `ingredient_rows = []   # unique per (recipe_id, ingredient_slug)`, but the implementation does not deduplicate `USES_INGREDIENT` per `(recipe_id, ingredient_slug)`. Repeated ingredients in one recipe will emit multiple parallel edges, which breaks edge cardinality assumptions and can inflate downstream ingredient-based rule matches.
+- P1 (lines 97-104): Ingredient identity is globally collapsed to `ingredient_slug = slugify(item)`. This can merge distinct ingredients that normalize to the same slug, causing schema-level data corruption in `CKG_L2B_TMP_Ingredient`.
+- P2 (lines 50-54): Malformed JSON lines are silently skipped with no count or error report. On a large corpus this can hide partial extraction failures.
+
+**IMPROVEMENTS**
+- Validate uniqueness explicitly before write: fail if any duplicate `recipe_id` or `step_id` is detected.
+- Deduplicate `USES_INGREDIENT` edges per `(recipe_id, ingredient_slug)` or make the multiplicity intentional and documented.
+- Add extraction metrics for skipped JSON lines, skipped empty ingredients, and duplicate slugs.
+- Move `import hashlib` to module scope.
+- If `step.order` is optional/noisy upstream, consider normalizing to `step_idx + 1` and preserving upstream order separately.
+
+## apply_step_phn_rules.py
+**VERDICT:** REJECT
+
+**BUGS**
+- P0 (lines 17-31, 32-39): `float(step.get("temp_c", "") or "nan")` and the same pattern for duration produce `nan`, not `None`. Because `nan < x` and `nan > x` are both false, steps with missing `temp_c` or `duration_min` incorrectly pass rules that require those thresholds. This will massively over-create `TRIGGERS_PHN` edges.
+- P1 (lines 58-70): The script emits multiple rows for the same `(step_id, phn_id)` when more than one rule maps to the same PHN. The downstream Cypher `MERGE (s)-[r:TRIGGERS_PHN]->(p)` then overwrites `rule_id/confidence/governed_by_mfs` with whichever row is processed last, losing provenance non-deterministically.
+- P1 (lines 41-47): `ingredient_contains_any` uses substring matching against a joined slug string. That can over-match unrelated ingredients and under-match ingredient variants; it is not a safe basis for food-science rule firing.
+- P2 (lines 62-69, 80): `matched_steps` counts rule matches, not distinct matched steps, so the summary line `Matched steps (≥1 PHN)` is incorrect.
+
+**IMPROVEMENTS**
+- Parse numeric fields with an explicit helper that returns `None` for empty/invalid values.
+- Deduplicate to one row per `(step_id, phn_id)` and preserve all triggering rules in a list or separate provenance CSV.
+- Validate every `triggers_phn` and `governed_by_mf` against the PHN and MF registries before writing output.
+- Emit counters for unmatched rules and recipes with zero PHN coverage.
+
+## extract_phn_mf_edges.py
+**VERDICT:** REJECT
+
+**BUGS**
+- P0 (lines 15-29): `l0_to_phn` uses `source_chunk_id` / `_atom_id` / `id` directly as `l0_atom_id`, but `extract_l0_tmp.py` constructs L0 temp IDs as `"{book}__{source_chunk_id}"`. This ID scheme is inconsistent, so L0→PHN edge matching is unreliable across the pipeline.
+- P0 (paired with `seed_phn_mf_edges.cypher`): The script writes `l0_atom_id`, but the Cypher matches `(:CKG_L0_Principle {l0_atom_id: row.l0_atom_id})`. If the existing nodes use a different property name or the composite ID format from `extract_l0_tmp.py`, those edges silently drop.
+- P1 (lines 48-55): `governed_by_mf` values from YAML are trusted blindly. Any typo or stale alias becomes a silently skipped edge in Cypher.
+- P2 (lines 17-29): `except: pass` swallows routing parse/data errors completely.
+
+**IMPROVEMENTS**
+- Centralize atom ID construction in one shared function and reuse it here and in `extract_l0_tmp.py`.
+- Fail fast if a rule references an MF not present in `solver_bounds.yaml`.
+- Write CSVs atomically, as the other ETL scripts do.
+- Remove the docstring claim that this script builds `Step→PHN` edges; it does not.
+
+## extract_l0_tmp.py
+**VERDICT:** REJECT
+
+**BUGS**
+- P1 (lines 17-24): `seen_atom_ids` is updated before checking `tags`. If the first row for an atom has no tags and a later row does, the later tagged row is dropped. That loses valid L0 atoms and edges.
+- P1 (lines 20-22): If `source_chunk_id` is missing, every atom in a book collapses to `"{book}__"`, creating accidental ID collisions.
+- P2 (lines 13-16): Malformed JSON is silently skipped with no audit trail.
+
+**IMPROVEMENTS**
+- Only mark an atom as seen after deciding that the row is valid and worth emitting.
+- Validate required fields (`_book_id`, `source_chunk_id`, `phenomenon_tags`) and count rejects by reason.
+- Use the same atom-ID builder as `extract_phn_mf_edges.py` and the seeding Cypher.
+
+## smoke_test_recipe_reasoning.py
+**VERDICT:** APPROVE_WITH_NOTES
+
+**BUGS**
+- P1 (lines 22-36): The query only finds recipes where steps have both `temp_c` and `duration_min`. That is a valid narrow smoke test, but it systematically misses recipes with real PHN/MF chains driven by action/ingredient-only rules.
+- P2 (lines 82-89): The script assumes every tool result has `validity.passed` and `result.{symbol,value,unit}`. A malformed or exceptional tool response will crash the smoke test instead of being reported.
+- P2 (line 93): Hardcoded Neo4j credentials are embedded in the script.
+
+**IMPROVEMENTS**
+- Add a second smoke path that validates action-only and ingredient-gated rules.
+- Guard solver outputs structurally before dereferencing fields.
+- Read Neo4j connection info from environment variables.
+
+## smoke_test_full_chain.py
+**VERDICT:** REJECT
+
+**BUGS**
+- P1 (lines 47-51, 78-81): The script says it will retry without the L0 evidence filter, but it returns immediately and never runs a fallback query. The smoke test behavior does not match its own message.
+- P1 (lines 14-20): `show_recipe()` is dead code. The script does not actually use the recipe-level ingredient context it claims to surface.
+- P2 (lines 83-92): Solver outputs are not shape-validated before use.
+- P2 (line 72): Hardcoded Neo4j credentials are embedded in the script.
+
+**IMPROVEMENTS**
+- Implement the actual fallback query path.
+- Include a branch that explicitly verifies absence cases: recipes with PHN/MF but no L0 evidence.
+- Validate tool outputs and report skipped MFs cleanly.
+
+## multi_case_examples.py
+**VERDICT:** REJECT
+
+**BUGS**
+- P1 (lines 32-39): Query 2 searches for PHNs `lactic_acid_fermentation`, `alcoholic_fermentation`, `koji_mold_fermentation`, and `acetic_acid_fermentation`, but `step_phn_rules.yaml` emits `microbial_fermentation`. This query will under-match or return zero despite valid fermentation edges.
+- P2 (lines 17-28): Query 1 requires `temp_c >= 180 AND duration_min >= 10`, which excludes many canonical Maillard-heavy steps such as short sears or wok frying. That is fine as a heuristic demo, but it is not a good general “Maillard recipes” query.
+- P2 (line 14): Hardcoded Neo4j credentials are embedded in the script.
+
+**IMPROVEMENTS**
+- Align Query 2 to actual emitted PHN IDs, or expand the rules to emit the more specific fermentation PHNs.
+- For Query 1, consider ranking by a heuristic score instead of a hard cutoff.
+- Add a query that checks for duplicate `TRIGGERS_PHN` provenance collisions.
+
+## step_phn_rules.yaml
+**VERDICT:** REJECT
+
+**BUGS**
+- P1 (`caramelize_sugar`): The description says sugar/syrup heated `>160°C`, but the rule has no temperature condition. Any step whose action normalizes to `caramelize/candy/glaze` will fire regardless of actual heat exposure.
+- P1 (`ferment_warm`): The description says “warm temperature,” but the rule has no temperature constraint. It also collapses very different processes into one PHN.
+- P1 (`protein_coagulate_egg`, `protein_high_temp`): Both rules fire purely from action+temperature, with no ingredient gating. Vegetable simmering, braising, or steaming will over-trigger `protein_denaturation`.
+- P1 (`emulsify_mechanical`): Mechanical actions alone are insufficient evidence for `emulsion_formation`. `blend` and `beat` will over-match many non-emulsion steps.
+- P1 (`acid_curd`): `sour` and `acidify` do not reliably indicate acid-induced coagulation; this rule will over-match fermentation and flavor-adjustment steps.
+- P1 (`maillard_low_water`): `char` is not a safe synonym for Maillard browning; it often indicates pyrolysis/combustion rather than Maillard chemistry.
+- P2 (`starch_gel`): Ingredient gating is too narrow for real starch systems and is based on substring matching, so it both misses true positives and over-matches noisy slugs.
+
+**IMPROVEMENTS**
+- Separate “process detected” from “PHN inferred with scientific confidence”; some rules should emit lower-confidence candidate PHNs or require ingredient evidence.
+- Add ingredient gates for protein and emulsion rules.
+- Split `microbial_fermentation` into more specific PHNs only when ingredient/process context supports that distinction.
+- Add explicit validation that every rule target PHN exists in the PHN library.
+
+## seed_recipes.cypher
+**VERDICT:** REJECT
+
+**BUGS**
+- P0 (recipes/steps/ingredients loads and both edge loads): The script uses `CREATE` everywhere. It is not idempotent. Re-running it will either fail on uniqueness constraints for nodes or duplicate relationships.
+- P1 (entire file): Each `LOAD CSV` is a separate non-atomic write unit. A partial failure leaves the graph in an inconsistent state with no rollback across files.
+- P1 (entire file): There is no batching strategy (`CALL { ... } IN TRANSACTIONS` / equivalent). With this data size, memory pressure and transaction-size problems are realistic.
+- P1 (edge loads): `MATCH` failures on missing `recipe_id`, `step_id`, or `ingredient_slug` silently skip rows, so edge loss is invisible.
+
+**IMPROVEMENTS**
+- Replace node `CREATE` with `MERGE` or make the load explicitly one-shot after a controlled purge.
+- Replace relationship `CREATE` with `MERGE` keyed on the natural endpoints and, if needed, edge properties.
+- Add post-load validation queries for counts and orphan detection.
+- Use transactional batching for each CSV import.
+
+## seed_phn_mf_edges.cypher
+**VERDICT:** REJECT
+
+**BUGS**
+- P0 (L0→PHN load): `MATCH (l:CKG_L0_Principle {l0_atom_id: row.l0_atom_id})` is inconsistent with the ID/property conventions used elsewhere in this pipeline. This is very likely to drop most or all `TAGGED_BY_PHN` edges.
+- P1 (Step→PHN load): `MERGE (s)-[r:TRIGGERS_PHN]->(p)` on only `(step, phn)` means multiple rule rows for the same pair overwrite `rule_id/confidence/governed_by_mfs`. Provenance is lost.
+- P1 (entire file): Missing-node `MATCH` operations silently skip rows. If PHN IDs or MF IDs drift, the import “succeeds” with incomplete edges.
+- P1 (entire file): No transactional batching for large edge sets.
+
+**IMPROVEMENTS**
+- Fix the L0 property name and ID format to match the seeded graph.
+- If multiple rules can support the same `(step, phn)`, model rule provenance separately instead of storing a single `rule_id` on the edge.
+- Add validation queries after each load for missing PHNs, missing MFs, and unmatched step IDs.
+
+## seed_l0_tmp.cypher
+**VERDICT:** REJECT
+
+**BUGS**
+- P0 (node load): `CREATE (:CKG_L0_TMP_Principle ...)` is not idempotent and will fail on rerun because of the uniqueness constraint.
+- P0 (edge load): `CREATE (l)-[:TAGGED_BY_PHN {score: ...}]->(p)` duplicates edges on every rerun.
+- P1 (entire file): No batching/transaction control for bulk load.
+- P1 (edge load): Missing PHN matches silently skip rows.
+
+**IMPROVEMENTS**
+- Use `MERGE` for nodes and relationships if reruns are expected.
+- Add a uniqueness strategy for `TAGGED_BY_PHN` if score updates are expected.
+- Add post-load checks for orphan L0 temp nodes and unmatched PHN references.
+tokens used
+21,545
+## extract_recipes.py
+**VERDICT:** REJECT
+
+**BUGS**
+- P1 (lines 94-110): The comment says `ingredient_rows = []   # unique per (recipe_id, ingredient_slug)`, but the implementation does not deduplicate `USES_INGREDIENT` per `(recipe_id, ingredient_slug)`. Repeated ingredients in one recipe will emit multiple parallel edges, which breaks edge cardinality assumptions and can inflate downstream ingredient-based rule matches.
+- P1 (lines 97-104): Ingredient identity is globally collapsed to `ingredient_slug = slugify(item)`. This can merge distinct ingredients that normalize to the same slug, causing schema-level data corruption in `CKG_L2B_TMP_Ingredient`.
+- P2 (lines 50-54): Malformed JSON lines are silently skipped with no count or error report. On a large corpus this can hide partial extraction failures.
+
+**IMPROVEMENTS**
+- Validate uniqueness explicitly before write: fail if any duplicate `recipe_id` or `step_id` is detected.
+- Deduplicate `USES_INGREDIENT` edges per `(recipe_id, ingredient_slug)` or make the multiplicity intentional and documented.
+- Add extraction metrics for skipped JSON lines, skipped empty ingredients, and duplicate slugs.
+- Move `import hashlib` to module scope.
+- If `step.order` is optional/noisy upstream, consider normalizing to `step_idx + 1` and preserving upstream order separately.
+
+## apply_step_phn_rules.py
+**VERDICT:** REJECT
+
+**BUGS**
+- P0 (lines 17-31, 32-39): `float(step.get("temp_c", "") or "nan")` and the same pattern for duration produce `nan`, not `None`. Because `nan < x` and `nan > x` are both false, steps with missing `temp_c` or `duration_min` incorrectly pass rules that require those thresholds. This will massively over-create `TRIGGERS_PHN` edges.
+- P1 (lines 58-70): The script emits multiple rows for the same `(step_id, phn_id)` when more than one rule maps to the same PHN. The downstream Cypher `MERGE (s)-[r:TRIGGERS_PHN]->(p)` then overwrites `rule_id/confidence/governed_by_mfs` with whichever row is processed last, losing provenance non-deterministically.
+- P1 (lines 41-47): `ingredient_contains_any` uses substring matching against a joined slug string. That can over-match unrelated ingredients and under-match ingredient variants; it is not a safe basis for food-science rule firing.
+- P2 (lines 62-69, 80): `matched_steps` counts rule matches, not distinct matched steps, so the summary line `Matched steps (≥1 PHN)` is incorrect.
+
+**IMPROVEMENTS**
+- Parse numeric fields with an explicit helper that returns `None` for empty/invalid values.
+- Deduplicate to one row per `(step_id, phn_id)` and preserve all triggering rules in a list or separate provenance CSV.
+- Validate every `triggers_phn` and `governed_by_mf` against the PHN and MF registries before writing output.
+- Emit counters for unmatched rules and recipes with zero PHN coverage.
+
+## extract_phn_mf_edges.py
+**VERDICT:** REJECT
+
+**BUGS**
+- P0 (lines 15-29): `l0_to_phn` uses `source_chunk_id` / `_atom_id` / `id` directly as `l0_atom_id`, but `extract_l0_tmp.py` constructs L0 temp IDs as `"{book}__{source_chunk_id}"`. This ID scheme is inconsistent, so L0→PHN edge matching is unreliable across the pipeline.
+- P0 (paired with `seed_phn_mf_edges.cypher`): The script writes `l0_atom_id`, but the Cypher matches `(:CKG_L0_Principle {l0_atom_id: row.l0_atom_id})`. If the existing nodes use a different property name or the composite ID format from `extract_l0_tmp.py`, those edges silently drop.
+- P1 (lines 48-55): `governed_by_mf` values from YAML are trusted blindly. Any typo or stale alias becomes a silently skipped edge in Cypher.
+- P2 (lines 17-29): `except: pass` swallows routing parse/data errors completely.
+
+**IMPROVEMENTS**
+- Centralize atom ID construction in one shared function and reuse it here and in `extract_l0_tmp.py`.
+- Fail fast if a rule references an MF not present in `solver_bounds.yaml`.
+- Write CSVs atomically, as the other ETL scripts do.
+- Remove the docstring claim that this script builds `Step→PHN` edges; it does not.
+
+## extract_l0_tmp.py
+**VERDICT:** REJECT
+
+**BUGS**
+- P1 (lines 17-24): `seen_atom_ids` is updated before checking `tags`. If the first row for an atom has no tags and a later row does, the later tagged row is dropped. That loses valid L0 atoms and edges.
+- P1 (lines 20-22): If `source_chunk_id` is missing, every atom in a book collapses to `"{book}__"`, creating accidental ID collisions.
+- P2 (lines 13-16): Malformed JSON is silently skipped with no audit trail.
+
+**IMPROVEMENTS**
+- Only mark an atom as seen after deciding that the row is valid and worth emitting.
+- Validate required fields (`_book_id`, `source_chunk_id`, `phenomenon_tags`) and count rejects by reason.
+- Use the same atom-ID builder as `extract_phn_mf_edges.py` and the seeding Cypher.
+
+## smoke_test_recipe_reasoning.py
+**VERDICT:** APPROVE_WITH_NOTES
+
+**BUGS**
+- P1 (lines 22-36): The query only finds recipes where steps have both `temp_c` and `duration_min`. That is a valid narrow smoke test, but it systematically misses recipes with real PHN/MF chains driven by action/ingredient-only rules.
+- P2 (lines 82-89): The script assumes every tool result has `validity.passed` and `result.{symbol,value,unit}`. A malformed or exceptional tool response will crash the smoke test instead of being reported.
+- P2 (line 93): Hardcoded Neo4j credentials are embedded in the script.
+
+**IMPROVEMENTS**
+- Add a second smoke path that validates action-only and ingredient-gated rules.
+- Guard solver outputs structurally before dereferencing fields.
+- Read Neo4j connection info from environment variables.
+
+## smoke_test_full_chain.py
+**VERDICT:** REJECT
+
+**BUGS**
+- P1 (lines 47-51, 78-81): The script says it will retry without the L0 evidence filter, but it returns immediately and never runs a fallback query. The smoke test behavior does not match its own message.
+- P1 (lines 14-20): `show_recipe()` is dead code. The script does not actually use the recipe-level ingredient context it claims to surface.
+- P2 (lines 83-92): Solver outputs are not shape-validated before use.
+- P2 (line 72): Hardcoded Neo4j credentials are embedded in the script.
+
+**IMPROVEMENTS**
+- Implement the actual fallback query path.
+- Include a branch that explicitly verifies absence cases: recipes with PHN/MF but no L0 evidence.
+- Validate tool outputs and report skipped MFs cleanly.
+
+## multi_case_examples.py
+**VERDICT:** REJECT
+
+**BUGS**
+- P1 (lines 32-39): Query 2 searches for PHNs `lactic_acid_fermentation`, `alcoholic_fermentation`, `koji_mold_fermentation`, and `acetic_acid_fermentation`, but `step_phn_rules.yaml` emits `microbial_fermentation`. This query will under-match or return zero despite valid fermentation edges.
+- P2 (lines 17-28): Query 1 requires `temp_c >= 180 AND duration_min >= 10`, which excludes many canonical Maillard-heavy steps such as short sears or wok frying. That is fine as a heuristic demo, but it is not a good general “Maillard recipes” query.
+- P2 (line 14): Hardcoded Neo4j credentials are embedded in the script.
+
+**IMPROVEMENTS**
+- Align Query 2 to actual emitted PHN IDs, or expand the rules to emit the more specific fermentation PHNs.
+- For Query 1, consider ranking by a heuristic score instead of a hard cutoff.
+- Add a query that checks for duplicate `TRIGGERS_PHN` provenance collisions.
+
+## step_phn_rules.yaml
+**VERDICT:** REJECT
+
+**BUGS**
+- P1 (`caramelize_sugar`): The description says sugar/syrup heated `>160°C`, but the rule has no temperature condition. Any step whose action normalizes to `caramelize/candy/glaze` will fire regardless of actual heat exposure.
+- P1 (`ferment_warm`): The description says “warm temperature,” but the rule has no temperature constraint. It also collapses very different processes into one PHN.
+- P1 (`protein_coagulate_egg`, `protein_high_temp`): Both rules fire purely from action+temperature, with no ingredient gating. Vegetable simmering, braising, or steaming will over-trigger `protein_denaturation`.
+- P1 (`emulsify_mechanical`): Mechanical actions alone are insufficient evidence for `emulsion_formation`. `blend` and `beat` will over-match many non-emulsion steps.
+- P1 (`acid_curd`): `sour` and `acidify` do not reliably indicate acid-induced coagulation; this rule will over-match fermentation and flavor-adjustment steps.
+- P1 (`maillard_low_water`): `char` is not a safe synonym for Maillard browning; it often indicates pyrolysis/combustion rather than Maillard chemistry.
+- P2 (`starch_gel`): Ingredient gating is too narrow for real starch systems and is based on substring matching, so it both misses true positives and over-matches noisy slugs.
+
+**IMPROVEMENTS**
+- Separate “process detected” from “PHN inferred with scientific confidence”; some rules should emit lower-confidence candidate PHNs or require ingredient evidence.
+- Add ingredient gates for protein and emulsion rules.
+- Split `microbial_fermentation` into more specific PHNs only when ingredient/process context supports that distinction.
+- Add explicit validation that every rule target PHN exists in the PHN library.
+
+## seed_recipes.cypher
+**VERDICT:** REJECT
+
+**BUGS**
+- P0 (recipes/steps/ingredients loads and both edge loads): The script uses `CREATE` everywhere. It is not idempotent. Re-running it will either fail on uniqueness constraints for nodes or duplicate relationships.
+- P1 (entire file): Each `LOAD CSV` is a separate non-atomic write unit. A partial failure leaves the graph in an inconsistent state with no rollback across files.
+- P1 (entire file): There is no batching strategy (`CALL { ... } IN TRANSACTIONS` / equivalent). With this data size, memory pressure and transaction-size problems are realistic.
+- P1 (edge loads): `MATCH` failures on missing `recipe_id`, `step_id`, or `ingredient_slug` silently skip rows, so edge loss is invisible.
+
+**IMPROVEMENTS**
+- Replace node `CREATE` with `MERGE` or make the load explicitly one-shot after a controlled purge.
+- Replace relationship `CREATE` with `MERGE` keyed on the natural endpoints and, if needed, edge properties.
+- Add post-load validation queries for counts and orphan detection.
+- Use transactional batching for each CSV import.
+
+## seed_phn_mf_edges.cypher
+**VERDICT:** REJECT
+
+**BUGS**
+- P0 (L0→PHN load): `MATCH (l:CKG_L0_Principle {l0_atom_id: row.l0_atom_id})` is inconsistent with the ID/property conventions used elsewhere in this pipeline. This is very likely to drop most or all `TAGGED_BY_PHN` edges.
+- P1 (Step→PHN load): `MERGE (s)-[r:TRIGGERS_PHN]->(p)` on only `(step, phn)` means multiple rule rows for the same pair overwrite `rule_id/confidence/governed_by_mfs`. Provenance is lost.
+- P1 (entire file): Missing-node `MATCH` operations silently skip rows. If PHN IDs or MF IDs drift, the import “succeeds” with incomplete edges.
+- P1 (entire file): No transactional batching for large edge sets.
+
+**IMPROVEMENTS**
+- Fix the L0 property name and ID format to match the seeded graph.
+- If multiple rules can support the same `(step, phn)`, model rule provenance separately instead of storing a single `rule_id` on the edge.
+- Add validation queries after each load for missing PHNs, missing MFs, and unmatched step IDs.
+
+## seed_l0_tmp.cypher
+**VERDICT:** REJECT
+
+**BUGS**
+- P0 (node load): `CREATE (:CKG_L0_TMP_Principle ...)` is not idempotent and will fail on rerun because of the uniqueness constraint.
+- P0 (edge load): `CREATE (l)-[:TAGGED_BY_PHN {score: ...}]->(p)` duplicates edges on every rerun.
+- P1 (entire file): No batching/transaction control for bulk load.
+- P1 (edge load): Missing PHN matches silently skip rows.
+
+**IMPROVEMENTS**
+- Use `MERGE` for nodes and relationships if reruns are expected.
+- Add a uniqueness strategy for `TAGGED_BY_PHN` if score updates are expected.
+- Add post-load checks for orphan L0 temp nodes and unmatched PHN references.
