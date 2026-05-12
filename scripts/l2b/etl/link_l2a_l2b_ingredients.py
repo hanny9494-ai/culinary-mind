@@ -92,7 +92,7 @@ def main():
             else:
                 # Try common patterns by suffix match
                 slug_parts = slug.split("_")
-                for n in range(2, min(len(slug_parts), 4) + 1):
+                for n in range(1, min(len(slug_parts), 4) + 1):  # P1 fix Codex 4th: include 1-token suffix (organic_chicken→chicken)
                     # Try last n tokens as a canonical_id candidate
                     candidate = "_".join(slug_parts[-n:])
                     if candidate in l2a_by_canonical:

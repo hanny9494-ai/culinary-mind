@@ -1,0 +1,1258 @@
+Reading additional input from stdin...
+OpenAI Codex v0.128.0-alpha.1 (research preview)
+--------
+workdir: /Users/jeff/culinary-mind
+model: gpt-5.4
+provider: openai
+approval: never
+sandbox: danger-full-access
+reasoning effort: medium
+reasoning summaries: none
+session id: 019e1d56-058a-7e80-a94d-b5d1e81f06d4
+--------
+user
+Code reviewer. Review the following new scripts for the food-science knowledge graph:
+
+Focus on:
+1. Data integrity (dedup, no spurious cross-product, no NaN passes)
+2. Cypher idempotency (MERGE not CREATE)
+3. Match logic correctness
+4. Edge cases (missing fields, empty strings)
+5. Production hardening
+
+Output strict markdown. Start with `## extract_l0_tmp.py` etc.
+
+For each file: VERDICT (APPROVE/APPROVE_WITH_NOTES/REJECT), BUGS (P0/P1/P2), IMPROVEMENTS.
+
+---
+
+
+=== scripts/l2b/etl/extract_ft_l6.py ===
+#!/usr/bin/env python3
+"""P2-Ft1 + P2-L6: Extract FT (Flavor Target) + L6 (Glossary) from Skill D output.
+
+- 17,485 L6 glossary terms (term_zh/term_en/definition + l0_domains)
+- 7,435 FT records (ft_id/aesthetic_word/matrix_type/substrate/target_states + l0_domains)
+
+Output: output/l2b/etl/{ft_nodes,l6_nodes,ft_l0domain_edges,l6_l0domain_edges}.csv
+"""
+import csv
+import json
+from pathlib import Path
+from collections import Counter
+
+ROOT = Path("/Users/jeff/culinary-mind")
+OUT_DIR = ROOT / "output/l2b/etl"
+
+ft_rows = []
+l6_rows = []
+ft_domain_edges = []
+l6_domain_edges = []
+ft_seen = set()
+l6_seen = {}  # term_id → row index for dedup
+
+for p in ROOT.glob("output/*/skill_d/results.jsonl"):
+    book = p.parents[1].name
+    with open(p, encoding="utf-8") as f:
+        for line in f:
+            try:
+                r = json.loads(line)
+            except: continue
+            if r.get("_filtered"): continue
+            rtype = r.get("_type")
+            if rtype == "glossary":
+                term_en = (r.get("term_en") or "").strip()
+                term_zh = (r.get("term_zh") or "").strip()
+                if not (term_en or term_zh): continue
+                # Quality fix: l6_id by term not book (avoid duplicate nodes per book)
+                key = (term_en.lower() if term_en else term_zh)[:150]
+                l6_id = key
+                if l6_id in l6_seen:
+                    # Append book to existing book_list, take longer def
+                    existing_idx = l6_seen[l6_id]
+                    existing = l6_rows[existing_idx]
+                    if book not in existing["book_ids"].split(","):
+                        existing["book_ids"] = (existing["book_ids"] + "," + book)[:500]
+                    # Keep longest definition
+                    new_def_en = (r.get("definition_en") or "")
+                    if len(new_def_en) > len(existing["definition_en"]):
+                        existing["definition_en"] = new_def_en[:500]
+                    continue
+                l6_seen[l6_id] = len(l6_rows)
+                l6_rows.append({
+                    "l6_id": l6_id,
+                    "term_en": term_en,
+                    "term_zh": term_zh,
+                    "definition_en": (r.get("definition_en") or "")[:500],
+                    "definition_zh": (r.get("definition_zh") or "")[:500],
+                    "context": (r.get("context") or "")[:200],
+                    "book_ids": book,
+                })
+                for dom in r.get("l0_domains", []) or []:
+                    l6_domain_edges.append({"l6_id": l6_id, "domain": dom})
+            elif rtype == "flavor_target":
+                ft_id = r.get("ft_id") or ""
+                if not ft_id or ft_id in ft_seen: continue
+                ft_seen.add(ft_id)
+                target_states = r.get("target_states", {}) or {}
+                ft_rows.append({
+                    "ft_id": ft_id,
+                    "aesthetic_word_zh": r.get("aesthetic_word") or "",
+                    "aesthetic_word_en": r.get("aesthetic_word_en") or "",
+                    "matrix_type": r.get("matrix_type") or "",
+                    "substrate": r.get("substrate") or "",
+                    "target_states_json": json.dumps(target_states, ensure_ascii=False)[:1000],
+                    "book_id": book,
+                })
+                for dom in r.get("l0_domains", []) or []:
+                    ft_domain_edges.append({"ft_id": ft_id, "domain": dom})
+
+# Write CSVs
+def w(name, rows, fields):
+    p = OUT_DIR / name
+    tmp = p.with_suffix(".tmp")
+    with open(tmp, "w", newline="", encoding="utf-8") as f:
+        wr = csv.DictWriter(f, fieldnames=fields)
+        wr.writeheader()
+        for r in rows: wr.writerow(r)
+    tmp.rename(p)
+    print(f"  ✅ {name}: {len(rows):,}")
+
+w("l6_nodes.csv", l6_rows, ["l6_id","term_en","term_zh","definition_en","definition_zh","context","book_ids"])
+w("ft_nodes.csv", ft_rows, ["ft_id","aesthetic_word_zh","aesthetic_word_en","matrix_type","substrate","target_states_json","book_id"])
+w("ft_l0domain_edges.csv", ft_domain_edges, ["ft_id","domain"])
+w("l6_l0domain_edges.csv", l6_domain_edges, ["l6_id","domain"])
+
+print(f"\n=== Summary ===")
+print(f"L6 Glossary: {len(l6_rows):,}")
+print(f"FT Targets: {len(ft_rows):,}")
+print(f"FT→domain edges: {len(ft_domain_edges):,}")
+print(f"L6→domain edges: {len(l6_domain_edges):,}")
+
+=== scripts/l2b/etl/link_l2a_l2b_ingredients.py ===
+#!/usr/bin/env python3
+"""P2-Ic5: Match 22K L2b ingredient_slug ↔ 24K L2a canonical_id.
+
+Strategy (matching priority):
+1. Exact match: L2a.canonical_id == ingredient_slug
+2. Exact match: any L2a.alias.lower() == item_raw.lower()
+3. Exact match: L2a.display_name_en.lower() == item_raw.lower()
+4. Fuzzy: ingredient_slug contains L2a.canonical_id as substring (e.g. "extra_virgin_olive_oil" → "olive_oil")
+5. No match → flag as needs_review
+
+Output: output/l2b/etl/l2a_l2b_match.csv (ingredient_slug, l2a_canonical_id, match_method, confidence)
+"""
+import csv
+import json
+import re
+from pathlib import Path
+
+ROOT = Path("/Users/jeff/culinary-mind")
+L2A_FILE = Path("/Users/jeff/culinary-mind/output/l2a/etl/final/nodes.csv")
+L2B_FILE = ROOT / "output/l2b/etl/ingredients.csv"
+OUT_FILE = ROOT / "output/l2b/etl/l2a_l2b_match.csv"
+
+
+def parse_aliases(s):
+    """Aliases stored as JSON list string."""
+    if not s or s in ("[]", "null", "NULL"): return []
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        return []
+
+
+def normalize(s):
+    return (s or "").lower().strip()
+
+
+def main():
+    # Load L2a
+    l2a_by_canonical = {}
+    alias_to_canonical = {}  # lowercased alias → canonical_id
+    name_en_to_canonical = {}
+    
+    with open(L2A_FILE) as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            cid = row["canonical_id"]
+            name_en = row.get("display_name_en", "")
+            name_zh = row.get("display_name_zh", "")
+            aliases = parse_aliases(row.get("aliases", ""))
+            
+            l2a_by_canonical[cid] = {"name_en": name_en, "name_zh": name_zh, "aliases": aliases}
+            if name_en:
+                name_en_to_canonical[normalize(name_en)] = cid
+            if name_zh:
+                name_en_to_canonical[normalize(name_zh)] = cid  # share index for cn names too
+            for alias in aliases:
+                alias_to_canonical[normalize(alias)] = cid
+
+    print(f"L2a loaded: {len(l2a_by_canonical):,} canonical_ids")
+    print(f"L2a aliases indexed: {len(alias_to_canonical):,}")
+    print(f"L2a name_en indexed: {len(name_en_to_canonical):,}")
+    print()
+
+    # Match L2b ingredients
+    matches = []
+    method_counts = {"canonical_id": 0, "alias_exact": 0, "name_en_exact": 0, "substring": 0, "no_match": 0}
+    
+    with open(L2B_FILE) as f:
+        for row in csv.DictReader(f):
+            slug = row["ingredient_slug"]
+            item = row["item_raw"]
+            match = None
+            method = "no_match"
+            confidence = 0.0
+            
+            # 1. Exact canonical_id match
+            if slug in l2a_by_canonical:
+                match = slug
+                method = "canonical_id"
+                confidence = 1.00
+            # 2. Alias exact (lowercased)
+            elif normalize(item) in alias_to_canonical:
+                match = alias_to_canonical[normalize(item)]
+                method = "alias_exact"
+                confidence = 0.95
+            # 3. name_en exact (lowercased)
+            elif normalize(item) in name_en_to_canonical:
+                match = name_en_to_canonical[normalize(item)]
+                method = "name_en_exact"
+                confidence = 0.95
+            # 4. Substring: slug contains canonical_id as token (e.g. "extra_virgin_olive_oil" → "olive_oil")
+            else:
+                # Try common patterns by suffix match
+                slug_parts = slug.split("_")
+                for n in range(2, min(len(slug_parts), 4) + 1):
+                    # Try last n tokens as a canonical_id candidate
+                    candidate = "_".join(slug_parts[-n:])
+                    if candidate in l2a_by_canonical:
+                        match = candidate
+                        method = "substring"
+                        confidence = 0.75
+                        break
+
+            method_counts[method] = method_counts.get(method, 0) + 1
+            if match:
+                matches.append({
+                    "ingredient_slug": slug,
+                    "l2a_canonical_id": match,
+                    "match_method": method,
+                    "confidence": confidence,
+                })
+
+    # Write
+    OUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(OUT_FILE, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["ingredient_slug", "l2a_canonical_id", "match_method", "confidence"])
+        w.writeheader()
+        for m in matches: w.writerow(m)
+
+    total = sum(method_counts.values())
+    print(f"=== Matching results ===")
+    print(f"Total L2b slugs: {total:,}")
+    matched = total - method_counts["no_match"]
+    print(f"Matched: {matched:,} ({matched*100//total}%)")
+    print(f"No match: {method_counts['no_match']:,}")
+    print()
+    print(f"By method:")
+    for m, n in sorted(method_counts.items(), key=lambda x: -x[1]):
+        print(f"  {m:<20}: {n:>6}")
+    print()
+    print(f"✅ {OUT_FILE}")
+
+if __name__ == "__main__":
+    main()
+
+=== scripts/l2b/demo_ingredient_substitution.py ===
+#!/usr/bin/env python3
+"""Demo: Recipe → L2A ingredient → IS_A category → siblings (substitution suggestions).
+
+Real food substitution reasoning through the Layer 1+3 graph.
+"""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from neo4j import GraphDatabase
+
+
+def main():
+    driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "cmind_p1_33_proto"))
+    with driver.session() as sess:
+        print("=" * 95)
+        print("DEMO: Layer 1+3 Ingredient Substitution Reasoning")
+        print("=" * 95)
+
+        # Find a real recipe with chicken
+        q = """
+        MATCH (r:CKG_L2B_TMP_Recipe)-[:USES_L2A_INGREDIENT]->(chicken:CKG_L2A_Ingredient {canonical_id: 'chicken'})
+        WHERE r.name IS NOT NULL AND r.name <> ''
+        RETURN r.recipe_id AS rid, r.name AS name, r.book_id AS book
+        LIMIT 1
+        """
+        rec = sess.run(q).single()
+        print(f"\nRecipe: {rec['name']} ({rec['book']})")
+
+        # Get all L2A ingredients + their IS_A parents
+        q2 = """
+        MATCH (r:CKG_L2B_TMP_Recipe {recipe_id: $rid})-[:USES_L2A_INGREDIENT]->(i:CKG_L2A_Ingredient)
+        OPTIONAL MATCH (i)-[:IS_A]->(parent:CKG_L2A_Ingredient)
+        RETURN i.canonical_id AS ingredient,
+               i.display_name_en AS name_en,
+               collect(DISTINCT parent.canonical_id) AS parents
+        ORDER BY i.canonical_id
+        """
+        print(f"\n--- Ingredients & their categories (IS_A) ---")
+        for row in sess.run(q2, rid=rec["rid"]):
+            parents = row['parents'] or ['(no IS_A parent)']
+            print(f"  {row['name_en'] or row['ingredient']:<35} → {parents}")
+
+        # For chicken specifically, find siblings (substitution candidates)
+        q3 = """
+        MATCH (chicken:CKG_L2A_Ingredient {canonical_id: 'chicken'})-[:IS_A]->(parent:CKG_L2A_Ingredient)
+        OPTIONAL MATCH (sibling:CKG_L2A_Ingredient)-[:IS_A]->(parent)
+        WHERE sibling.canonical_id <> 'chicken' AND sibling.tree_status = 'active'
+        RETURN parent.canonical_id AS parent,
+               parent.display_name_en AS parent_name,
+               collect(DISTINCT sibling.display_name_en)[..10] AS siblings
+        """
+        print(f"\n--- Chicken substitutions via IS_A siblings ---")
+        for row in sess.run(q3):
+            print(f"\n  Through parent: {row['parent_name']} ({row['parent']})")
+            print(f"  Siblings: {row['siblings'][:8]}")
+
+        # Bonus: full reasoning chain for one step of this recipe
+        q4 = """
+        MATCH (r:CKG_L2B_TMP_Recipe {recipe_id: $rid})-[:HAS_STEP]->(s:CKG_L2B_TMP_Step)
+              -[:TRIGGERS_PHN]->(p:CKG_PHN)
+        OPTIONAL MATCH (m:CKG_MF)-[:GOVERNS_PHN]->(p)
+        WHERE s.temp_c IS NOT NULL
+        RETURN s.order AS order, s.action AS action,
+               s.temp_c AS temp, s.duration_min AS dur,
+               p.phn_id AS phn,
+               collect(DISTINCT m.mf_id) AS mfs
+        ORDER BY s.order LIMIT 3
+        """
+        print(f"\n--- Recipe scientific reasoning (Step → PHN → MF) ---")
+        for row in sess.run(q4, rid=rec["rid"]):
+            print(f"  Step {row['order']}: {row['action']} {row['temp']}°C × {row['dur']}min")
+            print(f"    → PHN: {row['phn']}")
+            print(f"    → MF tools: {row['mfs']}")
+
+        print(f"\n" + "=" * 95)
+        print(f"✅ Layer 1 (24K ingredient tree) + Layer 3 (PHN/MF reasoning) UNIFIED")
+        print("=" * 95)
+    driver.close()
+
+if __name__ == "__main__":
+    main()
+
+=== scripts/l2b/demo_ft_l6_reasoning.py ===
+#!/usr/bin/env python3
+"""Demo: L6 term → FT → PHN → MF reasoning chain.
+
+Example queries:
+- "umami 这词在不同食物中怎么实现?"
+- "镬气 (wok hei) → FT bundles → cooking phenomenon"
+- "crispy texture → which MFs?"
+"""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from neo4j import GraphDatabase
+
+
+def main():
+    driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "cmind_p1_33_proto"))
+    with driver.session() as sess:
+        print("=" * 95)
+        print("DEMO: L6 (Glossary) → FT (Flavor Target) → Layer 3 reasoning")
+        print("=" * 95)
+
+        # Query 1: L6 term + FT translation
+        print("\n### Q1: 'umami' L6 term → FT bundles")
+        print("-" * 95)
+        q1 = """
+        MATCH (l:CKG_L6_Term)
+        WHERE toLower(l.term_en) = 'umami' OR l.term_zh CONTAINS '鲜'
+        OPTIONAL MATCH (l)-[:TRANSLATES_TO]->(f:CKG_FT)
+        RETURN l.term_zh AS term_zh, l.term_en AS term_en,
+               l.definition_zh AS def_zh,
+               count(f) AS ft_count,
+               collect(DISTINCT f.substrate)[..5] AS substrates
+        LIMIT 5
+        """
+        for row in sess.run(q1):
+            print(f"\nL6: {row['term_zh']} / {row['term_en']}")
+            print(f"  Def: {(row['def_zh'] or '')[:120]}")
+            print(f"  → {row['ft_count']} FT bundles")
+            print(f"  → substrates seen: {row['substrates']}")
+
+        # Query 2: FT for specific substrate
+        print("\n\n### Q2: FT targets for 'chicken' substrate")
+        print("-" * 95)
+        q2 = """
+        MATCH (f:CKG_FT) WHERE toLower(f.substrate) CONTAINS 'chicken'
+        RETURN f.aesthetic_word_en AS word_en, f.aesthetic_word_zh AS word_zh,
+               f.substrate AS substrate, f.matrix_type AS matrix
+        LIMIT 10
+        """
+        for row in sess.run(q2):
+            print(f"  {row['word_en']:<20} ({row['word_zh']:<10}) on {row['substrate']:<25} matrix: {row['matrix']}")
+
+        # Query 3: Most-translated L6 terms
+        print("\n\n### Q3: L6 terms with most FT translations (high-coverage culinary concepts)")
+        print("-" * 95)
+        q3 = """
+        MATCH (l:CKG_L6_Term)-[:TRANSLATES_TO]->(f:CKG_FT)
+        WITH l, count(DISTINCT f) AS n_ft, collect(DISTINCT f.substrate)[..5] AS substrates
+        WHERE n_ft >= 5
+        RETURN l.term_zh AS zh, l.term_en AS en, n_ft, substrates
+        ORDER BY n_ft DESC LIMIT 10
+        """
+        print(f"  {'Term zh':<20} {'Term en':<20} {'#FT':>5}  Sample substrates")
+        print(f"  {'-'*20} {'-'*20} {'-'*5}")
+        for row in sess.run(q3):
+            print(f"  {(row['zh'] or '')[:20]:<20} {(row['en'] or '')[:20]:<20} {row['n_ft']:>5}  {row['substrates']}")
+
+        # Query 4: Full chain — L6 → FT → recipe matching
+        print("\n\n### Q4: 'crispy' / '酥脆' → FT + which Recipes targeting that texture")
+        print("-" * 95)
+        q4 = """
+        MATCH (l:CKG_L6_Term)-[:TRANSLATES_TO]->(f:CKG_FT)
+        WHERE toLower(l.term_en) IN ['crispy', 'crisp'] OR l.term_zh = '酥脆'
+        RETURN f.substrate AS substrate, f.aesthetic_word_en AS word_en,
+               count(*) AS n LIMIT 10
+        """
+        for row in sess.run(q4):
+            print(f"  '{row['word_en']}' applied to: {row['substrate']}")
+
+        print("\n" + "=" * 95)
+        print("✅ L6 (Glossary 13K terms) + FT (7K flavor targets) UNIFIED with Layer 3 graph")
+        print("=" * 95)
+    driver.close()
+
+if __name__ == "__main__":
+    main()
+
+=== scripts/l2b/etl/extract_l0_tmp.py ===
+#!/usr/bin/env python3
+"""P2-Ic3: Import 39,888 tagged L0 atoms to CKG_L0_TMP_Principle + TAGGED_BY_PHN edges.
+
+Avoid clashing with existing 146 P1-33 prototype L0 nodes (CKG_L0_Principle).
+"""
+import csv
+import json
+from pathlib import Path
+
+ROOT = Path("/Users/jeff/culinary-mind")
+OUT_DIR = ROOT / "output/l2b/etl"
+
+l0_rows = []
+l0_phn_rows = []
+seen_atom_ids = set()
+
+with open(ROOT / "output/phase1/l0_phn_routing_v3.jsonl") as f:
+    for line in f:
+        try:
+            r = json.loads(line)
+        except: continue
+        # Use source_chunk_id + book as composite id
+        book = r.get("_book_id", "unknown")
+        chunk = r.get("source_chunk_id", "")
+        atom_id = f"{book}__{chunk}"
+        if atom_id in seen_atom_ids: continue
+        seen_atom_ids.add(atom_id)
+        tags = r.get("phenomenon_tags") or []
+        if not tags: continue
+        l0_rows.append({
+            "atom_id": atom_id,
+            "scientific_statement": (r.get("scientific_statement") or "")[:500],
+            "causal_chain_text": (r.get("causal_chain_text") or "")[:300],
+            "domain": r.get("domain") or "",
+            "confidence": r.get("confidence") or 0.0,
+            "book_id": book,
+            "n_phn": len(tags),
+        })
+        scores = r.get("phn_scores", {})
+        for tag in tags:
+            l0_phn_rows.append({
+                "atom_id": atom_id,
+                "phn_id": tag,
+                "score": scores.get(tag, 0.5) if isinstance(scores, dict) else 0.5,
+            })
+
+# Write CSVs (atomic)
+def write_csv(name, rows, fields):
+    p = OUT_DIR / name
+    tmp = p.with_suffix(".tmp")
+    with open(tmp, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        for r in rows: w.writerow(r)
+    tmp.rename(p)
+    print(f"  ✅ {name}: {len(rows):,} rows")
+
+write_csv("l0_tmp_nodes.csv", l0_rows, ["atom_id","scientific_statement","causal_chain_text","domain","confidence","book_id","n_phn"])
+write_csv("l0_tmp_phn_edges.csv", l0_phn_rows, ["atom_id", "phn_id", "score"])
+print(f"\n=== Summary ===")
+print(f"L0 TMP atoms: {len(l0_rows):,}")
+print(f"L0 → PHN edges: {len(l0_phn_rows):,}")
+Now provide review.
+codex
+Reviewing the new ETL/demo scripts with emphasis on data integrity, matching correctness, and production hardening. I’m loading the workspace context first, then I’ll inspect the scripts directly and produce a file-by-file review in the format you asked for.
+exec
+/bin/zsh -lc "sed -n '1,220p' USER.md" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+# USER.md - About Your Human
+
+_Learn about the person you're helping. Update this as you go._
+
+- **Name:**
+- **What to call them:**
+- **Pronouns:** _(optional)_
+- **Timezone:**
+- **Notes:**
+
+## Context
+
+_(What do they care about? What projects are they working on? What annoys them? What makes them laugh? Build this over time.)_
+
+---
+
+The more you know, the better you can help. But remember — you're learning about a person, not building a dossier. Respect the difference.
+
+exec
+/bin/zsh -lc "sed -n '1,220p' memory/2026-05-13.md" in /Users/jeff/culinary-mind
+exec
+/bin/zsh -lc "sed -n '1,220p' SOUL.md" in /Users/jeff/culinary-mind
+ exited 1 in 0ms:
+sed: memory/2026-05-13.md: No such file or directory
+
+ succeeded in 0ms:
+# SOUL.md - Who You Are
+
+_You're not a chatbot. You're becoming someone._
+
+## Core Truths
+
+**Be genuinely helpful, not performatively helpful.** Skip the "Great question!" and "I'd be happy to help!" — just help. Actions speak louder than filler words.
+
+**Have opinions.** You're allowed to disagree, prefer things, find stuff amusing or boring. An assistant with no personality is just a search engine with extra steps.
+
+**Be resourceful before asking.** Try to figure it out. Read the file. Check the context. Search for it. _Then_ ask if you're stuck. The goal is to come back with answers, not questions.
+
+**Earn trust through competence.** Your human gave you access to their stuff. Don't make them regret it. Be careful with external actions (emails, tweets, anything public). Be bold with internal ones (reading, organizing, learning).
+
+**Remember you're a guest.** You have access to someone's life — their messages, files, calendar, maybe even their home. That's intimacy. Treat it with respect.
+
+## Boundaries
+
+- Private things stay private. Period.
+- When in doubt, ask before acting externally.
+- Never send half-baked replies to messaging surfaces.
+- You're not the user's voice — be careful in group chats.
+
+## Vibe
+
+Be the assistant you'd actually want to talk to. Concise when needed, thorough when it matters. Not a corporate drone. Not a sycophant. Just... good.
+
+## Continuity
+
+Each session, you wake up fresh. These files _are_ your memory. Read them. Update them. They're how you persist.
+
+If you change this file, tell the user — it's your soul, and they should know.
+
+---
+
+_This file is yours to evolve. As you learn who you are, update it._
+
+exec
+/bin/zsh -lc "sed -n '1,220p' memory/2026-05-12.md" in /Users/jeff/culinary-mind
+exec
+/bin/zsh -lc "sed -n '1,260p' MEMORY.md" in /Users/jeff/culinary-mind
+ exited 1 in 0ms:
+sed: memory/2026-05-12.md: No such file or directory
+
+ exited 1 in 0ms:
+sed: MEMORY.md: No such file or directory
+
+codex
+The workspace bootstrap files are mostly present, but the daily memory files and `MEMORY.md` don’t exist in this checkout, so there’s no prior session context to load. I’m moving to the actual script review now and will check the code with line numbers so the findings are precise.
+exec
+/bin/zsh -lc 'nl -ba scripts/l2b/etl/extract_l0_tmp.py' in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+     1	#!/usr/bin/env python3
+     2	"""P2-Ic3: Import 39,888 tagged L0 atoms to CKG_L0_TMP_Principle + TAGGED_BY_PHN edges.
+     3	
+     4	Avoid clashing with existing 146 P1-33 prototype L0 nodes (CKG_L0_Principle).
+     5	"""
+     6	import csv
+     7	import json
+     8	from pathlib import Path
+     9	
+    10	ROOT = Path("/Users/jeff/culinary-mind")
+    11	OUT_DIR = ROOT / "output/l2b/etl"
+    12	
+    13	l0_rows = []
+    14	l0_phn_rows = []
+    15	seen_atom_ids = set()
+    16	
+    17	with open(ROOT / "output/phase1/l0_phn_routing_v3.jsonl") as f:
+    18	    for line in f:
+    19	        try:
+    20	            r = json.loads(line)
+    21	        except: continue
+    22	        # Use source_chunk_id + book as composite id
+    23	        book = r.get("_book_id", "unknown")
+    24	        chunk = r.get("source_chunk_id", "")
+    25	        atom_id = f"{book}__{chunk}"
+    26	        if atom_id in seen_atom_ids: continue
+    27	        seen_atom_ids.add(atom_id)
+    28	        tags = r.get("phenomenon_tags") or []
+    29	        if not tags: continue
+    30	        l0_rows.append({
+    31	            "atom_id": atom_id,
+    32	            "scientific_statement": (r.get("scientific_statement") or "")[:500],
+    33	            "causal_chain_text": (r.get("causal_chain_text") or "")[:300],
+    34	            "domain": r.get("domain") or "",
+    35	            "confidence": r.get("confidence") or 0.0,
+    36	            "book_id": book,
+    37	            "n_phn": len(tags),
+    38	        })
+    39	        scores = r.get("phn_scores", {})
+    40	        for tag in tags:
+    41	            l0_phn_rows.append({
+    42	                "atom_id": atom_id,
+    43	                "phn_id": tag,
+    44	                "score": scores.get(tag, 0.5) if isinstance(scores, dict) else 0.5,
+    45	            })
+    46	
+    47	# Write CSVs (atomic)
+    48	def write_csv(name, rows, fields):
+    49	    p = OUT_DIR / name
+    50	    tmp = p.with_suffix(".tmp")
+    51	    with open(tmp, "w", newline="", encoding="utf-8") as f:
+    52	        w = csv.DictWriter(f, fieldnames=fields)
+    53	        w.writeheader()
+    54	        for r in rows: w.writerow(r)
+    55	    tmp.rename(p)
+    56	    print(f"  ✅ {name}: {len(rows):,} rows")
+    57	
+    58	write_csv("l0_tmp_nodes.csv", l0_rows, ["atom_id","scientific_statement","causal_chain_text","domain","confidence","book_id","n_phn"])
+    59	write_csv("l0_tmp_phn_edges.csv", l0_phn_rows, ["atom_id", "phn_id", "score"])
+    60	print(f"\n=== Summary ===")
+    61	print(f"L0 TMP atoms: {len(l0_rows):,}")
+    62	print(f"L0 → PHN edges: {len(l0_phn_rows):,}")
+
+exec
+/bin/zsh -lc 'nl -ba scripts/l2b/demo_ingredient_substitution.py' in /Users/jeff/culinary-mind
+exec
+/bin/zsh -lc 'nl -ba scripts/l2b/etl/link_l2a_l2b_ingredients.py' in /Users/jeff/culinary-mind
+exec
+/bin/zsh -lc 'nl -ba scripts/l2b/etl/extract_ft_l6.py' in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+     1	#!/usr/bin/env python3
+     2	"""P2-Ic5: Match 22K L2b ingredient_slug ↔ 24K L2a canonical_id.
+     3	
+     4	Strategy (matching priority):
+     5	1. Exact match: L2a.canonical_id == ingredient_slug
+     6	2. Exact match: any L2a.alias.lower() == item_raw.lower()
+     7	3. Exact match: L2a.display_name_en.lower() == item_raw.lower()
+     8	4. Fuzzy: ingredient_slug contains L2a.canonical_id as substring (e.g. "extra_virgin_olive_oil" → "olive_oil")
+     9	5. No match → flag as needs_review
+    10	
+    11	Output: output/l2b/etl/l2a_l2b_match.csv (ingredient_slug, l2a_canonical_id, match_method, confidence)
+    12	"""
+    13	import csv
+    14	import json
+    15	import re
+    16	from pathlib import Path
+    17	
+    18	ROOT = Path("/Users/jeff/culinary-mind")
+    19	L2A_FILE = Path("/Users/jeff/culinary-mind/output/l2a/etl/final/nodes.csv")
+    20	L2B_FILE = ROOT / "output/l2b/etl/ingredients.csv"
+    21	OUT_FILE = ROOT / "output/l2b/etl/l2a_l2b_match.csv"
+    22	
+    23	
+    24	def parse_aliases(s):
+    25	    """Aliases stored as JSON list string."""
+    26	    if not s or s in ("[]", "null", "NULL"): return []
+    27	    try:
+    28	        return json.loads(s)
+    29	    except json.JSONDecodeError:
+    30	        return []
+    31	
+    32	
+    33	def normalize(s):
+    34	    return (s or "").lower().strip()
+    35	
+    36	
+    37	def main():
+    38	    # Load L2a
+    39	    l2a_by_canonical = {}
+    40	    alias_to_canonical = {}  # lowercased alias → canonical_id
+    41	    name_en_to_canonical = {}
+    42	    
+    43	    with open(L2A_FILE) as f:
+    44	        reader = csv.DictReader(f)
+    45	        for row in reader:
+    46	            cid = row["canonical_id"]
+    47	            name_en = row.get("display_name_en", "")
+    48	            name_zh = row.get("display_name_zh", "")
+    49	            aliases = parse_aliases(row.get("aliases", ""))
+    50	            
+    51	            l2a_by_canonical[cid] = {"name_en": name_en, "name_zh": name_zh, "aliases": aliases}
+    52	            if name_en:
+    53	                name_en_to_canonical[normalize(name_en)] = cid
+    54	            if name_zh:
+    55	                name_en_to_canonical[normalize(name_zh)] = cid  # share index for cn names too
+    56	            for alias in aliases:
+    57	                alias_to_canonical[normalize(alias)] = cid
+    58	
+    59	    print(f"L2a loaded: {len(l2a_by_canonical):,} canonical_ids")
+    60	    print(f"L2a aliases indexed: {len(alias_to_canonical):,}")
+    61	    print(f"L2a name_en indexed: {len(name_en_to_canonical):,}")
+    62	    print()
+    63	
+    64	    # Match L2b ingredients
+    65	    matches = []
+    66	    method_counts = {"canonical_id": 0, "alias_exact": 0, "name_en_exact": 0, "substring": 0, "no_match": 0}
+    67	    
+    68	    with open(L2B_FILE) as f:
+    69	        for row in csv.DictReader(f):
+    70	            slug = row["ingredient_slug"]
+    71	            item = row["item_raw"]
+    72	            match = None
+    73	            method = "no_match"
+    74	            confidence = 0.0
+    75	            
+    76	            # 1. Exact canonical_id match
+    77	            if slug in l2a_by_canonical:
+    78	                match = slug
+    79	                method = "canonical_id"
+    80	                confidence = 1.00
+    81	            # 2. Alias exact (lowercased)
+    82	            elif normalize(item) in alias_to_canonical:
+    83	                match = alias_to_canonical[normalize(item)]
+    84	                method = "alias_exact"
+    85	                confidence = 0.95
+    86	            # 3. name_en exact (lowercased)
+    87	            elif normalize(item) in name_en_to_canonical:
+    88	                match = name_en_to_canonical[normalize(item)]
+    89	                method = "name_en_exact"
+    90	                confidence = 0.95
+    91	            # 4. Substring: slug contains canonical_id as token (e.g. "extra_virgin_olive_oil" → "olive_oil")
+    92	            else:
+    93	                # Try common patterns by suffix match
+    94	                slug_parts = slug.split("_")
+    95	                for n in range(2, min(len(slug_parts), 4) + 1):
+    96	                    # Try last n tokens as a canonical_id candidate
+    97	                    candidate = "_".join(slug_parts[-n:])
+    98	                    if candidate in l2a_by_canonical:
+    99	                        match = candidate
+   100	                        method = "substring"
+   101	                        confidence = 0.75
+   102	                        break
+   103	
+   104	            method_counts[method] = method_counts.get(method, 0) + 1
+   105	            if match:
+   106	                matches.append({
+   107	                    "ingredient_slug": slug,
+   108	                    "l2a_canonical_id": match,
+   109	                    "match_method": method,
+   110	                    "confidence": confidence,
+   111	                })
+   112	
+   113	    # Write
+   114	    OUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+   115	    with open(OUT_FILE, "w", newline="") as f:
+   116	        w = csv.DictWriter(f, fieldnames=["ingredient_slug", "l2a_canonical_id", "match_method", "confidence"])
+   117	        w.writeheader()
+   118	        for m in matches: w.writerow(m)
+   119	
+   120	    total = sum(method_counts.values())
+   121	    print(f"=== Matching results ===")
+   122	    print(f"Total L2b slugs: {total:,}")
+   123	    matched = total - method_counts["no_match"]
+   124	    print(f"Matched: {matched:,} ({matched*100//total}%)")
+   125	    print(f"No match: {method_counts['no_match']:,}")
+   126	    print()
+   127	    print(f"By method:")
+   128	    for m, n in sorted(method_counts.items(), key=lambda x: -x[1]):
+   129	        print(f"  {m:<20}: {n:>6}")
+   130	    print()
+   131	    print(f"✅ {OUT_FILE}")
+   132	
+   133	if __name__ == "__main__":
+   134	    main()
+
+ succeeded in 0ms:
+     1	#!/usr/bin/env python3
+     2	"""Demo: Recipe → L2A ingredient → IS_A category → siblings (substitution suggestions).
+     3	
+     4	Real food substitution reasoning through the Layer 1+3 graph.
+     5	"""
+     6	import sys
+     7	from pathlib import Path
+     8	sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+     9	
+    10	from neo4j import GraphDatabase
+    11	
+    12	
+    13	def main():
+    14	    driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "cmind_p1_33_proto"))
+    15	    with driver.session() as sess:
+    16	        print("=" * 95)
+    17	        print("DEMO: Layer 1+3 Ingredient Substitution Reasoning")
+    18	        print("=" * 95)
+    19	
+    20	        # Find a real recipe with chicken
+    21	        q = """
+    22	        MATCH (r:CKG_L2B_TMP_Recipe)-[:USES_L2A_INGREDIENT]->(chicken:CKG_L2A_Ingredient {canonical_id: 'chicken'})
+    23	        WHERE r.name IS NOT NULL AND r.name <> ''
+    24	        RETURN r.recipe_id AS rid, r.name AS name, r.book_id AS book
+    25	        LIMIT 1
+    26	        """
+    27	        rec = sess.run(q).single()
+    28	        print(f"\nRecipe: {rec['name']} ({rec['book']})")
+    29	
+    30	        # Get all L2A ingredients + their IS_A parents
+    31	        q2 = """
+    32	        MATCH (r:CKG_L2B_TMP_Recipe {recipe_id: $rid})-[:USES_L2A_INGREDIENT]->(i:CKG_L2A_Ingredient)
+    33	        OPTIONAL MATCH (i)-[:IS_A]->(parent:CKG_L2A_Ingredient)
+    34	        RETURN i.canonical_id AS ingredient,
+    35	               i.display_name_en AS name_en,
+    36	               collect(DISTINCT parent.canonical_id) AS parents
+    37	        ORDER BY i.canonical_id
+    38	        """
+    39	        print(f"\n--- Ingredients & their categories (IS_A) ---")
+    40	        for row in sess.run(q2, rid=rec["rid"]):
+    41	            parents = row['parents'] or ['(no IS_A parent)']
+    42	            print(f"  {row['name_en'] or row['ingredient']:<35} → {parents}")
+    43	
+    44	        # For chicken specifically, find siblings (substitution candidates)
+    45	        q3 = """
+    46	        MATCH (chicken:CKG_L2A_Ingredient {canonical_id: 'chicken'})-[:IS_A]->(parent:CKG_L2A_Ingredient)
+    47	        OPTIONAL MATCH (sibling:CKG_L2A_Ingredient)-[:IS_A]->(parent)
+    48	        WHERE sibling.canonical_id <> 'chicken' AND sibling.tree_status = 'active'
+    49	        RETURN parent.canonical_id AS parent,
+    50	               parent.display_name_en AS parent_name,
+    51	               collect(DISTINCT sibling.display_name_en)[..10] AS siblings
+    52	        """
+    53	        print(f"\n--- Chicken substitutions via IS_A siblings ---")
+    54	        for row in sess.run(q3):
+    55	            print(f"\n  Through parent: {row['parent_name']} ({row['parent']})")
+    56	            print(f"  Siblings: {row['siblings'][:8]}")
+    57	
+    58	        # Bonus: full reasoning chain for one step of this recipe
+    59	        q4 = """
+    60	        MATCH (r:CKG_L2B_TMP_Recipe {recipe_id: $rid})-[:HAS_STEP]->(s:CKG_L2B_TMP_Step)
+    61	              -[:TRIGGERS_PHN]->(p:CKG_PHN)
+    62	        OPTIONAL MATCH (m:CKG_MF)-[:GOVERNS_PHN]->(p)
+    63	        WHERE s.temp_c IS NOT NULL
+    64	        RETURN s.order AS order, s.action AS action,
+    65	               s.temp_c AS temp, s.duration_min AS dur,
+    66	               p.phn_id AS phn,
+    67	               collect(DISTINCT m.mf_id) AS mfs
+    68	        ORDER BY s.order LIMIT 3
+    69	        """
+    70	        print(f"\n--- Recipe scientific reasoning (Step → PHN → MF) ---")
+    71	        for row in sess.run(q4, rid=rec["rid"]):
+    72	            print(f"  Step {row['order']}: {row['action']} {row['temp']}°C × {row['dur']}min")
+    73	            print(f"    → PHN: {row['phn']}")
+    74	            print(f"    → MF tools: {row['mfs']}")
+    75	
+    76	        print(f"\n" + "=" * 95)
+    77	        print(f"✅ Layer 1 (24K ingredient tree) + Layer 3 (PHN/MF reasoning) UNIFIED")
+    78	        print("=" * 95)
+    79	    driver.close()
+    80	
+    81	if __name__ == "__main__":
+    82	    main()
+
+ succeeded in 0ms:
+     1	#!/usr/bin/env python3
+     2	"""P2-Ft1 + P2-L6: Extract FT (Flavor Target) + L6 (Glossary) from Skill D output.
+     3	
+     4	- 17,485 L6 glossary terms (term_zh/term_en/definition + l0_domains)
+     5	- 7,435 FT records (ft_id/aesthetic_word/matrix_type/substrate/target_states + l0_domains)
+     6	
+     7	Output: output/l2b/etl/{ft_nodes,l6_nodes,ft_l0domain_edges,l6_l0domain_edges}.csv
+     8	"""
+     9	import csv
+    10	import json
+    11	from pathlib import Path
+    12	from collections import Counter
+    13	
+    14	ROOT = Path("/Users/jeff/culinary-mind")
+    15	OUT_DIR = ROOT / "output/l2b/etl"
+    16	
+    17	ft_rows = []
+    18	l6_rows = []
+    19	ft_domain_edges = []
+    20	l6_domain_edges = []
+    21	ft_seen = set()
+    22	l6_seen = {}  # term_id → row index for dedup
+    23	
+    24	for p in ROOT.glob("output/*/skill_d/results.jsonl"):
+    25	    book = p.parents[1].name
+    26	    with open(p, encoding="utf-8") as f:
+    27	        for line in f:
+    28	            try:
+    29	                r = json.loads(line)
+    30	            except: continue
+    31	            if r.get("_filtered"): continue
+    32	            rtype = r.get("_type")
+    33	            if rtype == "glossary":
+    34	                term_en = (r.get("term_en") or "").strip()
+    35	                term_zh = (r.get("term_zh") or "").strip()
+    36	                if not (term_en or term_zh): continue
+    37	                # Quality fix: l6_id by term not book (avoid duplicate nodes per book)
+    38	                key = (term_en.lower() if term_en else term_zh)[:150]
+    39	                l6_id = key
+    40	                if l6_id in l6_seen:
+    41	                    # Append book to existing book_list, take longer def
+    42	                    existing_idx = l6_seen[l6_id]
+    43	                    existing = l6_rows[existing_idx]
+    44	                    if book not in existing["book_ids"].split(","):
+    45	                        existing["book_ids"] = (existing["book_ids"] + "," + book)[:500]
+    46	                    # Keep longest definition
+    47	                    new_def_en = (r.get("definition_en") or "")
+    48	                    if len(new_def_en) > len(existing["definition_en"]):
+    49	                        existing["definition_en"] = new_def_en[:500]
+    50	                    continue
+    51	                l6_seen[l6_id] = len(l6_rows)
+    52	                l6_rows.append({
+    53	                    "l6_id": l6_id,
+    54	                    "term_en": term_en,
+    55	                    "term_zh": term_zh,
+    56	                    "definition_en": (r.get("definition_en") or "")[:500],
+    57	                    "definition_zh": (r.get("definition_zh") or "")[:500],
+    58	                    "context": (r.get("context") or "")[:200],
+    59	                    "book_ids": book,
+    60	                })
+    61	                for dom in r.get("l0_domains", []) or []:
+    62	                    l6_domain_edges.append({"l6_id": l6_id, "domain": dom})
+    63	            elif rtype == "flavor_target":
+    64	                ft_id = r.get("ft_id") or ""
+    65	                if not ft_id or ft_id in ft_seen: continue
+    66	                ft_seen.add(ft_id)
+    67	                target_states = r.get("target_states", {}) or {}
+    68	                ft_rows.append({
+    69	                    "ft_id": ft_id,
+    70	                    "aesthetic_word_zh": r.get("aesthetic_word") or "",
+    71	                    "aesthetic_word_en": r.get("aesthetic_word_en") or "",
+    72	                    "matrix_type": r.get("matrix_type") or "",
+    73	                    "substrate": r.get("substrate") or "",
+    74	                    "target_states_json": json.dumps(target_states, ensure_ascii=False)[:1000],
+    75	                    "book_id": book,
+    76	                })
+    77	                for dom in r.get("l0_domains", []) or []:
+    78	                    ft_domain_edges.append({"ft_id": ft_id, "domain": dom})
+    79	
+    80	# Write CSVs
+    81	def w(name, rows, fields):
+    82	    p = OUT_DIR / name
+    83	    tmp = p.with_suffix(".tmp")
+    84	    with open(tmp, "w", newline="", encoding="utf-8") as f:
+    85	        wr = csv.DictWriter(f, fieldnames=fields)
+    86	        wr.writeheader()
+    87	        for r in rows: wr.writerow(r)
+    88	    tmp.rename(p)
+    89	    print(f"  ✅ {name}: {len(rows):,}")
+    90	
+    91	w("l6_nodes.csv", l6_rows, ["l6_id","term_en","term_zh","definition_en","definition_zh","context","book_ids"])
+    92	w("ft_nodes.csv", ft_rows, ["ft_id","aesthetic_word_zh","aesthetic_word_en","matrix_type","substrate","target_states_json","book_id"])
+    93	w("ft_l0domain_edges.csv", ft_domain_edges, ["ft_id","domain"])
+    94	w("l6_l0domain_edges.csv", l6_domain_edges, ["l6_id","domain"])
+    95	
+    96	print(f"\n=== Summary ===")
+    97	print(f"L6 Glossary: {len(l6_rows):,}")
+    98	print(f"FT Targets: {len(ft_rows):,}")
+    99	print(f"FT→domain edges: {len(ft_domain_edges):,}")
+   100	print(f"L6→domain edges: {len(l6_domain_edges):,}")
+
+exec
+/bin/zsh -lc 'nl -ba scripts/l2b/demo_ft_l6_reasoning.py' in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+     1	#!/usr/bin/env python3
+     2	"""Demo: L6 term → FT → PHN → MF reasoning chain.
+     3	
+     4	Example queries:
+     5	- "umami 这词在不同食物中怎么实现?"
+     6	- "镬气 (wok hei) → FT bundles → cooking phenomenon"
+     7	- "crispy texture → which MFs?"
+     8	"""
+     9	import sys
+    10	from pathlib import Path
+    11	sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    12	
+    13	from neo4j import GraphDatabase
+    14	
+    15	
+    16	def main():
+    17	    driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "cmind_p1_33_proto"))
+    18	    with driver.session() as sess:
+    19	        print("=" * 95)
+    20	        print("DEMO: L6 (Glossary) → FT (Flavor Target) → Layer 3 reasoning")
+    21	        print("=" * 95)
+    22	
+    23	        # Query 1: L6 term + FT translation
+    24	        print("\n### Q1: 'umami' L6 term → FT bundles")
+    25	        print("-" * 95)
+    26	        q1 = """
+    27	        MATCH (l:CKG_L6_Term)
+    28	        WHERE toLower(l.term_en) = 'umami' OR l.term_zh CONTAINS '鲜'
+    29	        OPTIONAL MATCH (l)-[:TRANSLATES_TO]->(f:CKG_FT)
+    30	        RETURN l.term_zh AS term_zh, l.term_en AS term_en,
+    31	               l.definition_zh AS def_zh,
+    32	               count(f) AS ft_count,
+    33	               collect(DISTINCT f.substrate)[..5] AS substrates
+    34	        LIMIT 5
+    35	        """
+    36	        for row in sess.run(q1):
+    37	            print(f"\nL6: {row['term_zh']} / {row['term_en']}")
+    38	            print(f"  Def: {(row['def_zh'] or '')[:120]}")
+    39	            print(f"  → {row['ft_count']} FT bundles")
+    40	            print(f"  → substrates seen: {row['substrates']}")
+    41	
+    42	        # Query 2: FT for specific substrate
+    43	        print("\n\n### Q2: FT targets for 'chicken' substrate")
+    44	        print("-" * 95)
+    45	        q2 = """
+    46	        MATCH (f:CKG_FT) WHERE toLower(f.substrate) CONTAINS 'chicken'
+    47	        RETURN f.aesthetic_word_en AS word_en, f.aesthetic_word_zh AS word_zh,
+    48	               f.substrate AS substrate, f.matrix_type AS matrix
+    49	        LIMIT 10
+    50	        """
+    51	        for row in sess.run(q2):
+    52	            print(f"  {row['word_en']:<20} ({row['word_zh']:<10}) on {row['substrate']:<25} matrix: {row['matrix']}")
+    53	
+    54	        # Query 3: Most-translated L6 terms
+    55	        print("\n\n### Q3: L6 terms with most FT translations (high-coverage culinary concepts)")
+    56	        print("-" * 95)
+    57	        q3 = """
+    58	        MATCH (l:CKG_L6_Term)-[:TRANSLATES_TO]->(f:CKG_FT)
+    59	        WITH l, count(DISTINCT f) AS n_ft, collect(DISTINCT f.substrate)[..5] AS substrates
+    60	        WHERE n_ft >= 5
+    61	        RETURN l.term_zh AS zh, l.term_en AS en, n_ft, substrates
+    62	        ORDER BY n_ft DESC LIMIT 10
+    63	        """
+    64	        print(f"  {'Term zh':<20} {'Term en':<20} {'#FT':>5}  Sample substrates")
+    65	        print(f"  {'-'*20} {'-'*20} {'-'*5}")
+    66	        for row in sess.run(q3):
+    67	            print(f"  {(row['zh'] or '')[:20]:<20} {(row['en'] or '')[:20]:<20} {row['n_ft']:>5}  {row['substrates']}")
+    68	
+    69	        # Query 4: Full chain — L6 → FT → recipe matching
+    70	        print("\n\n### Q4: 'crispy' / '酥脆' → FT + which Recipes targeting that texture")
+    71	        print("-" * 95)
+    72	        q4 = """
+    73	        MATCH (l:CKG_L6_Term)-[:TRANSLATES_TO]->(f:CKG_FT)
+    74	        WHERE toLower(l.term_en) IN ['crispy', 'crisp'] OR l.term_zh = '酥脆'
+    75	        RETURN f.substrate AS substrate, f.aesthetic_word_en AS word_en,
+    76	               count(*) AS n LIMIT 10
+    77	        """
+    78	        for row in sess.run(q4):
+    79	            print(f"  '{row['word_en']}' applied to: {row['substrate']}")
+    80	
+    81	        print("\n" + "=" * 95)
+    82	        print("✅ L6 (Glossary 13K terms) + FT (7K flavor targets) UNIFIED with Layer 3 graph")
+    83	        print("=" * 95)
+    84	    driver.close()
+    85	
+    86	if __name__ == "__main__":
+    87	    main()
+
+codex
+## extract_l0_tmp.py
+
+**VERDICT:** REJECT
+
+**BUGS**
+- **P1** [scripts/l2b/etl/extract_l0_tmp.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_l0_tmp.py:23) [scripts/l2b/etl/extract_l0_tmp.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_l0_tmp.py:26) `atom_id` is built from `book + source_chunk_id`, but `source_chunk_id` may be empty. That silently collapses unrelated records into the same `unknown__` / `book__` key and drops later rows.
+- **P1** [scripts/l2b/etl/extract_l0_tmp.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_l0_tmp.py:26) [scripts/l2b/etl/extract_l0_tmp.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_l0_tmp.py:29) Dedup happens before `phenomenon_tags` validation. If the first occurrence of an `atom_id` has no tags, it still burns the ID and causes a later tagged occurrence to be skipped.
+- **P1** [scripts/l2b/etl/extract_l0_tmp.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_l0_tmp.py:28) [scripts/l2b/etl/extract_l0_tmp.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_l0_tmp.py:40) `phenomenon_tags` is not deduped or cleaned. Duplicate tags and empty-string tags will produce duplicate or invalid edges, and `n_phn` will be inflated.
+- **P1** [scripts/l2b/etl/extract_l0_tmp.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_l0_tmp.py:35) [scripts/l2b/etl/extract_l0_tmp.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_l0_tmp.py:44) NaN can pass straight through for `confidence` and `score`. `json.loads` accepts `NaN`, and `r.get("confidence") or 0.0` does not sanitize it.
+
+**IMPROVEMENTS**
+- Cypher idempotency is not applicable here; this script only emits CSV.
+- Require a non-empty stable source key before building `atom_id`, or fall back to a hashed payload key instead of `book__`.
+- Move `seen_atom_ids.add(atom_id)` until after the row is validated and accepted.
+- Normalize tags with `tag = (tag or "").strip()` and dedup per atom before writing edges.
+- Sanitize numeric fields with `math.isfinite`.
+- Add `OUT_DIR.mkdir(parents=True, exist_ok=True)` before writes.
+- Replace bare `except` with `except json.JSONDecodeError`.
+
+## extract_ft_l6.py
+
+**VERDICT:** REJECT
+
+**BUGS**
+- **P0** [scripts/l2b/etl/extract_ft_l6.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_ft_l6.py:74) `target_states_json` is truncated with `[:1000]` after `json.dumps`. That can cut valid JSON into invalid JSON and poison downstream imports.
+- **P1** [scripts/l2b/etl/extract_ft_l6.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_ft_l6.py:61) [scripts/l2b/etl/extract_ft_l6.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_ft_l6.py:77) Domain edges are never deduped or cleaned. Repeated `l0_domains` values and empty strings will create duplicate/invalid rows.
+- **P1** [scripts/l2b/etl/extract_ft_l6.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_ft_l6.py:38) [scripts/l2b/etl/extract_ft_l6.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_ft_l6.py:40) L6 dedup key is just `term_en.lower()` else `term_zh`. That merges homographs across books/domains and ignores the paired bilingual term, so distinct concepts can collapse into one node.
+- **P1** [scripts/l2b/etl/extract_ft_l6.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_ft_l6.py:65) [scripts/l2b/etl/extract_ft_l6.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_ft_l6.py:78) Duplicate `ft_id` rows are skipped entirely after first sighting, so later books’ domain associations are dropped. Node dedup is fine; edge dedup is not.
+- **P1** [scripts/l2b/etl/extract_ft_l6.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_ft_l6.py:47) [scripts/l2b/etl/extract_ft_l6.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_ft_l6.py:58) On L6 collisions, only `definition_en` and `book_ids` are updated. `definition_zh`, `context`, and potentially better `term_zh` values are lost, making merged rows inconsistent.
+
+**IMPROVEMENTS**
+- Cypher idempotency is not applicable here; this script only emits CSV.
+- Store `target_states_json` untruncated, or truncate the source structure before serialization.
+- Track edge uniqueness with sets like `(l6_id, domain)` and `(ft_id, domain)`.
+- Strip and reject blank domains.
+- Use a stronger L6 identity key, such as normalized `(term_en, term_zh)` or a content hash.
+- Merge FT provenance across duplicate `ft_id`s instead of skipping all later metadata.
+- Add `OUT_DIR.mkdir(...)` and replace bare `except`.
+- Remove unused `Counter`.
+
+## link_l2a_l2b_ingredients.py
+
+**VERDICT:** REJECT
+
+**BUGS**
+- **P1** [scripts/l2b/etl/link_l2a_l2b_ingredients.py](/Users/jeff/culinary-mind/scripts/l2b/etl/link_l2a_l2b_ingredients.py:56) Alias and name indexes overwrite collisions silently. If two L2A nodes share an alias/display name, the last one wins and creates incorrect links with no review flag.
+- **P1** [scripts/l2b/etl/link_l2a_l2b_ingredients.py](/Users/jeff/culinary-mind/scripts/l2b/etl/link_l2a_l2b_ingredients.py:105) The doc says “No match → flag as needs_review”, but unmatched rows are dropped entirely. That removes auditability and blocks manual review.
+- **P1** [scripts/l2b/etl/link_l2a_l2b_ingredients.py](/Users/jeff/culinary-mind/scripts/l2b/etl/link_l2a_l2b_ingredients.py:95) The fuzzy matcher only checks suffixes of length 2-4 tokens. It misses valid 1-token cases like `organic_chicken -> chicken`, and it does not actually implement the stated “contains canonical_id as substring” rule.
+- **P1** [scripts/l2b/etl/link_l2a_l2b_ingredients.py](/Users/jeff/culinary-mind/scripts/l2b/etl/link_l2a_l2b_ingredients.py:27) [scripts/l2b/etl/link_l2a_l2b_ingredients.py](/Users/jeff/culinary-mind/scripts/l2b/etl/link_l2a_l2b_ingredients.py:56) `parse_aliases()` trusts any JSON. If the field decodes to a string instead of a list, the loop indexes one character at a time and pollutes `alias_to_canonical`.
+- **P2** [scripts/l2b/etl/link_l2a_l2b_ingredients.py](/Users/jeff/culinary-mind/scripts/l2b/etl/link_l2a_l2b_ingredients.py:124) Division by zero if the L2B file is empty.
+
+**IMPROVEMENTS**
+- Cypher idempotency is not applicable here; this script only emits CSV.
+- Emit every L2B row, including `no_match`, with `needs_review=1` or similar.
+- Track ambiguity explicitly: `alias -> [canonical_ids]`, then downgrade or suppress ambiguous matches.
+- Dedup output on `(ingredient_slug, l2a_canonical_id)` or enforce one final decision per slug.
+- Clean blanks before indexing aliases/names.
+- Remove unused `re`.
+- Open CSVs with explicit `encoding="utf-8"`.
+
+## demo_ingredient_substitution.py
+
+**VERDICT:** APPROVE_WITH_NOTES
+
+**BUGS**
+- **P1** [scripts/l2b/demo_ingredient_substitution.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ingredient_substitution.py:14) Hard-coded Neo4j credentials are not production-safe.
+- **P1** [scripts/l2b/demo_ingredient_substitution.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ingredient_substitution.py:27) [scripts/l2b/demo_ingredient_substitution.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ingredient_substitution.py:28) `.single()` is assumed to return a record. If no chicken recipe exists, the script crashes.
+- **P1** [scripts/l2b/demo_ingredient_substitution.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ingredient_substitution.py:47) [scripts/l2b/demo_ingredient_substitution.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ingredient_substitution.py:48) `OPTIONAL MATCH` is neutralized by the `WHERE sibling...` clause. Parents with zero active siblings disappear entirely, which is incorrect if the demo intends to show the full category path.
+
+**IMPROVEMENTS**
+- Cypher idempotency is not relevant here; these are read-only queries.
+- Read connection settings from env vars and use `with GraphDatabase.driver(...) as driver`.
+- Add a no-result branch before printing recipe details.
+- Add `ORDER BY` before `LIMIT 1` so the chosen recipe is deterministic.
+- If you want true optional sibling behavior, move the filter into the pattern or collect with a conditional.
+
+## demo_ft_l6_reasoning.py
+
+**VERDICT:** REJECT
+
+**BUGS**
+- **P1** [scripts/l2b/demo_ft_l6_reasoning.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ft_l6_reasoning.py:17) Hard-coded Neo4j credentials are not production-safe.
+- **P1** [scripts/l2b/demo_ft_l6_reasoning.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ft_l6_reasoning.py:28) Query 1 overmatches badly: `l.term_zh CONTAINS '鲜'` will pull many unrelated glossary terms, not just “umami”. That makes the demo logic noisy and can inflate results.
+- **P1** [scripts/l2b/demo_ft_l6_reasoning.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ft_l6_reasoning.py:32) `count(f)` is not `count(DISTINCT f)`. If duplicate `TRANSLATES_TO` edges exist, FT counts are inflated.
+- **P1** [scripts/l2b/demo_ft_l6_reasoning.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ft_l6_reasoning.py:69) [scripts/l2b/demo_ft_l6_reasoning.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ft_l6_reasoning.py:77) Query 4 claims “which Recipes targeting that texture” but never matches recipes. It only groups FT rows, so the demo statement is false.
+
+**IMPROVEMENTS**
+- Cypher idempotency is not relevant here; these are read-only queries.
+- Narrow Query 1 to exact term matching or a curated synonym list instead of `CONTAINS '鲜'`.
+- Use `count(DISTINCT f)` consistently in demo aggregations.
+- Rename Query 4 to match what it actually does, or extend it to traverse into recipe nodes.
+- Add empty-result handling so the demo fails cleanly.
+- Use env vars for Neo4j auth and database selection.
+tokens used
+23,543
+## extract_l0_tmp.py
+
+**VERDICT:** REJECT
+
+**BUGS**
+- **P1** [scripts/l2b/etl/extract_l0_tmp.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_l0_tmp.py:23) [scripts/l2b/etl/extract_l0_tmp.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_l0_tmp.py:26) `atom_id` is built from `book + source_chunk_id`, but `source_chunk_id` may be empty. That silently collapses unrelated records into the same `unknown__` / `book__` key and drops later rows.
+- **P1** [scripts/l2b/etl/extract_l0_tmp.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_l0_tmp.py:26) [scripts/l2b/etl/extract_l0_tmp.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_l0_tmp.py:29) Dedup happens before `phenomenon_tags` validation. If the first occurrence of an `atom_id` has no tags, it still burns the ID and causes a later tagged occurrence to be skipped.
+- **P1** [scripts/l2b/etl/extract_l0_tmp.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_l0_tmp.py:28) [scripts/l2b/etl/extract_l0_tmp.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_l0_tmp.py:40) `phenomenon_tags` is not deduped or cleaned. Duplicate tags and empty-string tags will produce duplicate or invalid edges, and `n_phn` will be inflated.
+- **P1** [scripts/l2b/etl/extract_l0_tmp.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_l0_tmp.py:35) [scripts/l2b/etl/extract_l0_tmp.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_l0_tmp.py:44) NaN can pass straight through for `confidence` and `score`. `json.loads` accepts `NaN`, and `r.get("confidence") or 0.0` does not sanitize it.
+
+**IMPROVEMENTS**
+- Cypher idempotency is not applicable here; this script only emits CSV.
+- Require a non-empty stable source key before building `atom_id`, or fall back to a hashed payload key instead of `book__`.
+- Move `seen_atom_ids.add(atom_id)` until after the row is validated and accepted.
+- Normalize tags with `tag = (tag or "").strip()` and dedup per atom before writing edges.
+- Sanitize numeric fields with `math.isfinite`.
+- Add `OUT_DIR.mkdir(parents=True, exist_ok=True)` before writes.
+- Replace bare `except` with `except json.JSONDecodeError`.
+
+## extract_ft_l6.py
+
+**VERDICT:** REJECT
+
+**BUGS**
+- **P0** [scripts/l2b/etl/extract_ft_l6.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_ft_l6.py:74) `target_states_json` is truncated with `[:1000]` after `json.dumps`. That can cut valid JSON into invalid JSON and poison downstream imports.
+- **P1** [scripts/l2b/etl/extract_ft_l6.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_ft_l6.py:61) [scripts/l2b/etl/extract_ft_l6.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_ft_l6.py:77) Domain edges are never deduped or cleaned. Repeated `l0_domains` values and empty strings will create duplicate/invalid rows.
+- **P1** [scripts/l2b/etl/extract_ft_l6.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_ft_l6.py:38) [scripts/l2b/etl/extract_ft_l6.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_ft_l6.py:40) L6 dedup key is just `term_en.lower()` else `term_zh`. That merges homographs across books/domains and ignores the paired bilingual term, so distinct concepts can collapse into one node.
+- **P1** [scripts/l2b/etl/extract_ft_l6.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_ft_l6.py:65) [scripts/l2b/etl/extract_ft_l6.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_ft_l6.py:78) Duplicate `ft_id` rows are skipped entirely after first sighting, so later books’ domain associations are dropped. Node dedup is fine; edge dedup is not.
+- **P1** [scripts/l2b/etl/extract_ft_l6.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_ft_l6.py:47) [scripts/l2b/etl/extract_ft_l6.py](/Users/jeff/culinary-mind/scripts/l2b/etl/extract_ft_l6.py:58) On L6 collisions, only `definition_en` and `book_ids` are updated. `definition_zh`, `context`, and potentially better `term_zh` values are lost, making merged rows inconsistent.
+
+**IMPROVEMENTS**
+- Cypher idempotency is not applicable here; this script only emits CSV.
+- Store `target_states_json` untruncated, or truncate the source structure before serialization.
+- Track edge uniqueness with sets like `(l6_id, domain)` and `(ft_id, domain)`.
+- Strip and reject blank domains.
+- Use a stronger L6 identity key, such as normalized `(term_en, term_zh)` or a content hash.
+- Merge FT provenance across duplicate `ft_id`s instead of skipping all later metadata.
+- Add `OUT_DIR.mkdir(...)` and replace bare `except`.
+- Remove unused `Counter`.
+
+## link_l2a_l2b_ingredients.py
+
+**VERDICT:** REJECT
+
+**BUGS**
+- **P1** [scripts/l2b/etl/link_l2a_l2b_ingredients.py](/Users/jeff/culinary-mind/scripts/l2b/etl/link_l2a_l2b_ingredients.py:56) Alias and name indexes overwrite collisions silently. If two L2A nodes share an alias/display name, the last one wins and creates incorrect links with no review flag.
+- **P1** [scripts/l2b/etl/link_l2a_l2b_ingredients.py](/Users/jeff/culinary-mind/scripts/l2b/etl/link_l2a_l2b_ingredients.py:105) The doc says “No match → flag as needs_review”, but unmatched rows are dropped entirely. That removes auditability and blocks manual review.
+- **P1** [scripts/l2b/etl/link_l2a_l2b_ingredients.py](/Users/jeff/culinary-mind/scripts/l2b/etl/link_l2a_l2b_ingredients.py:95) The fuzzy matcher only checks suffixes of length 2-4 tokens. It misses valid 1-token cases like `organic_chicken -> chicken`, and it does not actually implement the stated “contains canonical_id as substring” rule.
+- **P1** [scripts/l2b/etl/link_l2a_l2b_ingredients.py](/Users/jeff/culinary-mind/scripts/l2b/etl/link_l2a_l2b_ingredients.py:27) [scripts/l2b/etl/link_l2a_l2b_ingredients.py](/Users/jeff/culinary-mind/scripts/l2b/etl/link_l2a_l2b_ingredients.py:56) `parse_aliases()` trusts any JSON. If the field decodes to a string instead of a list, the loop indexes one character at a time and pollutes `alias_to_canonical`.
+- **P2** [scripts/l2b/etl/link_l2a_l2b_ingredients.py](/Users/jeff/culinary-mind/scripts/l2b/etl/link_l2a_l2b_ingredients.py:124) Division by zero if the L2B file is empty.
+
+**IMPROVEMENTS**
+- Cypher idempotency is not applicable here; this script only emits CSV.
+- Emit every L2B row, including `no_match`, with `needs_review=1` or similar.
+- Track ambiguity explicitly: `alias -> [canonical_ids]`, then downgrade or suppress ambiguous matches.
+- Dedup output on `(ingredient_slug, l2a_canonical_id)` or enforce one final decision per slug.
+- Clean blanks before indexing aliases/names.
+- Remove unused `re`.
+- Open CSVs with explicit `encoding="utf-8"`.
+
+## demo_ingredient_substitution.py
+
+**VERDICT:** APPROVE_WITH_NOTES
+
+**BUGS**
+- **P1** [scripts/l2b/demo_ingredient_substitution.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ingredient_substitution.py:14) Hard-coded Neo4j credentials are not production-safe.
+- **P1** [scripts/l2b/demo_ingredient_substitution.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ingredient_substitution.py:27) [scripts/l2b/demo_ingredient_substitution.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ingredient_substitution.py:28) `.single()` is assumed to return a record. If no chicken recipe exists, the script crashes.
+- **P1** [scripts/l2b/demo_ingredient_substitution.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ingredient_substitution.py:47) [scripts/l2b/demo_ingredient_substitution.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ingredient_substitution.py:48) `OPTIONAL MATCH` is neutralized by the `WHERE sibling...` clause. Parents with zero active siblings disappear entirely, which is incorrect if the demo intends to show the full category path.
+
+**IMPROVEMENTS**
+- Cypher idempotency is not relevant here; these are read-only queries.
+- Read connection settings from env vars and use `with GraphDatabase.driver(...) as driver`.
+- Add a no-result branch before printing recipe details.
+- Add `ORDER BY` before `LIMIT 1` so the chosen recipe is deterministic.
+- If you want true optional sibling behavior, move the filter into the pattern or collect with a conditional.
+
+## demo_ft_l6_reasoning.py
+
+**VERDICT:** REJECT
+
+**BUGS**
+- **P1** [scripts/l2b/demo_ft_l6_reasoning.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ft_l6_reasoning.py:17) Hard-coded Neo4j credentials are not production-safe.
+- **P1** [scripts/l2b/demo_ft_l6_reasoning.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ft_l6_reasoning.py:28) Query 1 overmatches badly: `l.term_zh CONTAINS '鲜'` will pull many unrelated glossary terms, not just “umami”. That makes the demo logic noisy and can inflate results.
+- **P1** [scripts/l2b/demo_ft_l6_reasoning.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ft_l6_reasoning.py:32) `count(f)` is not `count(DISTINCT f)`. If duplicate `TRANSLATES_TO` edges exist, FT counts are inflated.
+- **P1** [scripts/l2b/demo_ft_l6_reasoning.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ft_l6_reasoning.py:69) [scripts/l2b/demo_ft_l6_reasoning.py](/Users/jeff/culinary-mind/scripts/l2b/demo_ft_l6_reasoning.py:77) Query 4 claims “which Recipes targeting that texture” but never matches recipes. It only groups FT rows, so the demo statement is false.
+
+**IMPROVEMENTS**
+- Cypher idempotency is not relevant here; these are read-only queries.
+- Narrow Query 1 to exact term matching or a curated synonym list instead of `CONTAINS '鲜'`.
+- Use `count(DISTINCT f)` consistently in demo aggregations.
+- Rename Query 4 to match what it actually does, or extend it to traverse into recipe nodes.
+- Add empty-result handling so the demo fails cleanly.
+- Use env vars for Neo4j auth and database selection.
