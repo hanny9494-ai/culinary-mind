@@ -1,14 +1,26 @@
-"""MF Solver Tool Registry — wrap 40 engine.solver.mf_xxx into LangGraph-style Tools.
+"""MF Solver Tool Registry — wrap 40 engine.solver.mf_xxx into Tool objects.
 
 A MFTool is a thin invocation wrapper:
     tool = get_mf_tool("MF-T03")
     out = tool.run({"A": 1e10, "Ea": 50000, "T_K": 363})
 
-Design goals:
-- No hard dependency on LangChain/LangGraph (stdlib only); but interface is
-  compatible: name/description/run pattern matches @tool decorator output.
-- Auto-discovery via importlib walking engine.solver.mf_*.
-- Schema derived from config/solver_bounds.yaml (single source of truth).
+Design:
+- No hard dependency on LangChain/LangGraph (stdlib only); MFTool exposes
+  name / description / inputs_schema / output_schema / run() pattern.
+- Auto-discovery via importlib walking engine.solver.mf_* (one per MF in
+  solver_bounds.yaml).
+- Schema derived from config/solver_bounds.yaml as single source of truth.
+- Optional adapter to_langchain_tool() — emits langchain.tools.Tool with
+  JSON-string args/return (legacy). For StructuredTool/Pydantic-based real
+  LangChain integration, build args_schema separately (future work).
+
+Limits (Codex cross-review noted):
+- MF-T02 variants outputs_by_variant not fully surfaced — children
+  MF-T02-K/-CP/-RHO are independently registered (with their own bounds).
+- inputs_schema fields preserved: min/max/unit/type/default/soft/source
+  (duplicate names collapsed to first occurrence, dropped names tracked).
+- get_all_mf_tools() emits RuntimeWarning if any tools fail to load (was
+  silent skip; Codex P1).
 """
 from __future__ import annotations
 
@@ -45,7 +57,7 @@ class MFTool:
     def run(self, params: dict) -> dict:
         """Invoke the underlying solver; returns full validity-checked output."""
         if self._solver_module is None:
-            mod_name = f"engine.solver.mf_{self.mf_id.lower().replace('-', '_')}"
+            mod_name = f"engine.solver.{self.mf_id.lower().replace('-', '_')}"
             self._solver_module = importlib.import_module(mod_name)
         return self._solver_module.solve(params)
 
@@ -89,7 +101,27 @@ def _load_bounds() -> dict:
 def _build_tool(mf_id: str, mf_spec: dict) -> MFTool:
     canonical = mf_spec.get("canonical_name", mf_id)
     inputs = mf_spec.get("inputs", [])
-    inputs_schema = {i["name"]: {"min": i.get("min"), "max": i.get("max"), "unit": i.get("unit", "")} for i in inputs}
+    # P1 fix: preserve type, default, soft fields; warn on duplicate field names
+    inputs_schema = {}
+    duplicates = []
+    for i in inputs:
+        name = i["name"]
+        if name in inputs_schema:
+            duplicates.append(name)
+            # Keep first occurrence; subsequent ones (e.g. soft bounds) discarded
+            continue
+        inputs_schema[name] = {
+            "min": i.get("min"),
+            "max": i.get("max"),
+            "unit": i.get("unit", ""),
+            "type": i.get("type", "number"),  # MF-M03 substance is string
+            "default": i.get("default"),
+            "soft": i.get("soft", False),
+            "source": i.get("source", ""),
+        }
+    if duplicates:
+        # Don't warn here (too noisy for benign aliases); just track
+        inputs_schema["_duplicate_names_dropped"] = duplicates
     output = mf_spec.get("output", {})
     # Try to load module to get docstring
     mod_name = f"engine.solver.{mf_id.lower().replace('-', '_')}"
@@ -117,16 +149,27 @@ def get_all_mf_tools() -> list[MFTool]:
     bounds = _load_bounds()
     solvers = bounds.get("solvers", {})
     tools = []
+    errors: list[str] = []
     for mf_id, spec in sorted(solvers.items()):
-        # Skip MF-T02 parent (parent_only — children are routable)
+        # Skip MF-T02 parent (parent_only — children mf_t02_k/cp/rho are routable separately)
         if mf_id == "MF-T02":
             continue
         try:
             tool = _build_tool(mf_id, spec)
-            if tool._solver_module is not None:
-                tools.append(tool)
-        except Exception:
-            pass  # silent skip if solver missing
+            if tool._solver_module is None:
+                errors.append(f"{mf_id}: solver module not importable")
+                continue
+            tools.append(tool)
+        except Exception as exc:
+            errors.append(f"{mf_id}: {type(exc).__name__}: {exc}")
+    if errors:
+        import warnings
+        warnings.warn(
+            f"get_all_mf_tools: {len(errors)} tool(s) failed to load:\n  " +
+            "\n  ".join(errors),
+            RuntimeWarning,
+            stacklevel=2,
+        )
     _TOOLS_CACHE = tools
     return list(tools)
 
