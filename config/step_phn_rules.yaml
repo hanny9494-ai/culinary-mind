@@ -1,0 +1,160 @@
+# Step → PHN Mapping Rules
+# Locked 2026-05-13 by cc-lead (D71 design, refreshed for 40 MFs)
+# Each rule: if step matches conditions → emit PHN edge (TRIGGERS_PHN)
+# PHN labels match existing 76 PHN library (config/phn/*.yaml)
+# Each PHN then chains to L0 (P2-Ic3) and MF tools (P2-Ic4)
+
+version: "1.0"
+locked_at: "2026-05-13"
+
+rules:
+  # --- Maillard / Browning ---
+  - id: maillard_dry_heat
+    description: "Dry-heat cooking above 140°C triggers Maillard browning"
+    conditions:
+      action_in: [roast, bake, fry, grill, sear, broil, brown, sauté, saute, pan-fry, deep-fry]
+      temp_c_gte: 140
+    triggers_phn: maillard_browning
+    governed_by_mf: [MF-T03, MF-T01]   # Arrhenius rate + Fourier center temp
+    confidence: 0.95
+
+  - id: maillard_low_water
+    description: "Dehydration/dry-heat brown without explicit temp"
+    conditions:
+      action_in: [toast, dry, crisp, char]
+    triggers_phn: maillard_browning
+    governed_by_mf: [MF-T03]
+    confidence: 0.75
+
+  # --- Caramelization ---
+  - id: caramelize_sugar
+    description: "Sugar/syrup heated > 160°C"
+    conditions:
+      action_in: [caramelize, candy, glaze]
+    triggers_phn: caramelization_sugar
+    governed_by_mf: [MF-T03]
+    confidence: 0.95
+
+  # --- Protein denaturation ---
+  - id: protein_coagulate_egg
+    description: "Egg/protein cooked between 60-85°C"
+    conditions:
+      action_in: [poach, coddle, steam, simmer, sous-vide]
+      temp_c_gte: 60
+      temp_c_lte: 90
+    triggers_phn: protein_denaturation
+    governed_by_mf: [MF-T06, MF-T03]   # van't Hoff sigmoid + rate
+    confidence: 0.92
+
+  - id: protein_high_temp
+    description: "Protein cooked at high temperature (boil/braise)"
+    conditions:
+      action_in: [boil, braise, stew, simmer]
+      temp_c_gte: 90
+    triggers_phn: protein_denaturation
+    governed_by_mf: [MF-T06, MF-T01]
+    confidence: 0.85
+
+  # --- Thermal kill / pasteurization ---
+  - id: thermal_kill_pathogen
+    description: "Heat treatment that kills pathogens"
+    conditions:
+      action_in: [pasteurize, sterilize, boil]
+      temp_c_gte: 60
+      duration_min_gte: 1
+    triggers_phn: thermal_inactivation
+    governed_by_mf: [MF-K02, MF-K04]   # D-value + F-value
+    confidence: 0.90
+
+  # --- Microbial fermentation ---
+  - id: ferment_warm
+    description: "Microbial fermentation at warm temperature"
+    conditions:
+      action_in: [ferment, culture, leaven, proof, sourdough, yogurt, brew]
+    triggers_phn: microbial_fermentation
+    governed_by_mf: [MF-K05, MF-T03]   # Gompertz + rate
+    confidence: 0.90
+
+  # --- Freezing / Ice crystallization ---
+  - id: freeze
+    description: "Water freezing into ice crystals"
+    conditions:
+      action_in: [freeze, chill-freeze]
+      temp_c_lte: 0
+    triggers_phn: ice_crystallization
+    governed_by_mf: [MF-T05]
+    confidence: 0.95
+
+  # --- Diffusion / mass transfer ---
+  - id: marinate_diffusion
+    description: "Solute diffusion into food (marinade/brine/cure)"
+    conditions:
+      action_in: [marinate, brine, cure, pickle, soak]
+    triggers_phn: mass_transfer_diffusion
+    governed_by_mf: [MF-M01]   # Fick 2nd
+    confidence: 0.85
+
+  # --- Drying / dehydration ---
+  - id: drying
+    description: "Water removal from food"
+    conditions:
+      action_in: [dry, dehydrate, desiccate]
+    triggers_phn: dehydration_moisture
+    governed_by_mf: [MF-M01, MF-M02]   # Fick + GAB isotherm
+    confidence: 0.90
+
+  # --- Starch gelatinization ---
+  - id: starch_gel
+    description: "Starch hydration + heat → gelatinization"
+    conditions:
+      action_in: [boil, simmer, steam, cook]
+      ingredient_contains_any: [rice, flour, starch, pasta, potato]
+      temp_c_gte: 60
+    triggers_phn: starch_gelatinization
+    governed_by_mf: [MF-T10]
+    confidence: 0.90
+
+  # --- Emulsion ---
+  - id: emulsify_mechanical
+    description: "Mechanical emulsion (mayonnaise, vinaigrette)"
+    conditions:
+      action_in: [whisk, blend, emulsify, beat]
+    triggers_phn: emulsion_formation
+    governed_by_mf: [MF-C01, MF-R01]   # Stokes + Power Law
+    confidence: 0.80
+
+  # --- Microwave heating ---
+  - id: microwave_heating
+    description: "Microwave/RF heating"
+    conditions:
+      action_in: [microwave, nuke, mw]
+    triggers_phn: dielectric_heating
+    governed_by_mf: [MF-T07, MF-T01]
+    confidence: 0.95
+
+  # --- Aroma volatile release ---
+  - id: aroma_release
+    description: "Volatile aroma release on heating"
+    conditions:
+      action_in: [fry, sauté, sizzle, smoke, infuse]
+    triggers_phn: aroma_volatilization
+    governed_by_mf: [MF-M05]   # Henry law
+    confidence: 0.75
+
+  # --- Rheology change (paste/dough) ---
+  - id: rheology_knead
+    description: "Mechanical work on dough/paste"
+    conditions:
+      action_in: [knead, fold, pound, mash]
+    triggers_phn: rheology_change
+    governed_by_mf: [MF-R01, MF-R05]
+    confidence: 0.70
+
+  # --- Acid-base reactions ---
+  - id: acid_curd
+    description: "Acid-induced protein coagulation (curdling)"
+    conditions:
+      action_in: [curdle, sour, acidify]
+    triggers_phn: acid_coagulation
+    governed_by_mf: [MF-M04, MF-T06]   # Henderson-Hasselbalch + denat
+    confidence: 0.85
