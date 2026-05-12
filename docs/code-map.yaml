@@ -3,10 +3,11 @@
 # 更新: 2026-05-02
 # 维护者: repo-curator agent
 
-version: "1.20"
+version: "1.21"
 status: "draft"  # draft → reviewed → locked
 last_updated: "2026-05-01"
 changelog:
+  - "1.21 (2026-05-01): PR #42 合并 — feat(P2-Lb1) **Layer 3 reasoning pipeline LIVE**，23,584 recipes + 80,056 steps + 22,212 ingredients + 6,560 TRIGGERS_PHN edges 导入 Neo4j，PHN nodes 76→81 (+5 new)，MF nodes 39→40 (+1 new)，新增 scripts/l2b/etl/ (3 ETL scripts: extract_recipes/apply_step_phn_rules/extract_phn_mf_edges，~336 LOC) + config/step_phn_rules.yaml (16 rules，D71 设计 Step→PHN mapping) + scripts/l2b/smoke_test_recipe_reasoning.py (148 LOC Layer 3 smoke test)，Pâte à Choux + 多食谱完整链路验证通过 (Recipe → Step → PHN → MF → solver)，**里程碑：项目第一次真实食谱驱动完整推理链路，CKG_L2B_TMP_* namespace（临时，architect schema lock 后可平滑迁移）**，cc-lead direct 执行（Jeff '不等 arch，直接干'）"
   - "1.20 (2026-05-01): PR #41 合并 — feat(P2-Sa-eval) + fix(codex 2nd round tool registry P0/P1)，**P2-Sa data line 正式关闭** — Sa1 (11,004 records) → Sa2 (10,462 cleaned) → **Sa-eval 10/10 accuracy gate pass** ✅，新增 scripts/skill_a/eval/p2_sa_eval_reference_comparison.py (186 LOC 抽样验证脚本) + scripts/skill_a/benchmark/case_studies_advanced.py (116 LOC)，tool_registry P0 修复 (get_all_tools() duplicate detection) + P1 增强错误处理 (ToolNotFoundError/DuplicateToolError) + 34 new test cases，495 → 498 tests passing (+3) 无回归，归档 raw/code-reviewer/codex-langgraph-2nd-review-20260512.txt (3,521 LOC Codex 2nd round review)，**里程碑：P2-Sa 41.2% coverage MF value database production-ready，P4-08 LangGraph tool registry robustness validated**"
   - "1.19 (2026-05-01): PR #40 合并 — fix/cross-review-followup + LangGraph tool registry，闭环 PR #39 遗留 P1/P2 items (4 fixes: MF-M08 unit convention / MF-K06 thermal kill semantic / Solver edge case tests / Case study script fixes)，**新增 engine/agent/ 模块** (LangGraph Tool Registry ~280 LOC)：39 MF tools 注册 (40 solvers，MF-T02 拆分为 k/cp/rho) + @tool 装饰器封装 + tool metadata (tool_id/canonical_name/domain/input-output schema) + API: get_tool/list_tools/get_tools_by_domain，485 → 495 tests passing (+10 agent tests) 无回归，**里程碑：Layer 3 接入层 foundation 完成** — 39 MF tools 可被 LangGraph/LangChain agent 直接调用，P4-08 LangGraph 主框架接入准备就绪"
   - "1.18 (2026-05-01): PR #39 合并 — fix/cross-review-issues (Codex CLI 交叉审核发现 1 P0 + 6 P1 bugs)，P0: MF-T10 div0 修复 (T_C=-273.15 → T_K=0 Arrhenius 崩溃)，P1 x6: MF-T06 sigma_override 参数传递 / MF-K07 二次方程系数修正 / rescue half-life 单位转换 / benchmark MF-T02 routing / pipeline atomic writes / progress JSON error handling，新增 3 edge case tests (T10 T=0K / K07 quadratic / rescue half-life unit)，482 → 485 tests passing (+3 new) 无回归，审核文档 raw/code-reviewer/codex-cross-review-20260512.md + 2 Codex CLI raw outputs 归档"
@@ -104,6 +105,7 @@ directories:
       solver_bounds.yaml:              "40 MF solver 输入/输出范围定义（P1-21a 28 baseline + P2-Sa1 6 扩展 + P3-Tier1 4 新增 + P3-Tier2-3 8 新增）"
       mf_fingerprints.json:            "40 MF 指纹配置（P1-22 28 baseline + P2-Sa1 6 扩展 + P3-Tier1 4 新增 + P3-Tier2-3 8 新增）"
       new_mf_candidates_backlog.yaml:  "已清空（P1-21c-D 12 new MF 全部实施完成）"
+      step_phn_rules.yaml:             "**Step → PHN mapping 规则（P2-Lb1，PR #42，16 rules，D71 设计）** — verb_patterns + ingredient_context trigger PHN nodes，Layer 3 recipe reasoning 核心配置"
       api.yaml:                        "API 配置"
 
   docs/:
@@ -123,6 +125,7 @@ directories:
       orchestrator.py: "蒸馏编排器"
       y_s1/:           "Neo4j 导入（应迁移到 graph/import/）"
       l2a/:            "L2a ingredient tree ETL 完整链路（P1-13~16，PR #31）— Step 5 cluster_merge / Step 6 relationship_build / Step 7 export_neo4j，CKG_L2A_* namespace，24,335 nodes + 52,313 edges"
+      l2b/:            "**L2b recipe ingest pipeline（P2-Lb1，PR #42）** — etl/ (3 scripts: extract_recipes/apply_step_phn_rules/extract_phn_mf_edges，~336 LOC) + smoke_test_recipe_reasoning.py (148 LOC Layer 3 smoke test)，23,584 recipes + 80,056 steps + 22,212 ingredients + 6,560 TRIGGERS_PHN edges 导入 Neo4j，CKG_L2B_TMP_* namespace（临时），**里程碑：Layer 3 reasoning pipeline LIVE — Recipe → Step → PHN → MF → solver 完整链路跑通**"
       skill_a/:        "Skill A 二期数据处理（P1-21c-D/P2-Sa1/P3-Tier1/P4-Be2-lite/P4-case-studies）— ontology mapping（P1-21c-D，PR #32，5 scripts，34.2% mapped to 28 MF solvers，13,080 new MF candidates）+ etl/（P2-Sa1，PR #33，3 ETL scripts: build_mf_value_database/extend_mf_schemas/rescue_backlog_to_new_fields，11,004 records 41.2% coverage）+ etl/（P3-Tier1，PR #34，2 ETL scripts: add_p3_tier1_mf_schemas + p2_sa2_outlier_cleaning，10,462 production-ready records）+ benchmark/（P4-Be2-lite，PR #36，2 scripts: mf_real_data_benchmark + case_study_beef_boiling，2,220 tests / 1,359 passed 61.2% pass rate + beef boiling 6-MF end-to-end chain）+ benchmark/（P4-case-studies，PR #37，case_studies_batch.py，4 food scenarios 跨 thermal/kinetic/mass-transfer/dielectric 域，13 unique MFs chained，Layer 3 推理链跨域验证完成）"
 
   # ── 数据（不入 git） ──
