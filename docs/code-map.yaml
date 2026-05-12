@@ -3,10 +3,11 @@
 # 更新: 2026-05-02
 # 维护者: repo-curator agent
 
-version: "1.18"
+version: "1.19"
 status: "draft"  # draft → reviewed → locked
 last_updated: "2026-05-01"
 changelog:
+  - "1.19 (2026-05-01): PR #40 合并 — fix/cross-review-followup + LangGraph tool registry，闭环 PR #39 遗留 P1/P2 items (4 fixes: MF-M08 unit convention / MF-K06 thermal kill semantic / Solver edge case tests / Case study script fixes)，**新增 engine/agent/ 模块** (LangGraph Tool Registry ~280 LOC)：39 MF tools 注册 (40 solvers，MF-T02 拆分为 k/cp/rho) + @tool 装饰器封装 + tool metadata (tool_id/canonical_name/domain/input-output schema) + API: get_tool/list_tools/get_tools_by_domain，485 → 495 tests passing (+10 agent tests) 无回归，**里程碑：Layer 3 接入层 foundation 完成** — 39 MF tools 可被 LangGraph/LangChain agent 直接调用，P4-08 LangGraph 主框架接入准备就绪"
   - "1.18 (2026-05-01): PR #39 合并 — fix/cross-review-issues (Codex CLI 交叉审核发现 1 P0 + 6 P1 bugs)，P0: MF-T10 div0 修复 (T_C=-273.15 → T_K=0 Arrhenius 崩溃)，P1 x6: MF-T06 sigma_override 参数传递 / MF-K07 二次方程系数修正 / rescue half-life 单位转换 / benchmark MF-T02 routing / pipeline atomic writes / progress JSON error handling，新增 3 edge case tests (T10 T=0K / K07 quadratic / rescue half-life unit)，482 → 485 tests passing (+3 new) 无回归，审核文档 raw/code-reviewer/codex-cross-review-20260512.md + 2 Codex CLI raw outputs 归档"
   - "1.17 (2026-05-01): PR #38 合并 — P1-Sd1/Sd2/Sd3/Tx1/Tx2/Px1 schema locks + test infrastructure，新增 config/l1_equipment_schema.yaml (106 LOC L1 设备实践参数层) + config/ft_phenomenon_bundle_schema.yaml (96 LOC FT 风味目标层) + config/l2c_commercial_ingredient_schema.yaml (122 LOC L2c 商业食材数据库) + config/prompts/registry.yaml (113 LOC prompt 注册表)，新增 tests/integration/test_l2a_neo4j_integrity.py (58 LOC) + tests/integration/test_performance_baseline.py (84 LOC) + tests/prompts/test_prompt_registry.py (51 LOC)，pytest.ini 统一测试配置，463 → 482 tests passing (+19 new)，里程碑：**P1 主线船骨完工**（pending P1-15 Jeff sanity check），L0/L2a/L2b/Schema/Test infra/P3 MF扩展/P4 验证全部实施完成"
   - "1.16 (2026-05-01): PR #37 合并 — P4-case-studies 4 food scenarios 跨域验证（Yogurt Fermentation/Microwave Reheating/Apple Cold Storage/Tomato Drying），13 unique MFs chained 跨 thermal/kinetic/mass-transfer/dielectric 域，所有场景 order-of-magnitude 匹配文献参考值，新增 scripts/skill_a/benchmark/case_studies_batch.py (240 LOC)，报告 raw/cc-lead/p4-case-studies-batch-20260511.md，里程碑：Layer 3 推理链跨域验证完成，P4-Be2-lite (beef) + 本 PR (4 scenarios) = 5 real food scenarios validated，P4-08 LangGraph 接入准备充分"
@@ -52,9 +53,9 @@ directories:
     status: active
     owner: coder
     children:
-      solver/:    "40 MF 数值求解器（40/40 已完成，PR #20/25/26/27/28/34/35，463 tests passing）— T01-10 (10), K01-07 (7), M01-11 (11), R01-07 (7), C01-05 (5) + 统一 provenance/llm_summary 返回格式（P1-22）+ @validate_bounds 装饰器（P1-21a）+ Hypothesis property tests（P1-21b, 46 tests 覆盖 15 高价值 MF）+ P3-Tier1 新增 T06/K06/T07/T10 (protein denaturation/hurdle tech/microwave dielectric/crystallization kinetics) + P3-Tier2-3 新增 M07/M08/T08/K07/T09/M09/M11/M10 (solubility/gas_permeability/ohmic_heating/binding_kinetics/respiration_rate/osmotic_dehydration/supercritical_extraction/membrane_transport) — 里程碑：P1-21c-D 12 new MF candidates backlog 全部实施完成"
+      solver/:    "40 MF 数值求解器（40/40 已完成，PR #20/25/26/27/28/34/35/40，495 tests passing）— T01-10 (10), K01-07 (7), M01-11 (11), R01-07 (7), C01-05 (5) + 统一 provenance/llm_summary 返回格式（P1-22）+ @validate_bounds 装饰器（P1-21a）+ Hypothesis property tests（P1-21b, 46 tests 覆盖 15 高价值 MF）+ P3-Tier1 新增 T06/K06/T07/T10 (protein denaturation/hurdle tech/microwave dielectric/crystallization kinetics) + P3-Tier2-3 新增 M07/M08/T08/K07/T09/M09/M11/M10 (solubility/gas_permeability/ohmic_heating/binding_kinetics/respiration_rate/osmotic_dehydration/supercritical_extraction/membrane_transport) — 里程碑：P1-21c-D 12 new MF candidates backlog 全部实施完成"
       tools/:     "Task-oriented wrapper（estimate_heating_time 等，待建 P1-20）"
-      agent/:     "LangGraph Agent（Phase 4B，待建）"
+      agent/:     "**LangGraph Tool Registry（PR #40 完成，~280 LOC）**：39 MF tools 注册 (40 solvers，MF-T02 拆分为 k/cp/rho) + @tool 装饰器 + tool metadata + API (get_tool/list_tools/get_tools_by_domain) + 10 agent tests — **里程碑：Layer 3 接入层 foundation 完成，P4-08 LangGraph 主框架接入准备就绪**"
       retrieval/: "检索策略（Phase 4B，待建）"
     note: "D65 决策：不引入 SymPy/SciPy，所有 MF 手写解析解或数值解；依赖 CoolProp/fluids/ht/pint/scipy. P1-21a: solver_bounds.yaml sanity envelopes + @validate_bounds decorator 入参/输出范围校验"
 
