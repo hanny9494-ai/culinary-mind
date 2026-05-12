@@ -33,7 +33,7 @@ CITATIONS = [
 @validate_bounds("MF-M07")
 def solve(params: dict) -> dict:
     val = Validator()
-    assumptions = ["log10 base; positive K_partition means hydrophobic"]
+    assumptions = ["log10 base; K_partition > 1 (logP > 0) implies oil preference (hydrophobic)"]
     logp = params.get("logP", params.get("log_p"))
     s_water = params.get("S_water")
     t_c = params.get("T_C", params.get("T_c"))
