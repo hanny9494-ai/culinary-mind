@@ -9,7 +9,7 @@ Inputs:
     dC [mol/m³]:    concentration gradient = (c1 - c2)
 
 Output:
-    J_solute (mass flux, mol/(m²·s))
+    J_solute (molar flux, mol/(m²·s))
 """
 from __future__ import annotations
 

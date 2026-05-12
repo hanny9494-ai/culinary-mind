@@ -123,26 +123,37 @@ def main():
     print(f"  → Pasteurization (Listeria/Salmonella): typically needs F70 ≥ 1-2 min")
     print()
 
-    # ──────────────── Step 6: Salmonella Safety ───────────────────────
-    print("STEP 6: Salmonella growth limit at center temperatures")
+    # ──────────────── Step 6: Salmonella Thermal Kill (CORRECTED Cross-Review) ───
+    print("STEP 6: Salmonella thermal inactivation via MF-K02 D-value (CORRECTED)")
     print("-" * 70)
-    # Salmonella: pH_min ~3.7, a_w_min ~0.94, T_min ~5.2°C
-    # In cooked beef interior, pH ~5.5, a_w ~0.99
-    print(f"  Setup: pH_min=3.7, a_w_min=0.94, T_min=5.2°C")
-    print(f"  Beef interior: pH=5.5, a_w=0.99")
+    # Cross-review (Codex P1): MF-K06 hurdle ≠ thermal kill. Use MF-K02 D-value.
+    # Salmonella @ 65°C: D = 1.5 min (1 log10 reduction per 1.5 min at 65°C)
+    # For 6-log reduction (safety target) at 65°C: ~9 min needed
+    # At lower T, D rises (Arrhenius); use z-value to scale
+    from engine.solver import mf_k02
+    print(f"  Setup: Salmonella D₆₅=1.5 min (1 log10/1.5min at 65°C)")
+    print(f"  Target: 6-log reduction (FSIS pasteurization standard)")
     print()
-    print(f"  {'time (min)':>10}  {'T_center':>10}  {'growth_inhibited':>17}")
+    print(f"  {'time (min)':>10}  {'T_center':>10}  {'log reduction':>14}  {'safe?':<8}")
+    # Compute D(T) from z-value: log(D1/D2) = (T2-T1)/z
+    # z for Salmonella ≈ 5°C
+    z_value = 5.0
+    D_65 = 1.5 * 60.0  # 1.5 min in seconds
     for t, tc in zip(times, T_centers):
-        out_g = mf_k06.solve({
-            "pH_min": 3.7, "a_w_min": 0.94, "T_min": 5.2,
-            "pH": 5.5, "a_w": 0.99, "T_C": tc,
-        })
-        gi = out_g["result"]["value"]
-        inhibited = "YES (cooked through)" if gi == 1.0 else "NO (still permits growth)" if gi == 0.0 else "?"
-        # Wait, MF-K06 inhibition is T < T_min — but cooking goes UP not DOWN
-        # In our case T_center always > 5.2 so growth permitted (gi=0)
-        # That doesn't reflect that 60°C+ kills Salmonella — but that's MF-K02 D-value
-        print(f"  {t/60:>10.1f}  {tc:>10.1f}  {gi:>17}  ({inhibited})")
+        # If T_center < 50°C, D is so long (>10 hr) effectively no reduction
+        if tc < 50.0:
+            log_red = 0.0
+            safe = "no (too cold)"
+        else:
+            # D(T_center) = D_65 × 10^((65-T_center)/z)
+            D_T = D_65 * 10 ** ((65.0 - tc) / z_value)
+            t_seconds = float(t)
+            log_red = t_seconds / D_T  # number of log10 reductions
+            safe = "YES" if log_red >= 6 else f"need {6-log_red:.1f} more"
+        print(f"  {t/60:>10.1f}  {tc:>10.1f}  {log_red:>14.2f}  {safe:<8}")
+    print()
+    print(f"  → Note: Original code used MF-K06 (Growth Limit) which is hurdle inhibition,")
+    print(f"    not thermal kill. Cross-review (Codex) flagged this. Now using MF-K02 D-value.")
 
     print()
     print("=" * 70)
