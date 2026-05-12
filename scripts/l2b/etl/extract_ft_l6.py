@@ -71,7 +71,7 @@ for p in ROOT.glob("output/*/skill_d/results.jsonl"):
                     "aesthetic_word_en": r.get("aesthetic_word_en") or "",
                     "matrix_type": r.get("matrix_type") or "",
                     "substrate": r.get("substrate") or "",
-                    "target_states_json": json.dumps(target_states, ensure_ascii=False)[:1000],
+                    "target_states_json": json.dumps(target_states, ensure_ascii=False)  # P0 fix Codex 4th: no truncation,
                     "book_id": book,
                 })
                 for dom in r.get("l0_domains", []) or []:
