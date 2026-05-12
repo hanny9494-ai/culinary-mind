@@ -21,16 +21,17 @@ rules:
   - id: maillard_low_water
     description: "Dehydration/dry-heat brown without explicit temp"
     conditions:
-      action_in: [toast, dry, crisp, char]
+      action_in: [toast, crisp]
     triggers_phn: maillard_browning
     governed_by_mf: [MF-T03]
     confidence: 0.75
 
   # --- Caramelization ---
   - id: caramelize_sugar
-    description: "Sugar/syrup heated > 160°C"
+    description: "Sugar/syrup heated > 130°C (caramelization onset; P1 Codex fix added temp gate)"
     conditions:
       action_in: [caramelize, candy, glaze]
+      temp_c_gte: 130
     triggers_phn: caramelization_sugar
     governed_by_mf: [MF-T03]
     confidence: 0.95
@@ -68,9 +69,11 @@ rules:
 
   # --- Microbial fermentation ---
   - id: ferment_warm
-    description: "Microbial fermentation at warm temperature"
+    description: "Microbial fermentation at warm temperature (P1 Codex fix: add temp gate)"
     conditions:
       action_in: [ferment, culture, leaven, proof, sourdough, yogurt, brew]
+      temp_c_gte: 4
+      temp_c_lte: 60
     triggers_phn: microbial_fermentation
     governed_by_mf: [MF-K05, MF-T03]   # Gompertz + rate
     confidence: 0.90
@@ -116,12 +119,12 @@ rules:
 
   # --- Emulsion ---
   - id: emulsify_mechanical
-    description: "Mechanical emulsion (mayonnaise, vinaigrette)"
+    description: "Mechanical action (mayonnaise/vinaigrette/dressings); lowered confidence per Codex review — mechanical alone insufficient evidence"
     conditions:
-      action_in: [whisk, blend, emulsify, beat]
+      action_in: [emulsify]
     triggers_phn: emulsion_formation
-    governed_by_mf: [MF-C01, MF-R01]   # Stokes + Power Law
-    confidence: 0.80
+    governed_by_mf: [MF-C01, MF-R01]
+    confidence: 0.70
 
   # --- Microwave heating ---
   - id: microwave_heating
