@@ -1,0 +1,3521 @@
+Reading additional input from stdin...
+OpenAI Codex v0.128.0-alpha.1 (research preview)
+--------
+workdir: /Users/jeff/culinary-mind
+model: gpt-5.4
+provider: openai
+approval: never
+sandbox: danger-full-access
+reasoning effort: medium
+reasoning summaries: none
+session id: 019e1a58-9601-7c42-a7c0-cb9e9657a948
+--------
+user
+You are a code reviewer. Review the following new engine.agent module (LangGraph-compatible MF Tool registry).
+
+Focus on:
+1. **Correctness of tool wrapping** (do tools dispatch to right solver?)
+2. **Schema integrity** (inputs_schema matches solver_bounds.yaml?)
+3. **LangChain compatibility** (to_langchain_tool() correct?)
+4. **Error handling** (missing tools, malformed inputs)
+5. **Naming + caching**
+
+Output strict markdown. Start with `## tool_registry.py` etc.
+
+For each file:
+- VERDICT: APPROVE / APPROVE_WITH_NOTES / REJECT
+- BUGS (P0/P1/P2)
+- IMPROVEMENTS
+
+
+=== engine/agent/__init__.py ===
+"""Engine.agent — LangGraph-compatible Tool wrappers for 40 MF solvers.
+
+Exports:
+    get_all_mf_tools()   → list of LangChain-compatible @tool functions
+    get_mf_tool(mf_id)   → single tool
+
+Each tool wraps engine.solver.mf_xxx.solve and exposes:
+- name: 'mf_t03_arrhenius' etc
+- description: docstring of solve()
+- input_schema: pydantic-style {param: type}
+- run(params) → result dict
+"""
+from engine.agent.tool_registry import get_all_mf_tools, get_mf_tool, MFTool
+
+__all__ = ["get_all_mf_tools", "get_mf_tool", "MFTool"]
+
+=== engine/agent/tool_registry.py ===
+"""MF Solver Tool Registry — wrap 40 engine.solver.mf_xxx into LangGraph-style Tools.
+
+A MFTool is a thin invocation wrapper:
+    tool = get_mf_tool("MF-T03")
+    out = tool.run({"A": 1e10, "Ea": 50000, "T_K": 363})
+
+Design goals:
+- No hard dependency on LangChain/LangGraph (stdlib only); but interface is
+  compatible: name/description/run pattern matches @tool decorator output.
+- Auto-discovery via importlib walking engine.solver.mf_*.
+- Schema derived from config/solver_bounds.yaml (single source of truth).
+"""
+from __future__ import annotations
+
+import importlib
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
+ROOT = Path(__file__).resolve().parents[2]
+BOUNDS_FILE = ROOT / "config/solver_bounds.yaml"
+
+
+@dataclass
+class MFTool:
+    """LangChain/LangGraph-compatible tool wrapper for an MF solver."""
+    mf_id: str
+    canonical_name: str
+    description: str
+    inputs_schema: dict  # {param_name: {min, max, unit}}
+    output_schema: dict  # {symbol, min, max, unit}
+    _solver_module: Any = field(default=None, repr=False)
+
+    @property
+    def name(self) -> str:
+        """LangChain tool name (snake_case)."""
+        return f"{self.mf_id.lower().replace('-', '_')}_{self.canonical_name.lower().replace('-', '_')}"
+
+    def run(self, params: dict) -> dict:
+        """Invoke the underlying solver; returns full validity-checked output."""
+        if self._solver_module is None:
+            mod_name = f"engine.solver.mf_{self.mf_id.lower().replace('-', '_')}"
+            self._solver_module = importlib.import_module(mod_name)
+        return self._solver_module.solve(params)
+
+    def to_langchain_tool(self):
+        """Optional: return a LangChain Tool if langchain is installed.
+        
+        Usage:
+            from langchain.tools import Tool
+            ai_tool = mf_tool.to_langchain_tool()
+        """
+        try:
+            from langchain.tools import Tool
+        except ImportError:
+            raise ImportError("Install langchain: pip install langchain")
+        return Tool(
+            name=self.name,
+            description=self.description,
+            func=lambda params_json: json.dumps(self.run(json.loads(params_json) if isinstance(params_json, str) else params_json)),
+        )
+
+    def get_input_summary(self) -> str:
+        """Human-readable input description for LLM agent prompt."""
+        lines = [f"Inputs for {self.mf_id} ({self.canonical_name}):"]
+        for name, spec in self.inputs_schema.items():
+            unit = spec.get("unit", "")
+            lo, hi = spec.get("min"), spec.get("max")
+            lines.append(f"  - {name}: {unit} (range: [{lo}, {hi}])")
+        lines.append(f"Output: {self.output_schema.get('symbol', '?')} {self.output_schema.get('unit', '')}")
+        return "\n".join(lines)
+
+
+_TOOLS_CACHE: list[MFTool] = []
+
+
+def _load_bounds() -> dict:
+    if yaml is None:
+        raise ImportError("PyYAML required to load solver_bounds.yaml")
+    return yaml.safe_load(BOUNDS_FILE.read_text())
+
+
+def _build_tool(mf_id: str, mf_spec: dict) -> MFTool:
+    canonical = mf_spec.get("canonical_name", mf_id)
+    inputs = mf_spec.get("inputs", [])
+    inputs_schema = {i["name"]: {"min": i.get("min"), "max": i.get("max"), "unit": i.get("unit", "")} for i in inputs}
+    output = mf_spec.get("output", {})
+    # Try to load module to get docstring
+    mod_name = f"engine.solver.{mf_id.lower().replace('-', '_')}"
+    try:
+        mod = importlib.import_module(mod_name)
+        description = (mod.__doc__ or "").strip().split("\n")[0]
+    except (ModuleNotFoundError, AttributeError):
+        mod = None
+        description = f"{canonical} solver"
+    return MFTool(
+        mf_id=mf_id,
+        canonical_name=canonical,
+        description=description,
+        inputs_schema=inputs_schema,
+        output_schema=output if isinstance(output, dict) else {},
+        _solver_module=mod,
+    )
+
+
+def get_all_mf_tools() -> list[MFTool]:
+    """Return all 40 MF tools (cached on first call)."""
+    global _TOOLS_CACHE
+    if _TOOLS_CACHE:
+        return list(_TOOLS_CACHE)
+    bounds = _load_bounds()
+    solvers = bounds.get("solvers", {})
+    tools = []
+    for mf_id, spec in sorted(solvers.items()):
+        # Skip MF-T02 parent (parent_only — children are routable)
+        if mf_id == "MF-T02":
+            continue
+        try:
+            tool = _build_tool(mf_id, spec)
+            if tool._solver_module is not None:
+                tools.append(tool)
+        except Exception:
+            pass  # silent skip if solver missing
+    _TOOLS_CACHE = tools
+    return list(tools)
+
+
+def get_mf_tool(mf_id: str) -> MFTool:
+    """Get a single MF tool by id, e.g. 'MF-T03'."""
+    for t in get_all_mf_tools():
+        if t.mf_id == mf_id:
+            return t
+    raise KeyError(f"Unknown MF id: {mf_id}")
+
+
+def get_tools_by_keyword(keyword: str) -> list[MFTool]:
+    """Find tools whose name/description/canonical_name contain a keyword.
+    
+    Useful for agent's first-pass tool selection (before invoking).
+    """
+    kw = keyword.lower()
+    return [t for t in get_all_mf_tools()
+            if kw in t.canonical_name.lower() or kw in t.description.lower() or kw in t.mf_id.lower()]
+
+=== engine/agent/demo_simple_router.py ===
+#!/usr/bin/env python3
+"""Simple demo: natural-language query → MF tool routing (keyword-based).
+
+This is a STUB for real LangGraph integration. It demonstrates how a future
+agent would dispatch MF tools based on user intent.
+
+Example:
+    python engine/agent/demo_simple_router.py "煮 70°C 30min 蛋白质变性多少"
+"""
+import re
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from engine.agent.tool_registry import get_all_mf_tools, get_mf_tool
+
+
+# Keyword → MF mapping (manual; would be LLM-driven in production)
+INTENT_MAP = {
+    "protein.*denaturation|蛋白质.*变性|protein.*coagulation|肉.*嫩": "MF-T06",
+    "growth.*limit|microbial.*growth|食品安全|MIC|pH.*min": "MF-K06",
+    "microwave|RF.*heat|dielectric|微波|射频": "MF-T07",
+    "starch.*gelatinization|淀粉.*糊化|淀粉.*糊化": "MF-T10",
+    "logP|partition.*coefficient|溶解度.*油水|octanol": "MF-M07",
+    "gas.*permeability|packaging|包装.*透.*气|WVTR|O2.*transmission": "MF-M08",
+    "ohmic.*heating|joule.*heat|焦耳|电导率.*加热": "MF-T08",
+    "binding.*equilibrium|ligand.*protein|配体|结合常数": "MF-K07",
+    "respiration|呼吸.*热|cold.*storage.*produce": "MF-T09",
+    "osmotic.*pressure|渗透压|van.t.*hoff": "MF-M09",
+    "supercritical|SCFE|超临界": "MF-M11",
+    "membrane.*transport|膜.*分离|membrane.*flux": "MF-M10",
+    "arrhenius|reaction.*rate|activation.*energy|Ea": "MF-T03",
+    "fourier|heat.*conduction|热传导|temperature.*center": "MF-T01",
+    "Choi.Okos|composition|specific.*heat|Cp.*food": "MF-T02-CP",
+    "Michaelis.Menten|enzyme.*kinetics|Vmax|Km": "MF-K01",
+    "D.value|thermal.*death|pasteurization.*D": "MF-K02",
+    "F.value|pasteurization|F0": "MF-K04",
+    "Gompertz|microbial.*growth.*curve": "MF-K05",
+    "GAB|sorption.*isotherm|water.*activity": "MF-M02",
+    "Antoine|vapor.*pressure": "MF-M03",
+    "Henderson.Hasselbalch|pKa.*buffer|pH.*buffer": "MF-M04",
+    "Henry.law|aroma.*volatile": "MF-M05",
+    "latent.*heat|相变.*焓": "MF-M06",
+    "viscosity|粘度|power.*law": "MF-R01",
+    "Casson|yield.*stress": "MF-R03",
+    "WLF|glass.*transition.*shift": "MF-R05",
+    "Stokes|sedimentation|沉降": "MF-C01",
+    "DLVO|colloid.*stability": "MF-C03",
+    "Q10.*rule|温度系数": "MF-C05",
+}
+
+
+def route_query(query: str) -> list[tuple[str, str]]:
+    """Return list of (mf_id, matched_keyword)."""
+    matches = []
+    for pattern, mf_id in INTENT_MAP.items():
+        if re.search(pattern, query, re.IGNORECASE):
+            matches.append((mf_id, pattern.split("|")[0]))
+    return matches
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: demo_simple_router.py '<natural language query>'")
+        print("\nExamples:")
+        print("  '蛋白质变性温度多少'           → MF-T06")
+        print("  '微波加热鸡肉 200g'             → MF-T07")
+        print("  '淀粉糊化温度'                  → MF-T10")
+        print("  '冰箱苹果呼吸热'                → MF-T09")
+        sys.exit(1)
+
+    query = " ".join(sys.argv[1:])
+    print(f"Query: '{query}'")
+    print()
+    matches = route_query(query)
+    if not matches:
+        print("No MF matched. Try keywords like: protein denaturation / microwave / starch gelatinization")
+        sys.exit(0)
+    print(f"Matched {len(matches)} MF tool(s):")
+    for mf_id, kw in matches:
+        try:
+            tool = get_mf_tool(mf_id)
+            print(f"\n  → {tool.name} ({mf_id}: {tool.canonical_name})")
+            print(f"    Triggered by keyword: '{kw}'")
+            print(f"    Description: {tool.description}")
+            print(f"    {tool.get_input_summary()}")
+        except KeyError as e:
+            print(f"  → {mf_id} (tool not loaded: {e})")
+
+
+if __name__ == "__main__":
+    main()
+
+=== engine/agent/tests/test_tool_registry.py ===
+"""Tests for engine.agent.tool_registry — 40 MF Tool wrappers."""
+import unittest
+
+from engine.agent.tool_registry import get_all_mf_tools, get_mf_tool, get_tools_by_keyword
+
+
+class TestToolRegistry(unittest.TestCase):
+
+    def test_40_tools_loaded(self):
+        tools = get_all_mf_tools()
+        # 40 MF base + 3 T02 children - 1 T02 parent = 42 routable
+        self.assertGreaterEqual(len(tools), 39, f"only {len(tools)} tools loaded")
+
+    def test_get_mf_t03(self):
+        tool = get_mf_tool("MF-T03")
+        self.assertEqual(tool.canonical_name, "Arrhenius")
+        self.assertEqual(tool.name, "mf_t03_arrhenius")
+        self.assertIn("A", tool.inputs_schema)
+        self.assertIn("Ea", tool.inputs_schema)
+        self.assertIn("T_K", tool.inputs_schema)
+
+    def test_run_mf_t03(self):
+        tool = get_mf_tool("MF-T03")
+        out = tool.run({"A": 1.0e10, "Ea": 50000.0, "T_K": 363.0})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertGreater(out["result"]["value"], 0)
+        self.assertEqual(out["result"]["symbol"], "k")
+
+    def test_get_mf_t06_protein_denaturation(self):
+        tool = get_mf_tool("MF-T06")
+        self.assertEqual(tool.canonical_name, "Protein_Denaturation")
+        out = tool.run({"T_d": 70.0, "dH_d": 300.0, "T_C": 70.0})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertAlmostEqual(out["result"]["value"], 0.5, places=4)
+
+    def test_get_tools_by_keyword_protein(self):
+        tools = get_tools_by_keyword("protein")
+        ids = {t.mf_id for t in tools}
+        self.assertIn("MF-T06", ids)  # Protein_Denaturation
+
+    def test_get_tools_by_keyword_thermal(self):
+        tools = get_tools_by_keyword("thermal")
+        # Many tools mention thermal in description (k, conductivity, dynamics)
+        self.assertGreaterEqual(len(tools), 1)
+
+    def test_get_input_summary_readable(self):
+        tool = get_mf_tool("MF-T03")
+        summary = tool.get_input_summary()
+        self.assertIn("Inputs for MF-T03", summary)
+        self.assertIn("A:", summary)
+        self.assertIn("range:", summary)
+
+    def test_unknown_mf_raises(self):
+        with self.assertRaises(KeyError):
+            get_mf_tool("MF-X99")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+
+Now provide your review.
+codex
+Reviewing the new `engine.agent` module as a code review. I’m loading the workspace context first per `AGENTS.md`, then I’ll inspect the relevant files and check the registry behavior against the actual solver/config layout.
+exec
+/bin/zsh -lc 'for f in SOUL.md USER.md MEMORY.md memory/2026-05-12.md memory/2026-05-11.md BOOTSTRAP.md; do if [ -f "$f" ]; then echo "===== $f ====="; sed -n '"'1,220p' \""'$f"; fi; done' in /Users/jeff/culinary-mind
+exec
+/bin/zsh -lc 'pwd && ls -1 && [ -f BOOTSTRAP.md ] && echo BOOTSTRAP_EXISTS || true && [ -f SOUL.md ] && echo SOUL_EXISTS || true && [ -f USER.md ] && echo USER_EXISTS || true && [ -f MEMORY.md ] && echo MEMORY_EXISTS || true && ls -1 memory 2>/dev/null | tail -n 5' in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+/Users/jeff/culinary-mind
+AGENTS.md
+CLAUDE.md
+HEARTBEAT.md
+IDENTITY.md
+README.md
+SOUL.md
+TOOLS.md
+USER.md
+_archive
+ce-hub
+config
+config.yaml
+data
+docs
+engine
+extensions
+infrastructure
+logs
+memory
+mind
+output
+pipeline
+prototype
+pytest.ini
+raw
+requirements.txt
+scripts
+src
+start.sh
+tests
+tools
+wiki
+SOUL_EXISTS
+USER_EXISTS
+2026-04-17-python-fix.md
+2026-04-17.md
+
+ succeeded in 0ms:
+===== SOUL.md =====
+# SOUL.md - Who You Are
+
+_You're not a chatbot. You're becoming someone._
+
+## Core Truths
+
+**Be genuinely helpful, not performatively helpful.** Skip the "Great question!" and "I'd be happy to help!" — just help. Actions speak louder than filler words.
+
+**Have opinions.** You're allowed to disagree, prefer things, find stuff amusing or boring. An assistant with no personality is just a search engine with extra steps.
+
+**Be resourceful before asking.** Try to figure it out. Read the file. Check the context. Search for it. _Then_ ask if you're stuck. The goal is to come back with answers, not questions.
+
+**Earn trust through competence.** Your human gave you access to their stuff. Don't make them regret it. Be careful with external actions (emails, tweets, anything public). Be bold with internal ones (reading, organizing, learning).
+
+**Remember you're a guest.** You have access to someone's life — their messages, files, calendar, maybe even their home. That's intimacy. Treat it with respect.
+
+## Boundaries
+
+- Private things stay private. Period.
+- When in doubt, ask before acting externally.
+- Never send half-baked replies to messaging surfaces.
+- You're not the user's voice — be careful in group chats.
+
+## Vibe
+
+Be the assistant you'd actually want to talk to. Concise when needed, thorough when it matters. Not a corporate drone. Not a sycophant. Just... good.
+
+## Continuity
+
+Each session, you wake up fresh. These files _are_ your memory. Read them. Update them. They're how you persist.
+
+If you change this file, tell the user — it's your soul, and they should know.
+
+---
+
+_This file is yours to evolve. As you learn who you are, update it._
+===== USER.md =====
+# USER.md - About Your Human
+
+_Learn about the person you're helping. Update this as you go._
+
+- **Name:**
+- **What to call them:**
+- **Pronouns:** _(optional)_
+- **Timezone:**
+- **Notes:**
+
+## Context
+
+_(What do they care about? What projects are they working on? What annoys them? What makes them laugh? Build this over time.)_
+
+---
+
+The more you know, the better you can help. But remember — you're learning about a person, not building a dossier. Respect the difference.
+
+codex
+I’ve loaded the session context and am checking the real solver/config layout now. The main question is whether this registry matches the actual `engine.solver` module names and LangChain tool contract, not just whether the tests are optimistic.
+exec
+/bin/zsh -lc "sed -n '1,260p' config/solver_bounds.yaml" in /Users/jeff/culinary-mind
+exec
+/bin/zsh -lc "rg --files engine/solver config engine/agent | sed -n '1,240p'" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+zsh:1: command not found: rg
+
+ succeeded in 0ms:
+# P1-21a: 28 MF physical range metadata for @validate_bounds decorator
+# Bounds: input parameter ranges + output value ranges
+# Source: researcher P1-21 §6 + fingerprints.json + textbooks
+version: 1.0
+schema:
+  bounds_per_solver:
+    inputs:
+      - name: <param_name>
+        min: <float|null>
+        max: <float|null>
+        unit: <str>
+        source: <str>
+    output:
+      symbol: <str>
+      min: <float|null>
+      max: <float|null>
+      unit: <str>
+
+solvers:
+  MF-T01:
+    canonical_name: Fourier_1D
+    inputs:
+      - {name: T_init, min: -40, max: 300, unit: "°C", source: "applicable_range fingerprints"}
+      - {name: T_boundary, min: -40, max: 300, unit: "°C"}
+      - {name: time, min: 0, max: 86400, unit: "s", source: "1 day max"}
+      - {name: x_position, min: 0, max: 1.0, unit: "m"}
+      - {name: alpha, min: 1.0e-9, max: 1.0e-5, unit: "m²/s", source: "Singh_Heldman_Ch4"}
+      - {name: thickness, min: 1.0e-4, max: 1.0, unit: "m"}
+      - {name: k, min: 0.05, max: 5.0, unit: "W/(m·K)"}
+      - {name: rho, min: 100, max: 2500, unit: "kg/m³"}
+      - {name: Cp, min: 500, max: 5000, unit: "J/(kg·K)"}
+    output:
+      symbol: T(x,t)
+      min: -273.15
+      max: 5000
+      unit: "°C"
+
+  MF-T02:
+    canonical_name: Choi_Okos
+    inputs:
+      - {name: T_C, min: -40, max: 150, unit: "°C", source: "Choi-Okos 1986"}
+      - {name: T_c, min: -40, max: 150, unit: "°C", source: "Choi-Okos 1986 alias"}
+      - {name: composition.water, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: composition.protein, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: composition.fat, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: composition.carb, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: composition.fiber, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: composition.ash, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: Xw, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: Xp, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: Xf, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: Xc, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: Xfiber, min: 0, max: 1.0, unit: "mass fraction"}
+      - {name: Xa, min: 0, max: 1.0, unit: "mass fraction"}
+      - name: composition.salt
+        min: 0.0
+        max: 1.0
+        unit: mass fraction
+        source: P1-21c-D backlog
+      - name: composition.sugar
+        min: 0.0
+        max: 1.0
+        unit: mass fraction
+        source: P1-21c-D backlog
+      - name: composition.alcohol
+        min: 0.0
+        max: 1.0
+        unit: mass fraction
+        source: P1-21c-D backlog
+    outputs_by_variant:
+      mf_t02_k: {symbol: k, min: 0.05, max: 5.0, unit: "W/(m·K)"}
+      mf_t02_cp: {symbol: Cp, min: 500, max: 5000, unit: "J/(kg·K)"}
+      mf_t02_rho: {symbol: rho, min: 100, max: 2500, unit: "kg/m³"}
+
+  MF-T03:
+    canonical_name: Arrhenius
+    inputs:
+      - {name: A, min: 1.0e-30, max: 1.0e+30, unit: "rate", source: "wide range pre-exponential"}
+      - {name: Ea, min: 0, max: 500000, unit: "J/mol"}
+      - {name: T_K, min: 1, max: 5000, unit: "K"}
+      - {name: T, min: 1, max: 5000, unit: "K"}
+      - name: observed_k
+        min: 1.0e-12
+        max: 1000.0
+        unit: s⁻¹
+        source: P1-21c-D backlog
+      - name: reaction_order
+        min: 0.0
+        max: 3.0
+        unit: dimensionless
+        source: P1-21c-D backlog
+    output:
+      symbol: k
+      min: 0
+      max: 1.0e+30
+      unit: "rate"
+
+  MF-T04:
+    canonical_name: Nusselt_Correlation
+    inputs:
+      - {name: Re, min: 0.001, max: 1.0e+7, unit: "dimensionless"}
+      - {name: Pr, min: 0.001, max: 1.0e+4, unit: "dimensionless"}
+      - {name: C, min: 1.0e-12, max: 1.0e+6, unit: "dimensionless"}
+      - {name: m, min: -10, max: 10, unit: "dimensionless"}
+      - {name: n, min: -10, max: 10, unit: "dimensionless"}
+    output:
+      symbol: Nu
+      min: 0
+      max: 1.0e+6
+      unit: "dimensionless"
+
+  MF-T05:
+    canonical_name: Plank_Freezing
+    inputs:
+      - {name: rho, min: 100, max: 2500, unit: "kg/m³"}
+      - {name: L, min: 100000, max: 500000, unit: "J/kg", source: "freezing latent heat"}
+      - {name: L_f, min: 100000, max: 500000, unit: "J/kg", source: "freezing latent heat alias"}
+      - {name: d, min: 1.0e-3, max: 1.0, unit: "m"}
+      - {name: a, min: 1.0e-3, max: 1.0, unit: "m"}
+      - {name: T_f, min: -50, max: 0, unit: "°C", source: "freezing point food"}
+      - {name: T_inf, min: -100, max: 0, unit: "°C"}
+      - {name: T_m, min: -100, max: 0, unit: "°C"}
+      - {name: h, min: 1, max: 1000, unit: "W/(m²·K)"}
+      - {name: k, min: 0.05, max: 5.0, unit: "W/(m·K)"}
+    output:
+      symbol: t_freeze
+      min: 0
+      max: 1.0e+6
+      unit: "s"
+
+  MF-K01:
+    canonical_name: Michaelis_Menten
+    inputs:
+      - {name: Vmax, min: 1.0e-9, max: 1.0e+9, unit: "rate"}
+      - {name: Km, min: 1.0e-9, max: 1.0e+6, unit: "concentration"}
+      - {name: S, min: 0, max: 1.0e+6, unit: "concentration"}
+      - name: pH_opt
+        min: 1.0
+        max: 14.0
+        unit: pH
+        source: P1-21c-D backlog
+      - name: T_opt
+        min: -20.0
+        max: 100.0
+        unit: °C
+        source: P1-21c-D backlog
+    output:
+      symbol: v
+      min: 0
+      max: 1.0e+9
+      unit: "rate"
+
+  MF-K02:
+    canonical_name: D_Value
+    inputs:
+      - {name: t, min: 0, max: 1.0e+6, unit: "s"}
+      - {name: time, min: 0, max: 1.0e+6, unit: "s"}
+      - {name: N, min: 0, max: 1.0e+15, unit: "CFU"}
+      - {name: N0, min: 1, max: 1.0e+15, unit: "CFU"}
+      - name: D_radiation_kGy
+        min: 0.001
+        max: 100.0
+        unit: kGy
+        source: P1-21c-D backlog
+    output:
+      symbol: D
+      min: 0
+      max: 1.0e+6
+      unit: "s"
+
+  MF-K03:
+    canonical_name: z_Value
+    inputs:
+      - {name: T1, min: -50, max: 200, unit: "°C"}
+      - {name: T2, min: -50, max: 200, unit: "°C"}
+      - {name: D1, min: 1.0e-3, max: 1.0e+6, unit: "s"}
+      - {name: D2, min: 1.0e-3, max: 1.0e+6, unit: "s"}
+    output:
+      symbol: z
+      min: 0
+      max: 200
+      unit: "°C"
+
+  MF-K04:
+    canonical_name: F_Value
+    inputs:
+      - {name: T_ref, min: 50, max: 200, unit: "°C", default: 121.1}
+      - {name: z, min: 1, max: 50, unit: "°C", default: 10}
+      - {name: T_C, min: -50, max: 200, unit: "°C"}
+      - {name: time, min: 0, max: 1.0e+6, unit: "s"}
+      - {name: time_s, min: 0, max: 1.0e+6, unit: "s"}
+    output:
+      symbol: F
+      min: 0
+      max: 1.0e+4
+      unit: "min"
+
+  MF-K05:
+    canonical_name: Gompertz_Microbial
+    inputs:
+      - {name: A, min: 0, max: 20, unit: "log10 CFU"}
+      - {name: mu_max, min: 1.0e-3, max: 100, unit: "1/h"}
+      - {name: mu, min: 1.0e-3, max: 100, unit: "1/h"}
+      - {name: lam, min: 0, max: 1000, unit: "h"}
+      - {name: lambda, min: 0, max: 1000, unit: "h"}
+      - {name: lag, min: 0, max: 1000, unit: "h"}
+      - {name: lambda_h, min: 0, max: 1000, unit: "h"}
+      - {name: t, min: 0, max: 1.0e+5, unit: "h", soft: true}
+      - {name: time_h, min: 0, max: 1.0e+5, unit: "h", soft: true}
+    output:
+      symbol: log10(N/N0)
+      min: -100
+      max: 100
+      unit: "log10 ratio"
+
+  MF-M01:
+    canonical_name: Fick_2nd_Law
+    inputs:
+      - {name: C_init, min: 0, max: 1.0e+6, unit: "concentration"}
+      - {name: C_boundary, min: 0, max: 1.0e+6, unit: "concentration"}
+      - {name: D, min: 1.0e-15, max: 1.0e-3, unit: "m²/s"}
+      - {name: D_eff, min: 1.0e-15, max: 1.0e-3, unit: "m²/s"}
+      - {name: x, min: 0, max: 1.0, unit: "m"}
+      - {name: x_position, min: 0, max: 1.0, unit: "m"}
+      - {name: time, min: 0, max: 1.0e+6, unit: "s"}
+      - {name: thickness, min: 1.0e-4, max: 1.0, unit: "m"}
+    output:
+      symbol: C(x,t)
+      min: 0
+      max: 1.0e+6
+      unit: "concentration"
+
+  MF-M02:
+    canonical_name: GAB_Isotherm
+    inputs:
+      - {name: a_w, min: 0, max: 0.95, unit: "dimensionless", source: "researcher §6 hard safety envelope"}
+      - {name: aw, min: 0, max: 0.95, unit: "dimensionless", source: "researcher §6 hard safety envelope alias"}
+      - {name: a_w, min: 0.1, max: null, unit: "dimensionless", source: "researcher §6 preferred range", soft: true}
+      - {name: aw, min: 0.1, max: null, unit: "dimensionless", source: "researcher §6 preferred range alias", soft: true}
+      - {name: W_m, min: 1.0e-3, max: 1.0, unit: "kg/kg"}
+      - {name: Xm, min: 1.0e-3, max: 1.0, unit: "kg/kg"}
+      - {name: C, min: 0.1, max: 1000, unit: "dimensionless"}
+      - {name: K, min: 0.1, max: 1.0, unit: "dimensionless"}
+      - name: Q_iso
+        min: 0.0
+        max: 1000000.0
+        unit: J/mol
+        source: P1-21c-D backlog
+    output:
+      symbol: W
+      min: 0
+      max: 5
+      unit: "kg water/kg dry"
+
+  MF-M03:
+    canonical_name: Antoine_Equation
+    inputs:
+      - {name: T_C, min: 0, max: 374, unit: "°C", source: "Antoine water; substance-specific"}
+      - {name: T_c, min: 0, max: 374, unit: "°C", source: "Antoine water alias; substance-specific"}
+      - {name: substance, type: string, default: "water"}
+
+exec
+/bin/zsh -lc "sed -n '1,260p' engine/agent/tool_registry.py && printf '\\n=====\\n' && sed -n '1,220p' engine/agent/tests/test_tool_registry.py && printf '\\n=====\\n' && sed -n '1,220p' engine/agent/__init__.py" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+"""MF Solver Tool Registry — wrap 40 engine.solver.mf_xxx into LangGraph-style Tools.
+
+A MFTool is a thin invocation wrapper:
+    tool = get_mf_tool("MF-T03")
+    out = tool.run({"A": 1e10, "Ea": 50000, "T_K": 363})
+
+Design goals:
+- No hard dependency on LangChain/LangGraph (stdlib only); but interface is
+  compatible: name/description/run pattern matches @tool decorator output.
+- Auto-discovery via importlib walking engine.solver.mf_*.
+- Schema derived from config/solver_bounds.yaml (single source of truth).
+"""
+from __future__ import annotations
+
+import importlib
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
+ROOT = Path(__file__).resolve().parents[2]
+BOUNDS_FILE = ROOT / "config/solver_bounds.yaml"
+
+
+@dataclass
+class MFTool:
+    """LangChain/LangGraph-compatible tool wrapper for an MF solver."""
+    mf_id: str
+    canonical_name: str
+    description: str
+    inputs_schema: dict  # {param_name: {min, max, unit}}
+    output_schema: dict  # {symbol, min, max, unit}
+    _solver_module: Any = field(default=None, repr=False)
+
+    @property
+    def name(self) -> str:
+        """LangChain tool name (snake_case)."""
+        return f"{self.mf_id.lower().replace('-', '_')}_{self.canonical_name.lower().replace('-', '_')}"
+
+    def run(self, params: dict) -> dict:
+        """Invoke the underlying solver; returns full validity-checked output."""
+        if self._solver_module is None:
+            mod_name = f"engine.solver.mf_{self.mf_id.lower().replace('-', '_')}"
+            self._solver_module = importlib.import_module(mod_name)
+        return self._solver_module.solve(params)
+
+    def to_langchain_tool(self):
+        """Optional: return a LangChain Tool if langchain is installed.
+        
+        Usage:
+            from langchain.tools import Tool
+            ai_tool = mf_tool.to_langchain_tool()
+        """
+        try:
+            from langchain.tools import Tool
+        except ImportError:
+            raise ImportError("Install langchain: pip install langchain")
+        return Tool(
+            name=self.name,
+            description=self.description,
+            func=lambda params_json: json.dumps(self.run(json.loads(params_json) if isinstance(params_json, str) else params_json)),
+        )
+
+    def get_input_summary(self) -> str:
+        """Human-readable input description for LLM agent prompt."""
+        lines = [f"Inputs for {self.mf_id} ({self.canonical_name}):"]
+        for name, spec in self.inputs_schema.items():
+            unit = spec.get("unit", "")
+            lo, hi = spec.get("min"), spec.get("max")
+            lines.append(f"  - {name}: {unit} (range: [{lo}, {hi}])")
+        lines.append(f"Output: {self.output_schema.get('symbol', '?')} {self.output_schema.get('unit', '')}")
+        return "\n".join(lines)
+
+
+_TOOLS_CACHE: list[MFTool] = []
+
+
+def _load_bounds() -> dict:
+    if yaml is None:
+        raise ImportError("PyYAML required to load solver_bounds.yaml")
+    return yaml.safe_load(BOUNDS_FILE.read_text())
+
+
+def _build_tool(mf_id: str, mf_spec: dict) -> MFTool:
+    canonical = mf_spec.get("canonical_name", mf_id)
+    inputs = mf_spec.get("inputs", [])
+    inputs_schema = {i["name"]: {"min": i.get("min"), "max": i.get("max"), "unit": i.get("unit", "")} for i in inputs}
+    output = mf_spec.get("output", {})
+    # Try to load module to get docstring
+    mod_name = f"engine.solver.{mf_id.lower().replace('-', '_')}"
+    try:
+        mod = importlib.import_module(mod_name)
+        description = (mod.__doc__ or "").strip().split("\n")[0]
+    except (ModuleNotFoundError, AttributeError):
+        mod = None
+        description = f"{canonical} solver"
+    return MFTool(
+        mf_id=mf_id,
+        canonical_name=canonical,
+        description=description,
+        inputs_schema=inputs_schema,
+        output_schema=output if isinstance(output, dict) else {},
+        _solver_module=mod,
+    )
+
+
+def get_all_mf_tools() -> list[MFTool]:
+    """Return all 40 MF tools (cached on first call)."""
+    global _TOOLS_CACHE
+    if _TOOLS_CACHE:
+        return list(_TOOLS_CACHE)
+    bounds = _load_bounds()
+    solvers = bounds.get("solvers", {})
+    tools = []
+    for mf_id, spec in sorted(solvers.items()):
+        # Skip MF-T02 parent (parent_only — children are routable)
+        if mf_id == "MF-T02":
+            continue
+        try:
+            tool = _build_tool(mf_id, spec)
+            if tool._solver_module is not None:
+                tools.append(tool)
+        except Exception:
+            pass  # silent skip if solver missing
+    _TOOLS_CACHE = tools
+    return list(tools)
+
+
+def get_mf_tool(mf_id: str) -> MFTool:
+    """Get a single MF tool by id, e.g. 'MF-T03'."""
+    for t in get_all_mf_tools():
+        if t.mf_id == mf_id:
+            return t
+    raise KeyError(f"Unknown MF id: {mf_id}")
+
+
+def get_tools_by_keyword(keyword: str) -> list[MFTool]:
+    """Find tools whose name/description/canonical_name contain a keyword.
+    
+    Useful for agent's first-pass tool selection (before invoking).
+    """
+    kw = keyword.lower()
+    return [t for t in get_all_mf_tools()
+            if kw in t.canonical_name.lower() or kw in t.description.lower() or kw in t.mf_id.lower()]
+
+=====
+"""Tests for engine.agent.tool_registry — 40 MF Tool wrappers."""
+import unittest
+
+from engine.agent.tool_registry import get_all_mf_tools, get_mf_tool, get_tools_by_keyword
+
+
+class TestToolRegistry(unittest.TestCase):
+
+    def test_40_tools_loaded(self):
+        tools = get_all_mf_tools()
+        # 40 MF base + 3 T02 children - 1 T02 parent = 42 routable
+        self.assertGreaterEqual(len(tools), 39, f"only {len(tools)} tools loaded")
+
+    def test_get_mf_t03(self):
+        tool = get_mf_tool("MF-T03")
+        self.assertEqual(tool.canonical_name, "Arrhenius")
+        self.assertEqual(tool.name, "mf_t03_arrhenius")
+        self.assertIn("A", tool.inputs_schema)
+        self.assertIn("Ea", tool.inputs_schema)
+        self.assertIn("T_K", tool.inputs_schema)
+
+    def test_run_mf_t03(self):
+        tool = get_mf_tool("MF-T03")
+        out = tool.run({"A": 1.0e10, "Ea": 50000.0, "T_K": 363.0})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertGreater(out["result"]["value"], 0)
+        self.assertEqual(out["result"]["symbol"], "k")
+
+    def test_get_mf_t06_protein_denaturation(self):
+        tool = get_mf_tool("MF-T06")
+        self.assertEqual(tool.canonical_name, "Protein_Denaturation")
+        out = tool.run({"T_d": 70.0, "dH_d": 300.0, "T_C": 70.0})
+        self.assertTrue(out["validity"]["passed"])
+        self.assertAlmostEqual(out["result"]["value"], 0.5, places=4)
+
+    def test_get_tools_by_keyword_protein(self):
+        tools = get_tools_by_keyword("protein")
+        ids = {t.mf_id for t in tools}
+        self.assertIn("MF-T06", ids)  # Protein_Denaturation
+
+    def test_get_tools_by_keyword_thermal(self):
+        tools = get_tools_by_keyword("thermal")
+        # Many tools mention thermal in description (k, conductivity, dynamics)
+        self.assertGreaterEqual(len(tools), 1)
+
+    def test_get_input_summary_readable(self):
+        tool = get_mf_tool("MF-T03")
+        summary = tool.get_input_summary()
+        self.assertIn("Inputs for MF-T03", summary)
+        self.assertIn("A:", summary)
+        self.assertIn("range:", summary)
+
+    def test_unknown_mf_raises(self):
+        with self.assertRaises(KeyError):
+            get_mf_tool("MF-X99")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+
+=====
+"""Engine.agent — LangGraph-compatible Tool wrappers for 40 MF solvers.
+
+Exports:
+    get_all_mf_tools()   → list of LangChain-compatible @tool functions
+    get_mf_tool(mf_id)   → single tool
+
+Each tool wraps engine.solver.mf_xxx.solve and exposes:
+- name: 'mf_t03_arrhenius' etc
+- description: docstring of solve()
+- input_schema: pydantic-style {param: type}
+- run(params) → result dict
+"""
+from engine.agent.tool_registry import get_all_mf_tools, get_mf_tool, MFTool
+
+__all__ = ["get_all_mf_tools", "get_mf_tool", "MFTool"]
+
+codex
+The first pass already shows some contract drift in comments versus implementation. I’m checking actual `engine/solver` filenames next, because the registry’s import strings look inconsistent in two different places.
+exec
+/bin/zsh -lc "find engine/solver -maxdepth 2 -type f | sort | sed -n '1,260p'" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+engine/solver/__init__.py
+engine/solver/__pycache__/__init__.cpython-313.pyc
+engine/solver/__pycache__/__init__.cpython-314.pyc
+engine/solver/__pycache__/_common.cpython-313.pyc
+engine/solver/__pycache__/_common.cpython-314.pyc
+engine/solver/__pycache__/mf_c01.cpython-313.pyc
+engine/solver/__pycache__/mf_c01.cpython-314.pyc
+engine/solver/__pycache__/mf_c02.cpython-313.pyc
+engine/solver/__pycache__/mf_c02.cpython-314.pyc
+engine/solver/__pycache__/mf_c03.cpython-313.pyc
+engine/solver/__pycache__/mf_c03.cpython-314.pyc
+engine/solver/__pycache__/mf_c04.cpython-313.pyc
+engine/solver/__pycache__/mf_c04.cpython-314.pyc
+engine/solver/__pycache__/mf_c05.cpython-313.pyc
+engine/solver/__pycache__/mf_c05.cpython-314.pyc
+engine/solver/__pycache__/mf_k01.cpython-313.pyc
+engine/solver/__pycache__/mf_k01.cpython-314.pyc
+engine/solver/__pycache__/mf_k02.cpython-313.pyc
+engine/solver/__pycache__/mf_k02.cpython-314.pyc
+engine/solver/__pycache__/mf_k03.cpython-313.pyc
+engine/solver/__pycache__/mf_k03.cpython-314.pyc
+engine/solver/__pycache__/mf_k04.cpython-313.pyc
+engine/solver/__pycache__/mf_k04.cpython-314.pyc
+engine/solver/__pycache__/mf_k05.cpython-313.pyc
+engine/solver/__pycache__/mf_k05.cpython-314.pyc
+engine/solver/__pycache__/mf_k06.cpython-313.pyc
+engine/solver/__pycache__/mf_k07.cpython-313.pyc
+engine/solver/__pycache__/mf_m01.cpython-313.pyc
+engine/solver/__pycache__/mf_m01.cpython-314.pyc
+engine/solver/__pycache__/mf_m02.cpython-313.pyc
+engine/solver/__pycache__/mf_m02.cpython-314.pyc
+engine/solver/__pycache__/mf_m03.cpython-313.pyc
+engine/solver/__pycache__/mf_m03.cpython-314.pyc
+engine/solver/__pycache__/mf_m04.cpython-313.pyc
+engine/solver/__pycache__/mf_m04.cpython-314.pyc
+engine/solver/__pycache__/mf_m05.cpython-313.pyc
+engine/solver/__pycache__/mf_m05.cpython-314.pyc
+engine/solver/__pycache__/mf_m06.cpython-313.pyc
+engine/solver/__pycache__/mf_m06.cpython-314.pyc
+engine/solver/__pycache__/mf_m07.cpython-313.pyc
+engine/solver/__pycache__/mf_m08.cpython-313.pyc
+engine/solver/__pycache__/mf_m09.cpython-313.pyc
+engine/solver/__pycache__/mf_m10.cpython-313.pyc
+engine/solver/__pycache__/mf_m11.cpython-313.pyc
+engine/solver/__pycache__/mf_r01.cpython-313.pyc
+engine/solver/__pycache__/mf_r01.cpython-314.pyc
+engine/solver/__pycache__/mf_r02.cpython-313.pyc
+engine/solver/__pycache__/mf_r02.cpython-314.pyc
+engine/solver/__pycache__/mf_r03.cpython-313.pyc
+engine/solver/__pycache__/mf_r03.cpython-314.pyc
+engine/solver/__pycache__/mf_r04.cpython-313.pyc
+engine/solver/__pycache__/mf_r04.cpython-314.pyc
+engine/solver/__pycache__/mf_r05.cpython-313.pyc
+engine/solver/__pycache__/mf_r05.cpython-314.pyc
+engine/solver/__pycache__/mf_r06.cpython-313.pyc
+engine/solver/__pycache__/mf_r06.cpython-314.pyc
+engine/solver/__pycache__/mf_r07.cpython-313.pyc
+engine/solver/__pycache__/mf_r07.cpython-314.pyc
+engine/solver/__pycache__/mf_t01.cpython-313.pyc
+engine/solver/__pycache__/mf_t01.cpython-314.pyc
+engine/solver/__pycache__/mf_t02.cpython-313.pyc
+engine/solver/__pycache__/mf_t02_cp.cpython-313.pyc
+engine/solver/__pycache__/mf_t02_cp.cpython-314.pyc
+engine/solver/__pycache__/mf_t02_k.cpython-313.pyc
+engine/solver/__pycache__/mf_t02_k.cpython-314.pyc
+engine/solver/__pycache__/mf_t02_rho.cpython-313.pyc
+engine/solver/__pycache__/mf_t02_rho.cpython-314.pyc
+engine/solver/__pycache__/mf_t03.cpython-313.pyc
+engine/solver/__pycache__/mf_t03.cpython-314.pyc
+engine/solver/__pycache__/mf_t04.cpython-313.pyc
+engine/solver/__pycache__/mf_t04.cpython-314.pyc
+engine/solver/__pycache__/mf_t05.cpython-313.pyc
+engine/solver/__pycache__/mf_t05.cpython-314.pyc
+engine/solver/__pycache__/mf_t06.cpython-313.pyc
+engine/solver/__pycache__/mf_t07.cpython-313.pyc
+engine/solver/__pycache__/mf_t08.cpython-313.pyc
+engine/solver/__pycache__/mf_t09.cpython-313.pyc
+engine/solver/__pycache__/mf_t10.cpython-313.pyc
+engine/solver/_common.py
+engine/solver/mf_c01.py
+engine/solver/mf_c02.py
+engine/solver/mf_c03.py
+engine/solver/mf_c04.py
+engine/solver/mf_c05.py
+engine/solver/mf_k01.py
+engine/solver/mf_k02.py
+engine/solver/mf_k03.py
+engine/solver/mf_k04.py
+engine/solver/mf_k05.py
+engine/solver/mf_k06.py
+engine/solver/mf_k07.py
+engine/solver/mf_m01.py
+engine/solver/mf_m02.py
+engine/solver/mf_m03.py
+engine/solver/mf_m04.py
+engine/solver/mf_m05.py
+engine/solver/mf_m06.py
+engine/solver/mf_m07.py
+engine/solver/mf_m08.py
+engine/solver/mf_m09.py
+engine/solver/mf_m10.py
+engine/solver/mf_m11.py
+engine/solver/mf_r01.py
+engine/solver/mf_r02.py
+engine/solver/mf_r03.py
+engine/solver/mf_r04.py
+engine/solver/mf_r05.py
+engine/solver/mf_r06.py
+engine/solver/mf_r07.py
+engine/solver/mf_t01.py
+engine/solver/mf_t02_cp.py
+engine/solver/mf_t02_k.py
+engine/solver/mf_t02_rho.py
+engine/solver/mf_t03.py
+engine/solver/mf_t04.py
+engine/solver/mf_t05.py
+engine/solver/mf_t06.py
+engine/solver/mf_t07.py
+engine/solver/mf_t08.py
+engine/solver/mf_t09.py
+engine/solver/mf_t10.py
+engine/solver/tests/__init__.py
+engine/solver/tests/_hypothesis_helpers.py
+engine/solver/tests/test_backward_compat.py
+engine/solver/tests/test_bounds_integration.py
+engine/solver/tests/test_llm_summary.py
+engine/solver/tests/test_mf_c01.py
+engine/solver/tests/test_mf_c02.py
+engine/solver/tests/test_mf_c03.py
+engine/solver/tests/test_mf_c04.py
+engine/solver/tests/test_mf_c04_hypothesis.py
+engine/solver/tests/test_mf_c05.py
+engine/solver/tests/test_mf_k01.py
+engine/solver/tests/test_mf_k01_hypothesis.py
+engine/solver/tests/test_mf_k02.py
+engine/solver/tests/test_mf_k02_hypothesis.py
+engine/solver/tests/test_mf_k03.py
+engine/solver/tests/test_mf_k03_hypothesis.py
+engine/solver/tests/test_mf_k04.py
+engine/solver/tests/test_mf_k04_hypothesis.py
+engine/solver/tests/test_mf_k05.py
+engine/solver/tests/test_mf_k05_hypothesis.py
+engine/solver/tests/test_mf_k06.py
+engine/solver/tests/test_mf_k07.py
+engine/solver/tests/test_mf_m01.py
+engine/solver/tests/test_mf_m01_hypothesis.py
+engine/solver/tests/test_mf_m02.py
+engine/solver/tests/test_mf_m03.py
+engine/solver/tests/test_mf_m03_hypothesis.py
+engine/solver/tests/test_mf_m04.py
+engine/solver/tests/test_mf_m05.py
+engine/solver/tests/test_mf_m06.py
+engine/solver/tests/test_mf_m07.py
+engine/solver/tests/test_mf_m08.py
+engine/solver/tests/test_mf_m09.py
+engine/solver/tests/test_mf_m10.py
+engine/solver/tests/test_mf_m11.py
+engine/solver/tests/test_mf_r01.py
+engine/solver/tests/test_mf_r02.py
+engine/solver/tests/test_mf_r02_hypothesis.py
+engine/solver/tests/test_mf_r03.py
+engine/solver/tests/test_mf_r04.py
+engine/solver/tests/test_mf_r05.py
+engine/solver/tests/test_mf_r05_hypothesis.py
+engine/solver/tests/test_mf_r06.py
+engine/solver/tests/test_mf_r07.py
+engine/solver/tests/test_mf_t01.py
+engine/solver/tests/test_mf_t01_hypothesis.py
+engine/solver/tests/test_mf_t02_cp.py
+engine/solver/tests/test_mf_t02_cp_hypothesis.py
+engine/solver/tests/test_mf_t02_k.py
+engine/solver/tests/test_mf_t02_k_hypothesis.py
+engine/solver/tests/test_mf_t02_rho.py
+engine/solver/tests/test_mf_t02_split_consistency.py
+engine/solver/tests/test_mf_t03.py
+engine/solver/tests/test_mf_t03_hypothesis.py
+engine/solver/tests/test_mf_t04.py
+engine/solver/tests/test_mf_t04_hypothesis.py
+engine/solver/tests/test_mf_t05.py
+engine/solver/tests/test_mf_t06.py
+engine/solver/tests/test_mf_t07.py
+engine/solver/tests/test_mf_t08.py
+engine/solver/tests/test_mf_t09.py
+engine/solver/tests/test_mf_t10.py
+engine/solver/tests/test_provenance_consistency.py
+engine/solver/tests/test_solver_bounds_yaml.py
+engine/solver/tests/test_validate_bounds_decorator.py
+
+exec
+/bin/zsh -lc "find engine/solver -maxdepth 1 -type f | sort | xargs -I{} sh -c 'printf \"===== %s =====\\n\" \"{}\"; sed -n \"1,140p\" \"{}\"'" in /Users/jeff/culinary-mind
+ succeeded in 190ms:
+===== engine/solver/mf_r03.py =====
+"""MF-R03 Casson_Model — Casson yield-flow relation.
+
+Formula:
+    sqrt(tau) = sqrt(tau_0) + sqrt(K_C · gamma_dot)
+
+References:
+    - Casson model used for chocolate and yield-stress foods.
+
+Inputs:
+    tau_0 or tau_c [Pa], K_C or eta_c [Pa·s], gamma_dot [s^-1].
+
+Assumptions:
+    - steady isothermal shear
+    - Casson square-root stress relation
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+
+TOOL_ID = 'MF-R03'
+TOOL_CANONICAL_NAME = 'Casson_Model'
+CITATIONS = [
+    'Rao, Engineering Properties of Foods Ch.2',
+    'Bourne, Food Texture and Viscosity Ch.3',
+]
+
+
+
+@validate_bounds("MF-R03")
+def solve(params: dict) -> dict:
+    """Compute Casson shear stress tau in Pa."""
+    val = Validator()
+    assumptions: list[str] = [
+        "steady isothermal simple shear",
+        "Casson square-root stress form",
+    ]
+
+    tau_0 = params.get("tau_0", params.get("tau_c"))
+    k_c = params.get("K_C", params.get("eta_c"))
+    gamma_dot = params.get("gamma_dot")
+
+    val.require_positive("tau_0", tau_0, allow_zero=True)
+    val.require_positive("K_C", k_c)
+    val.require_positive("gamma_dot", gamma_dot, allow_zero=True)
+
+    value: float | None = None
+    if (
+        all(isinstance(x, (int, float)) and not isinstance(x, bool)
+            for x in (tau_0, k_c, gamma_dot))
+        and all(math.isfinite(float(x)) for x in (tau_0, k_c, gamma_dot))
+        and tau_0 >= 0.0 and k_c > 0.0 and gamma_dot >= 0.0
+    ):
+        value = (math.sqrt(float(tau_0)) + math.sqrt(float(k_c) * float(gamma_dot))) ** 2
+        if gamma_dot == 0.0:
+            assumptions.append("gamma_dot = 0 → tau = tau_0")
+        if tau_0 == 0.0:
+            assumptions.append("tau_0 = 0 → Casson relation reduces to linear stress")
+
+    return build_result(
+        value=value if value is not None else float("nan"),
+        unit="Pa",
+        symbol="tau",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={"tau_0": tau_0, "K_C": k_c, "gamma_dot": gamma_dot},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="Pa",
+            symbol="tau",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
+    )
+===== engine/solver/mf_r04.py =====
+"""MF-R04 Gordon_Taylor — glass-transition temperature of a binary mixture.
+
+Formula:
+    Tg_mix = (w1 · Tg1 + k · w2 · Tg2) / (w1 + k · w2)
+
+References:
+    - Gordon-Taylor glass-transition mixing rule; pure algebra per D65.
+
+Inputs:
+    w1, w2, Tg1, Tg2, k.
+
+Assumptions:
+    - binary mixture
+    - Tg inputs use a consistent temperature scale (K or °C)
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+
+TOOL_ID = 'MF-R04'
+TOOL_CANONICAL_NAME = 'Gordon_Taylor'
+CITATIONS = [
+    'Rao, Engineering Properties of Foods Ch.3',
+    'Handbook of Food Engineering Ch.4',
+    'Belitz et al., Food Chemistry',
+]
+
+
+
+@validate_bounds("MF-R04")
+def solve(params: dict) -> dict:
+    """Compute mixture glass-transition temperature."""
+    val = Validator()
+    assumptions: list[str] = [
+        "binary Gordon-Taylor mixture",
+        "Tg1/Tg2 share the same temperature scale",
+    ]
+
+    w1 = params.get("w1")
+    w2 = params.get("w2")
+    tg1 = params.get("Tg1")
+    tg2 = params.get("Tg2")
+    k_gt = params.get("k")
+
+    val.require_positive("w1", w1, allow_zero=True)
+    val.require_positive("w2", w2, allow_zero=True)
+    val.require_temperature_celsius("Tg1", tg1)
+    val.require_temperature_celsius("Tg2", tg2)
+    val.require_positive("k", k_gt)
+
+    value: float | None = None
+    if (
+        all(isinstance(x, (int, float)) and not isinstance(x, bool)
+            for x in (w1, w2, tg1, tg2, k_gt))
+        and all(math.isfinite(float(x)) for x in (w1, w2, tg1, tg2, k_gt))
+        and w1 >= 0.0 and w2 >= 0.0 and k_gt > 0.0
+    ):
+        if w1 == 0.0 and w2 == 0.0:
+            val.issues.append("w1 and w2 cannot both be zero")
+        else:
+            denom = float(w1) + float(k_gt) * float(w2)
+            value = (float(w1) * float(tg1) + float(k_gt) * float(w2) * float(tg2)) / denom
+            if not math.isclose(float(w1) + float(w2), 1.0, rel_tol=1e-9, abs_tol=1e-12):
+                assumptions.append("w1 + w2 != 1; Gordon-Taylor ratio is scale-invariant")
+            if w1 == 0.0:
+                assumptions.append("w1 = 0 → Tg_mix = Tg2")
+            elif w2 == 0.0:
+                assumptions.append("w2 = 0 → Tg_mix = Tg1")
+
+    return build_result(
+        value=value if value is not None else float("nan"),
+        unit="same as Tg inputs",
+        symbol="Tg_mix",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={"w1": w1, "w2": w2, "Tg1": tg1, "Tg2": tg2, "k": k_gt},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="same as Tg inputs",
+            symbol="Tg_mix",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
+    )
+===== engine/solver/mf_r05.py =====
+"""MF-R05 WLF_Equation — Williams-Landel-Ferry shift factor.
+
+Formula:
+    log10(aT) = -C1 · (T - Tg) / (C2 + (T - Tg))
+
+References:
+    - Williams-Landel-Ferry equation; pure algebra per D65.
+
+Inputs:
+    T, Tg, optional C1=17.44, C2=51.6.
+
+Assumptions:
+    - T and Tg use a consistent °C/K interval scale
+    - default constants are referenced to Tg
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+
+TOOL_ID = 'MF-R05'
+TOOL_CANONICAL_NAME = 'WLF_Equation'
+CITATIONS = [
+    'Rao, Engineering Properties of Foods Ch.3',
+    'Handbook of Food Engineering Ch.4',
+    'Belitz et al., Food Chemistry',
+]
+
+
+
+@validate_bounds("MF-R05")
+def solve(params: dict) -> dict:
+    """Compute WLF shift factor aT."""
+    val = Validator()
+    assumptions: list[str] = [
+        "WLF constants referenced to Tg",
+        "temperature difference T - Tg uses °C/K interval units",
+    ]
+
+    temp = params.get("T")
+    tg = params.get("Tg")
+    c1 = params.get("C1", 17.44)
+    c2 = params.get("C2", 51.6)
+
+    val.require_temperature_celsius("T", temp)
+    val.require_temperature_celsius("Tg", tg)
+    val.require_positive("C1", c1)
+    val.require_positive("C2", c2)
+
+    value: float | None = None
+    if (
+        all(isinstance(x, (int, float)) and not isinstance(x, bool)
+            for x in (temp, tg, c1, c2))
+        and all(math.isfinite(float(x)) for x in (temp, tg, c1, c2))
+        and c1 > 0.0 and c2 > 0.0
+    ):
+        delta = float(temp) - float(tg)
+        denom = float(c2) + delta
+        if denom <= 0.0:
+            val.issues.append("C2 + (T - Tg) must be > 0 for WLF")
+        else:
+            log10_at = -float(c1) * delta / denom
+            value = 10.0 ** log10_at
+            if math.isclose(delta, 0.0, abs_tol=1e-12):
+                assumptions.append("T = Tg → aT = 1")
+            if delta < 0.0 or delta > 100.0:
+                assumptions.append("outside common WLF range Tg <= T <= Tg + 100")
+
+    return build_result(
+        value=value if value is not None else float("nan"),
+        unit="dimensionless",
+        symbol="aT",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={"T": temp, "Tg": tg, "C1": c1, "C2": c2},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="dimensionless",
+            symbol="aT",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
+    )
+===== engine/solver/mf_r06.py =====
+"""MF-R06 Stevens_Power_Law — perceived intensity from stimulus intensity.
+
+Formula:
+    S = k · I^n
+
+References:
+    - Stevens' psychophysical power law; pure algebra per D65.
+
+Inputs:
+    k, I, n.
+
+Assumptions:
+    - stimulus scale is non-negative
+    - k and n are fitted for one sensory modality
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+
+TOOL_ID = 'MF-R06'
+TOOL_CANONICAL_NAME = 'Stevens_Power_Law'
+CITATIONS = [
+    'Bourne, Food Texture and Viscosity Ch.8',
+]
+
+
+
+@validate_bounds("MF-R06")
+def solve(params: dict) -> dict:
+    """Compute perceived intensity S."""
+    val = Validator()
+    assumptions: list[str] = [
+        "single-modality Stevens power law",
+        "stimulus intensity is non-negative",
+    ]
+
+    k_coeff = params.get("k")
+    intensity = params.get("I")
+    n = params.get("n")
+
+    val.require_positive("k", k_coeff)
+    val.require_positive("I", intensity, allow_zero=True)
+    val.require_positive("n", n)
+
+    value: float | None = None
+    if (
+        all(isinstance(x, (int, float)) and not isinstance(x, bool)
+            for x in (k_coeff, intensity, n))
+        and all(math.isfinite(float(x)) for x in (k_coeff, intensity, n))
+        and k_coeff > 0.0 and intensity >= 0.0 and n > 0.0
+    ):
+        value = float(k_coeff) * (float(intensity) ** float(n))
+        if math.isclose(float(intensity), 1.0, rel_tol=1e-12, abs_tol=1e-12):
+            assumptions.append("I = 1 → S = k")
+        if math.isclose(float(n), 1.0, rel_tol=1e-12, abs_tol=1e-12):
+            assumptions.append("n = 1 → linear stimulus-response")
+
+    return build_result(
+        value=value if value is not None else float("nan"),
+        unit="perceived intensity units",
+        symbol="S",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={"k": k_coeff, "I": intensity, "n": n},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="perceived intensity units",
+            symbol="S",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
+    )
+===== engine/solver/mf_r07.py =====
+"""MF-R07 Griffith_Fracture — brittle fracture stress.
+
+Formula:
+    sigma_f = sqrt(2 · E · gamma_s / (pi · a))
+
+References:
+    - Griffith brittle fracture criterion.
+
+Inputs:
+    E [Pa], gamma_s [J/m²], a [m] crack half-length.
+
+Assumptions:
+    - brittle linear-elastic fracture
+    - crack half-length a is the dominant flaw size
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+
+TOOL_ID = 'MF-R07'
+TOOL_CANONICAL_NAME = 'Griffith_Fracture'
+CITATIONS = [
+    'Bourne, Food Texture and Viscosity Ch.3',
+]
+
+
+
+@validate_bounds("MF-R07")
+def solve(params: dict) -> dict:
+    """Compute Griffith fracture stress in Pa."""
+    val = Validator()
+    assumptions = [
+        "brittle linear-elastic material",
+        "a is crack half-length",
+    ]
+
+    young = params.get("E")
+    gamma_s = params.get("gamma_s")
+    crack = params.get("a")
+
+    val.require_positive("E", young)
+    val.require_positive("gamma_s", gamma_s)
+    val.require_positive("a", crack)
+
+    value: float | None = None
+    if (
+        all(isinstance(x, (int, float)) and not isinstance(x, bool)
+            for x in (young, gamma_s, crack))
+        and all(math.isfinite(float(x)) for x in (young, gamma_s, crack))
+        and young > 0.0 and gamma_s > 0.0 and crack > 0.0
+    ):
+        value = math.sqrt(2.0 * float(young) * float(gamma_s) / (math.pi * float(crack)))
+        if crack < 1e-5:
+            assumptions.append("small crack length produces high fracture stress")
+
+    return build_result(
+        value=value if value is not None else float("nan"),
+        unit="Pa",
+        symbol="sigma_f",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={"E": young, "gamma_s": gamma_s, "a": crack},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="Pa",
+            symbol="sigma_f",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
+    )
+===== engine/solver/mf_t01.py =====
+"""MF-T01 Fourier_1D — 1D unsteady heat conduction.
+
+PDE:
+    ∂T/∂t = α · ∂²T/∂x²
+
+We expose an analytical *semi-infinite slab* solution with a step
+temperature change at the surface (boundary fixed at `T_boundary`,
+initial uniform `T_init`):
+
+    T(x, t) = T_init + (T_boundary - T_init) · erfc( x / (2·√(α·t)) )
+
+This is the simplest atomic-tool form of Fourier's law. It assumes:
+  • semi-infinite slab (probe far from far-side boundary)
+  • constant α (no temperature dependence)
+  • step boundary at t = 0
+  • 1D heat flow
+
+Inputs (per `config/mother_formulas.yaml` → MF-T01):
+  Runtime variables (SI): T_init, T_boundary [°C], thickness [m] (used
+  only to validate semi-infinite assumption), time [s], x_position [m].
+  One-of-inputs (provide either):
+      ['alpha']                        — m²/s
+      ['k', 'rho', 'Cp']               — derives α = k / (ρ · Cp)
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+
+TOOL_ID = 'MF-T01'
+TOOL_CANONICAL_NAME = 'Fourier_1D'
+CITATIONS = [
+    'Singh & Heldman, Introduction to Food Engineering Ch.4',
+    'Toledo, Fundamentals of Food Process Engineering Ch.7',
+    'Sahin & Sumnu, Physical Properties of Foods Ch.3',
+]
+
+
+
+def _resolve_alpha(params: dict, val: Validator,
+                   assumptions: list[str]) -> tuple[float | None, dict]:
+    """Return (alpha, inputs_consumed). Mutates val + assumptions."""
+    if "alpha" in params:
+        a = params["alpha"]
+        val.require_positive("alpha", a)
+        return a, {"alpha": a}
+    needed = ("k", "rho", "Cp")
+    if all(p in params for p in needed):
+        k, rho, cp = params["k"], params["rho"], params["Cp"]
+        for n, v in (("k", k), ("rho", rho), ("Cp", cp)):
+            val.require_positive(n, v)
+        if all(isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0
+               for x in (k, rho, cp)):
+            a = k / (rho * cp)
+            assumptions.append(
+                f"computed thermal diffusivity α = k/(ρ·Cp) = "
+                f"{k}/({rho}·{cp}) = {a:.4e} m²/s"
+            )
+            return a, {"k": k, "rho": rho, "Cp": cp}
+        return None, {"k": k, "rho": rho, "Cp": cp}
+    val.issues.append(
+        "must provide either 'alpha' or all of (k, rho, Cp); "
+        "see config/mother_formulas.yaml MF-T01.one_of_inputs"
+    )
+    return None, {}
+
+
+@validate_bounds("MF-T01")
+def solve(params: dict) -> dict:
+    """Compute T(x, t) for a semi-infinite slab heated at the surface.
+
+    Required runtime params:
+        T_init        °C   uniform initial temperature
+        T_boundary    °C   surface temperature held constant for t > 0
+        time          s    elapsed time since boundary step (≥ 0)
+        x_position    m    depth from the surface (≥ 0)
+    Optional:
+        thickness     m    slab thickness (for semi-infinite check only;
+                           solver warns if x_position > thickness).
+                           Must be > 0 when provided — the semi-infinite
+                           assumption is meaningless for thickness ≤ 0.
+        dx            m    accepted but unused — analytical mode skips
+                           finite-difference discretisation.
+    Plus one of:
+        alpha         m²/s
+        OR (k, rho, Cp) — α = k/(ρ·Cp)
+    """
+    val = Validator()
+    assumptions: list[str] = ["semi-infinite slab", "step boundary at t=0",
+                              "constant α", "1D heat flow"]
+
+    # Runtime
+    t_init      = params.get("T_init")
+    t_boundary  = params.get("T_boundary")
+    t_time      = params.get("time")
+    x_pos       = params.get("x_position")
+    thickness   = params.get("thickness")
+
+    val.require_temperature_celsius("T_init", t_init)
+    val.require_temperature_celsius("T_boundary", t_boundary)
+    val.require_positive("time", t_time, allow_zero=True)
+    val.require_positive("x_position", x_pos, allow_zero=True)
+
+    # P1.2 (PR #20 D69 review): if thickness is supplied, enforce > 0.
+    # Previously thickness=NaN/0/-1/inf all silently passed validation —
+    # but the semi-infinite assumption requires a positive slab depth.
+    # `thickness` remains optional (None == not provided).
+    if thickness is not None:
+        val.require_positive("thickness", thickness, allow_zero=False)
+
+    # Applicable_range from yaml: T ∈ [-40, 300] °C
+    for name, v in (("T_init", t_init), ("T_boundary", t_boundary)):
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            val.require_in_range(name, v, -40, 300,
+                                 hint="MF-T01 applicable_range")
+
+    # Material props
+    alpha, inputs_consumed = _resolve_alpha(params, val, assumptions)
+
+    # Compute
+    value: float | None = None
+    if (
+        alpha is not None
+        and all(isinstance(p, (int, float)) and not isinstance(p, bool)
+                for p in (t_init, t_boundary, t_time, x_pos))
+        and t_time >= 0 and x_pos >= 0 and alpha > 0
+    ):
+        if t_time == 0:
+            value = float(t_init)
+            assumptions.append("t = 0 → returns T_init")
+        else:
+            arg = x_pos / (2.0 * math.sqrt(alpha * t_time))
+            value = float(t_init) + (float(t_boundary) - float(t_init)) * math.erfc(arg)
+
+    # Semi-infinite check (only when thickness is a positive finite number)
+    if (
+===== engine/solver/mf_t02_cp.py =====
+"""MF-T02-Cp Choi_Okos — food specific heat prediction.
+
+Formula:
+    Cp_mix = sum(X_i Cp_i(T)).
+
+References:
+    - Choi, Y. & Okos, M.R. (1986), food component property correlations.
+    - CoolProp liquid-water heat capacity is used for the pure-water reference
+      case when available.
+
+Inputs:
+    composition dict with mass fractions for water, protein, fat, carb,
+    fiber, ash; or scalar aliases Xw, Xp, Xf, Xc, Xfiber, Xa.
+    T_C in deg C.
+
+Assumptions:
+    - mass fractions describe the proximate composition
+    - component properties are temperature-dependent but pressure-independent
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+
+TOOL_ID = 'MF-T02-CP'
+TOOL_CANONICAL_NAME = 'Choi_Okos_specific_heat'
+CITATIONS = [
+    'Singh & Heldman, Introduction to Food Engineering Ch.4',
+    'Rao, Engineering Properties of Foods Ch.4',
+]
+
+
+try:
+    from CoolProp.CoolProp import PropsSI
+except ImportError:  # pragma: no cover - exercised only without dependency
+    PropsSI = None
+
+
+_COMPONENTS = ("water", "protein", "fat", "carb", "fiber", "ash")
+_ALIASES = {
+    "water": ("water", "Xw"),
+    "protein": ("protein", "Xp"),
+    "fat": ("fat", "Xf"),
+    "carb": ("carb", "carbohydrate", "Xc"),
+    "fiber": ("fiber", "Xfiber", "Xfi"),
+    "ash": ("ash", "Xa"),
+}
+
+
+def _is_finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _poly(coeffs: tuple[float, float, float], t_c: float) -> float:
+    return coeffs[0] + coeffs[1] * t_c + coeffs[2] * t_c * t_c
+
+
+def _choi_okos_component_cp(t_c: float) -> dict[str, float]:
+    cp = {
+        "water": (4.1762, -9.0864e-5, 5.4731e-6),
+        "protein": (2.0082, 1.2089e-3, -1.3129e-6),
+        "fat": (1.9842, 1.4733e-3, -4.8008e-6),
+        "carb": (1.5488, 1.9625e-3, -5.9399e-6),
+        "fiber": (1.8459, 1.8306e-3, -4.6509e-6),
+        "ash": (1.0926, 1.8896e-3, -3.6817e-6),
+    }
+    return {name: _poly(cp[name], t_c) * 1000.0 for name in _COMPONENTS}
+
+
+def _extract_composition(params: dict[str, Any], val: Validator,
+                         assumptions: list[str]) -> dict[str, float]:
+    comp = params.get("composition")
+    raw: dict[str, Any] = {}
+    if comp is not None:
+        if not isinstance(comp, dict):
+            val.issues.append("composition must be a dict of component mass fractions")
+            comp = {}
+        raw.update(comp)
+    for name, aliases in _ALIASES.items():
+        for alias in aliases:
+            if alias in params:
+                raw[name] = params[alias]
+                break
+
+    if not raw:
+        val.issues.append(
+            "must provide composition dict or component aliases Xw/Xp/Xf/Xc/Xfiber/Xa"
+        )
+
+    fractions: dict[str, float] = {}
+    for name in _COMPONENTS:
+        value = raw.get(name, 0.0)
+        val.require_positive(f"composition.{name}", value, allow_zero=True)
+        fractions[name] = float(value) if _is_finite_number(value) else 0.0
+
+    total = sum(fractions.values())
+    if total <= 0.0:
+        val.issues.append("composition mass fractions must sum to a positive value")
+        return fractions
+    if not math.isclose(total, 1.0, rel_tol=1e-6, abs_tol=1e-9):
+        assumptions.append(f"normalized composition mass fractions from total={total:.6g}")
+        fractions = {name: value / total for name, value in fractions.items()}
+    return fractions
+
+
+def _pure_water_coolprop(t_c: float) -> float | None:
+    if PropsSI is None or not (0.0 <= t_c <= 95.0):
+        return None
+    try:
+        return float(PropsSI("C", "T", t_c + 273.15, "P", 101325.0, "Water"))
+    except Exception:
+        return None
+
+
+@validate_bounds("MF-T02", output_variant="mf_t02_cp")
+def solve(params: dict) -> dict:
+    """Predict specific heat Cp for a food composition at T_C."""
+    val = Validator()
+    assumptions: list[str] = [
+        "mass-fraction composition",
+        "Choi-Okos component correlations",
+        "pressure effects neglected",
+    ]
+
+    t_c = params.get("T_C", params.get("T_c"))
+    val.require_temperature_celsius("T_C", t_c)
+    if _is_finite_number(t_c):
+        val.require_in_range("T_C", t_c, -40.0, 150.0,
+                             hint="Choi-Okos food-property correlation range")
+
+    fractions = _extract_composition(params, val, assumptions)
+
+    value: float | None = None
+    if _is_finite_number(t_c) and float(t_c) >= -273.15 and sum(fractions.values()) > 0.0 \
+            and not any(f < 0.0 for f in fractions.values()):
+        if fractions.get("water", 0.0) > 1.0 - 1e-12:
+===== engine/solver/mf_t02_k.py =====
+"""MF-T02-k Choi_Okos — food thermal conductivity prediction.
+
+Formula:
+    k_mix = sum(phi_i k_i(T)), where phi_i is component volume fraction.
+
+References:
+    - Choi, Y. & Okos, M.R. (1986), food component property correlations.
+    - CoolProp liquid-water conductivity is used for the pure-water reference
+      case when available.
+
+Inputs:
+    composition dict with mass fractions for water, protein, fat, carb,
+    fiber, ash; or scalar aliases Xw, Xp, Xf, Xc, Xfiber, Xa.
+    T_C in deg C.
+
+Assumptions:
+    - mass fractions describe the proximate composition
+    - component properties are temperature-dependent but pressure-independent
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+
+TOOL_ID = 'MF-T02-K'
+TOOL_CANONICAL_NAME = 'Choi_Okos_thermal_conductivity'
+CITATIONS = [
+    'Singh & Heldman, Introduction to Food Engineering Ch.4',
+    'Rao, Engineering Properties of Foods Ch.4',
+]
+
+
+try:
+    from CoolProp.CoolProp import PropsSI
+except ImportError:  # pragma: no cover - exercised only without dependency
+    PropsSI = None
+
+
+_COMPONENTS = ("water", "protein", "fat", "carb", "fiber", "ash")
+_ALIASES = {
+    "water": ("water", "Xw"),
+    "protein": ("protein", "Xp"),
+    "fat": ("fat", "Xf"),
+    "carb": ("carb", "carbohydrate", "Xc"),
+    "fiber": ("fiber", "Xfiber", "Xfi"),
+    "ash": ("ash", "Xa"),
+}
+
+
+def _is_finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _poly(coeffs: tuple[float, float, float], t_c: float) -> float:
+    return coeffs[0] + coeffs[1] * t_c + coeffs[2] * t_c * t_c
+
+
+def _choi_okos_component_props(t_c: float) -> dict[str, dict[str, float]]:
+    rho = {
+        "water": (997.18, 3.1439e-3, -3.7574e-3),
+        "protein": (1329.9, -0.5184, 0.0),
+        "fat": (925.59, -0.41757, 0.0),
+        "carb": (1599.1, -0.31046, 0.0),
+        "fiber": (1311.5, -0.36589, 0.0),
+        "ash": (2423.8, -0.28063, 0.0),
+    }
+    k = {
+        "water": (0.57109, 1.7625e-3, -6.7036e-6),
+        "protein": (0.17881, 1.1958e-3, -2.7178e-6),
+        "fat": (0.18071, -2.7604e-4, -1.7749e-7),
+        "carb": (0.20141, 1.3874e-3, -4.3312e-6),
+        "fiber": (0.18331, 1.2497e-3, -3.1683e-6),
+        "ash": (0.32962, 1.4011e-3, -2.9069e-6),
+    }
+    return {
+        name: {
+            "rho": _poly(rho[name], t_c),
+            "k": _poly(k[name], t_c),
+        }
+        for name in _COMPONENTS
+    }
+
+
+def _extract_composition(params: dict[str, Any], val: Validator,
+                         assumptions: list[str]) -> dict[str, float]:
+    comp = params.get("composition")
+    raw: dict[str, Any] = {}
+    if comp is not None:
+        if not isinstance(comp, dict):
+            val.issues.append("composition must be a dict of component mass fractions")
+            comp = {}
+        raw.update(comp)
+    for name, aliases in _ALIASES.items():
+        for alias in aliases:
+            if alias in params:
+                raw[name] = params[alias]
+                break
+
+    if not raw:
+        val.issues.append(
+            "must provide composition dict or component aliases Xw/Xp/Xf/Xc/Xfiber/Xa"
+        )
+
+    fractions: dict[str, float] = {}
+    for name in _COMPONENTS:
+        value = raw.get(name, 0.0)
+        val.require_positive(f"composition.{name}", value, allow_zero=True)
+        fractions[name] = float(value) if _is_finite_number(value) else 0.0
+
+    total = sum(fractions.values())
+    if total <= 0.0:
+        val.issues.append("composition mass fractions must sum to a positive value")
+        return fractions
+    if not math.isclose(total, 1.0, rel_tol=1e-6, abs_tol=1e-9):
+        assumptions.append(f"normalized composition mass fractions from total={total:.6g}")
+        fractions = {name: value / total for name, value in fractions.items()}
+    return fractions
+
+
+def _pure_water_coolprop(t_c: float) -> float | None:
+    if PropsSI is None or not (0.0 <= t_c <= 95.0):
+        return None
+    try:
+        return float(PropsSI("L", "T", t_c + 273.15, "P", 101325.0, "Water"))
+    except Exception:
+        return None
+
+
+@validate_bounds("MF-T02", output_variant="mf_t02_k")
+def solve(params: dict) -> dict:
+    """Predict thermal conductivity k for a food composition at T_C."""
+    val = Validator()
+    assumptions: list[str] = [
+        "mass-fraction composition",
+        "Choi-Okos component correlations",
+        "pressure effects neglected",
+===== engine/solver/mf_t02_rho.py =====
+"""MF-T02-rho Choi_Okos — food density prediction.
+
+Formula:
+    rho_mix = 1 / sum(X_i / rho_i(T)).
+
+References:
+    - Choi, Y. & Okos, M.R. (1986), food component property correlations.
+    - CoolProp liquid-water density is used for the pure-water reference case
+      when available.
+
+Inputs:
+    composition dict with mass fractions for water, protein, fat, carb,
+    fiber, ash; or scalar aliases Xw, Xp, Xf, Xc, Xfiber, Xa.
+    T_C in deg C.
+
+Assumptions:
+    - mass fractions describe the proximate composition
+    - component properties are temperature-dependent but pressure-independent
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+
+TOOL_ID = 'MF-T02-RHO'
+TOOL_CANONICAL_NAME = 'Choi_Okos_density'
+CITATIONS = [
+    'Singh & Heldman, Introduction to Food Engineering Ch.4',
+    'Rao, Engineering Properties of Foods Ch.4',
+]
+
+
+try:
+    from CoolProp.CoolProp import PropsSI
+except ImportError:  # pragma: no cover - exercised only without dependency
+    PropsSI = None
+
+
+_COMPONENTS = ("water", "protein", "fat", "carb", "fiber", "ash")
+_ALIASES = {
+    "water": ("water", "Xw"),
+    "protein": ("protein", "Xp"),
+    "fat": ("fat", "Xf"),
+    "carb": ("carb", "carbohydrate", "Xc"),
+    "fiber": ("fiber", "Xfiber", "Xfi"),
+    "ash": ("ash", "Xa"),
+}
+
+
+def _is_finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _poly(coeffs: tuple[float, float, float], t_c: float) -> float:
+    return coeffs[0] + coeffs[1] * t_c + coeffs[2] * t_c * t_c
+
+
+def _choi_okos_component_rho(t_c: float) -> dict[str, float]:
+    rho = {
+        "water": (997.18, 3.1439e-3, -3.7574e-3),
+        "protein": (1329.9, -0.5184, 0.0),
+        "fat": (925.59, -0.41757, 0.0),
+        "carb": (1599.1, -0.31046, 0.0),
+        "fiber": (1311.5, -0.36589, 0.0),
+        "ash": (2423.8, -0.28063, 0.0),
+    }
+    return {name: _poly(rho[name], t_c) for name in _COMPONENTS}
+
+
+def _extract_composition(params: dict[str, Any], val: Validator,
+                         assumptions: list[str]) -> dict[str, float]:
+    comp = params.get("composition")
+    raw: dict[str, Any] = {}
+    if comp is not None:
+        if not isinstance(comp, dict):
+            val.issues.append("composition must be a dict of component mass fractions")
+            comp = {}
+        raw.update(comp)
+    for name, aliases in _ALIASES.items():
+        for alias in aliases:
+            if alias in params:
+                raw[name] = params[alias]
+                break
+
+    if not raw:
+        val.issues.append(
+            "must provide composition dict or component aliases Xw/Xp/Xf/Xc/Xfiber/Xa"
+        )
+
+    fractions: dict[str, float] = {}
+    for name in _COMPONENTS:
+        value = raw.get(name, 0.0)
+        val.require_positive(f"composition.{name}", value, allow_zero=True)
+        fractions[name] = float(value) if _is_finite_number(value) else 0.0
+
+    total = sum(fractions.values())
+    if total <= 0.0:
+        val.issues.append("composition mass fractions must sum to a positive value")
+        return fractions
+    if not math.isclose(total, 1.0, rel_tol=1e-6, abs_tol=1e-9):
+        assumptions.append(f"normalized composition mass fractions from total={total:.6g}")
+        fractions = {name: value / total for name, value in fractions.items()}
+    return fractions
+
+
+def _pure_water_coolprop(t_c: float) -> float | None:
+    if PropsSI is None or not (0.0 <= t_c <= 95.0):
+        return None
+    try:
+        return float(PropsSI("D", "T", t_c + 273.15, "P", 101325.0, "Water"))
+    except Exception:
+        return None
+
+
+@validate_bounds("MF-T02", output_variant="mf_t02_rho")
+def solve(params: dict) -> dict:
+    """Predict density rho for a food composition at T_C."""
+    val = Validator()
+    assumptions: list[str] = [
+        "mass-fraction composition",
+        "Choi-Okos component correlations",
+        "pressure effects neglected",
+    ]
+
+    t_c = params.get("T_C", params.get("T_c"))
+    val.require_temperature_celsius("T_C", t_c)
+    if _is_finite_number(t_c):
+        val.require_in_range("T_C", t_c, -40.0, 150.0,
+                             hint="Choi-Okos food-property correlation range")
+
+    fractions = _extract_composition(params, val, assumptions)
+
+    value: float | None = None
+    if _is_finite_number(t_c) and float(t_c) >= -273.15 and sum(fractions.values()) > 0.0 \
+            and not any(f < 0.0 for f in fractions.values()):
+        if fractions.get("water", 0.0) > 1.0 - 1e-12:
+===== engine/solver/mf_t03.py =====
+"""MF-T03 Arrhenius — temperature dependence of a rate constant.
+
+Formula:
+    k = A · exp(-Ea / (R · T))
+
+References:
+    - Classical Arrhenius rate equation; pure algebra per D65.
+
+Inputs:
+    A, Ea [J/mol], T_K [K], optional R [J/(mol K)].
+
+Assumptions:
+    - T_K is absolute temperature in Kelvin
+    - A and Ea are for one dominant mechanism over the temperature interval
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+
+TOOL_ID = 'MF-T03'
+TOOL_CANONICAL_NAME = 'Arrhenius'
+CITATIONS = [
+    'van Boekel, Kinetic Modeling of Reactions in Foods Ch.5',
+    'Toledo, Fundamentals of Food Process Engineering Ch.8',
+    'Handbook of Food Engineering Ch.3',
+]
+
+
+
+_R_GAS = 8.31446261815324
+
+
+@validate_bounds("MF-T03")
+def solve(params: dict) -> dict:
+    """Compute Arrhenius rate constant k."""
+    val = Validator()
+    assumptions: list[str] = [
+        "temperature supplied in Kelvin",
+        "single Arrhenius activation energy",
+    ]
+
+    a_factor = params.get("A")
+    ea = params.get("Ea")
+    t_k = params.get("T_K", params.get("T"))
+    r_gas = params.get("R", _R_GAS)
+
+    val.require_positive("A", a_factor)
+    val.require_positive("Ea", ea, allow_zero=True)
+    val.require_positive("T_K", t_k)
+    val.require_positive("R", r_gas)
+
+    k_value: float | None = None
+    if (
+        all(isinstance(x, (int, float)) and not isinstance(x, bool)
+            for x in (a_factor, ea, t_k, r_gas))
+        and a_factor > 0.0 and ea >= 0.0 and t_k > 0.0 and r_gas > 0.0
+    ):
+        if ea == 0.0:
+            assumptions.append("Ea = 0 → k = A")
+        k_value = float(a_factor) * math.exp(-float(ea) / (float(r_gas) * float(t_k)))
+
+    return build_result(
+        value=k_value if k_value is not None else float("nan"),
+        unit="same as A",
+        symbol="k",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={"A": a_factor, "Ea": ea, "T_K": t_k, "R": r_gas},
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=k_value if k_value is not None else float("nan"),
+            unit="same as A",
+            symbol="k",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
+    )
+===== engine/solver/mf_t04.py =====
+"""MF-T04 Nusselt_Correlation — convective heat transfer correlation.
+
+Equation:
+    Nu = C · Re^m · Pr^n
+
+The Nusselt number `Nu` is then converted (downstream, by the caller)
+to a film coefficient via:
+
+    h = Nu · k_fluid / L_characteristic
+
+We do **not** compute h directly here — it depends on the fluid
+conductivity and characteristic length which are external inputs not
+listed in the MF-T04 row of `mother_formulas.yaml`. If the caller
+supplies `k_fluid` and `L_characteristic`, we'll compute h as a bonus
+and return it under `result.extras.h`.
+
+Inputs (per yaml MF-T04):
+    Runtime variables: Re, Pr               (dimensionless)
+    One-of-inputs:     [C, m, n]            empirical fit constants
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+
+TOOL_ID = 'MF-T04'
+TOOL_CANONICAL_NAME = 'Nusselt_Correlation'
+CITATIONS = [
+    'Singh & Heldman, Introduction to Food Engineering Ch.4',
+    'Toledo, Fundamentals of Food Process Engineering Ch.7',
+]
+
+
+
+@validate_bounds("MF-T04")
+def solve(params: dict) -> dict:
+    val = Validator()
+    assumptions = [
+        "single-phase forced convection",
+        "C/m/n must match the geometry/flow regime "
+        "of the substrate — see MF-T04 notes",
+    ]
+
+    re = params.get("Re")
+    pr = params.get("Pr")
+    c, m, n = params.get("C"), params.get("m"), params.get("n")
+
+    val.require_positive("Re", re)
+    val.require_positive("Pr", pr)
+    val.require_positive("C", c)
+    val.require_finite("m", m)
+    val.require_finite("n", n)
+
+    nu = float("nan")
+    if all(isinstance(x, (int, float)) for x in (re, pr, c, m, n)) and re > 0 and pr > 0 and c > 0:
+        nu = float(c) * (float(re) ** float(m)) * (float(pr) ** float(n))
+
+    # Optional film coefficient bonus
+    extras: dict[str, Any] = {}
+    k_fluid = params.get("k_fluid")
+    l_char  = params.get("L_characteristic")
+    if k_fluid is not None and l_char is not None:
+        val.require_positive("k_fluid", k_fluid)
+        val.require_positive("L_characteristic", l_char)
+        if isinstance(k_fluid, (int, float)) and isinstance(l_char, (int, float)):
+            if k_fluid > 0 and l_char > 0 and nu == nu:   # not NaN
+                extras["h"] = nu * float(k_fluid) / float(l_char)
+                extras["h_unit"] = "W/(m²·K)"
+                assumptions.append(
+                    f"film coefficient h = Nu·k_fluid/L_characteristic "
+                    f"= {nu:.3f}·{k_fluid}/{l_char}"
+                )
+
+    inputs_used = {"Re": re, "Pr": pr, "C": c, "m": m, "n": n}
+    if k_fluid is not None:           inputs_used["k_fluid"] = k_fluid
+    if l_char is not None:            inputs_used["L_characteristic"] = l_char
+
+    out = build_result(
+        value=nu,
+        unit="dimensionless",
+        symbol="Nu",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used=inputs_used,
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=nu,
+            unit="dimensionless",
+            symbol="Nu",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+            extra_outputs=extras,
+        ),
+    )
+    if extras:
+        out["result"]["extras"] = extras
+    return out
+===== engine/solver/mf_t05.py =====
+"""MF-T05 Plank_Freezing — freezing time by Plank's equation.
+
+Formula:
+    t_f = (rho · L · d) / (T_f - T_inf) · (P/h + R · d/k)
+
+References:
+    - Plank freezing-time model as used in food engineering texts.
+
+Inputs:
+    rho [kg/m³], L or L_f [J/kg], d or a [m], T_f [°C], T_inf or T_m [°C],
+    h [W/(m² K)], k [W/(m K)], optional geometry slab/cylinder/sphere or
+    explicit geometry factors P and R.
+
+Assumptions:
+    - uniform initial freezing point
+    - constant thermal properties
+    - slab defaults P=1/2 and R=1/8 when geometry factors are omitted
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+
+TOOL_ID = 'MF-T05'
+TOOL_CANONICAL_NAME = 'Plank_Freezing'
+CITATIONS = [
+    'Singh & Heldman, Introduction to Food Engineering Ch.7',
+    'Handbook of Food Engineering Ch.7',
+]
+
+
+
+GEOMETRY_FACTORS = {
+    "slab": (0.5, 0.125),
+    "cylinder": (0.25, 0.0625),
+    "sphere": (0.1667, 0.04167),
+}
+
+
+def _is_finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+@validate_bounds("MF-T05")
+def solve(params: dict) -> dict:
+    """Estimate freezing time in seconds."""
+    val = Validator()
+    assumptions: list[str] = [
+        "Plank quasi-steady freezing front",
+        "constant rho, latent heat, h, and k",
+    ]
+
+    rho = params.get("rho")
+    latent = params.get("L", params.get("L_f"))
+    d = params.get("d", params.get("a"))
+    t_f = params.get("T_f")
+    t_inf = params.get("T_inf", params.get("T_m"))
+    h = params.get("h")
+    k = params.get("k")
+    geometry_raw = params.get("geometry", "slab")
+    geometry = geometry_raw.lower() if isinstance(geometry_raw, str) else None
+    if geometry not in GEOMETRY_FACTORS:
+        val.issues.append(f"geometry must be one of {list(GEOMETRY_FACTORS)}, got {geometry_raw!r}")
+    effective_geometry = geometry if geometry in GEOMETRY_FACTORS else "slab"
+    p_default, r_default = GEOMETRY_FACTORS[effective_geometry]
+    p_factor = params.get("P", p_default)
+    r_factor = params.get("R", params.get("R_c", r_default))
+
+    if "P" not in params and "R" not in params and "R_c" not in params:
+        assumptions.append(
+            f"using {effective_geometry} default geometry factors P={p_default}, R={r_default}"
+        )
+
+    val.require_positive("rho", rho)
+    val.require_positive("L", latent)
+    val.require_positive("d", d)
+    val.require_temperature_celsius("T_f", t_f)
+    val.require_temperature_celsius("T_inf", t_inf)
+    val.require_positive("h", h)
+    val.require_positive("k", k)
+    val.require_positive("P", p_factor)
+    val.require_positive("R", r_factor, allow_zero=True)
+
+    delta_t: float | None = None
+    if _is_finite_number(t_f) and _is_finite_number(t_inf):
+        delta_t = float(t_f) - float(t_inf)
+        if delta_t <= 0.0:
+            val.issues.append("T_f must be warmer than T_inf so T_f - T_inf > 0")
+
+    value: float | None = None
+    if (
+        delta_t is not None and delta_t > 0.0
+        and all(_is_finite_number(x) for x in (rho, latent, d, h, k, p_factor, r_factor))
+        and rho > 0.0 and latent > 0.0 and d > 0.0 and h > 0.0 and k > 0.0
+        and p_factor > 0.0 and r_factor >= 0.0
+    ):
+        value = (
+            float(rho) * float(latent) * float(d) / delta_t
+            * (float(p_factor) / float(h) + float(r_factor) * float(d) / float(k))
+        )
+        if r_factor == 0.0:
+            assumptions.append("R = 0 → conduction resistance term omitted")
+
+    return build_result(
+        value=value if value is not None else float("nan"),
+        unit="s",
+        symbol="t_f",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={
+            "rho": rho, "L": latent, "d": d, "T_f": t_f, "T_inf": t_inf,
+            "h": h, "k": k, "geometry": geometry_raw, "P": p_factor, "R": r_factor,
+        },
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=value if value is not None else float("nan"),
+            unit="s",
+            symbol="t_f",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
+    )
+===== engine/solver/mf_t06.py =====
+"""MF-T06 Protein_Denaturation — sigmoid (van't Hoff / DSC) model.
+
+Formula:
+    f_native(T) = 1 / (1 + exp((T_C - T_d) / sigma))
+
+where sigma is the transition steepness derived from the denaturation
+enthalpy via the van 't Hoff relation:
+
+    sigma ≈ R · T_d_K² / dH_d   (units: K)
+
+Inputs:
+    T_d [°C]:    midpoint denaturation temperature
+    dH_d [kJ/mol]: van 't Hoff enthalpy (controls steepness)
+    T_C [°C]:    current temperature
+    sigma_override [°C, optional]: bypass dH_d-derived steepness
+
+Output:
+    f_native (native protein fraction in [0, 1])
+
+References:
+    - Privalov & Khechinashvili (1974) Stability of proteins
+    - Belitz et al., Food Chemistry §1 (protein denaturation)
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import (
+    Validator,
+    build_result,
+    llm_summary_for,
+    provenance_for,
+    validate_bounds,
+)
+
+TOOL_ID = "MF-T06"
+TOOL_CANONICAL_NAME = "Protein_Denaturation"
+CITATIONS = [
+    "Privalov & Khechinashvili (1974) J Mol Biol — protein stability",
+    "Belitz, Grosch, Schieberle, Food Chemistry §1.4 — denaturation",
+    "Singh & Heldman, Intro to Food Engineering — thermal kinetics",
+]
+
+_R_GAS_J = 8.31446261815324  # J/(mol·K)
+
+
+@validate_bounds("MF-T06")
+def solve(params: dict) -> dict:
+    """Compute native protein fraction f_native at temperature T_C."""
+    val = Validator()
+    assumptions: list[str] = [
+        "two-state native ⇌ denatured equilibrium",
+        "van 't Hoff transition centered at T_d",
+        "sigma derived from dH_d unless explicitly overridden",
+    ]
+
+    t_d = params.get("T_d")
+    dh_d = params.get("dH_d")
+    t_c = params.get("T_C", params.get("T_c"))
+    sigma_override = params.get("sigma_override")
+
+    val.require_temperature_celsius("T_d", t_d)
+    val.require_temperature_celsius("T_C", t_c)
+    # P1 fix (cross-review): allow sigma_override WITHOUT dH_d
+    if sigma_override is not None:
+        val.require_positive("sigma_override", sigma_override)
+    else:
+        val.require_positive("dH_d", dh_d)
+
+    f_native: float | None = None
+    # Compute path depends on whether sigma_override is supplied
+    have_override = (
+        sigma_override is not None
+        and isinstance(sigma_override, (int, float)) and not isinstance(sigma_override, bool)
+        and math.isfinite(sigma_override) and sigma_override > 0
+    )
+    have_dh = (
+        isinstance(dh_d, (int, float)) and not isinstance(dh_d, bool)
+        and math.isfinite(dh_d) and dh_d > 0
+    )
+    can_compute = (
+        isinstance(t_d, (int, float)) and not isinstance(t_d, bool) and math.isfinite(t_d)
+        and isinstance(t_c, (int, float)) and not isinstance(t_c, bool) and math.isfinite(t_c)
+        and (have_override or have_dh)
+    )
+    if can_compute:
+        if have_override:
+            sigma = float(sigma_override)
+            assumptions.append("sigma supplied via sigma_override")
+        else:
+            t_d_k = float(t_d) + 273.15
+            dh_d_j = float(dh_d) * 1000.0
+            sigma = _R_GAS_J * t_d_k * t_d_k / dh_d_j
+            assumptions.append(
+                f"sigma from van 't Hoff: R·T_d²/dH_d = {sigma:.3g}°C"
+            )
+
+        # Clamp argument to avoid math.exp overflow on extreme T_C
+        arg = (float(t_c) - float(t_d)) / sigma
+        if arg > 700.0:
+            f_native = 0.0
+        elif arg < -700.0:
+            f_native = 1.0
+        else:
+            f_native = 1.0 / (1.0 + math.exp(arg))
+
+    return build_result(
+        value=f_native if f_native is not None else float("nan"),
+        unit="dimensionless",
+        symbol="f_native",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={
+            "T_d": t_d,
+            "dH_d": dh_d,
+            "T_C": t_c,
+            "sigma_override": sigma_override,
+        },
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=f_native if f_native is not None else float("nan"),
+            unit="dimensionless",
+            symbol="f_native",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
+    )
+===== engine/solver/mf_t07.py =====
+"""MF-T07 Dielectric_Properties — RF/Microwave volumetric heating.
+
+Formula:
+    P_abs = 2 · π · f · ε₀ · ε'' · |E|²
+
+where:
+    f       [Hz]  — RF or microwave frequency
+    ε''     [-]   — dielectric loss factor
+    |E|     [V/m] — local electric field magnitude
+    ε₀      = 8.8541878128e-12 F/m  (permittivity of free space)
+    P_abs   [W/m³] — volumetric absorbed power density
+
+Inputs:
+    epsilon_double_prime
+    frequency [Hz]
+    E_field [V/m]
+
+Output:
+    P_abs (volumetric absorbed power, W/m³)
+
+References:
+    - Singh & Heldman Ch.5 — Microwave processing
+    - Datta & Davidson (2000) Microwave food processing
+    - Buffler (1993) Microwave Cooking & Processing
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import (
+    Validator,
+    build_result,
+    llm_summary_for,
+    provenance_for,
+    validate_bounds,
+)
+
+TOOL_ID = "MF-T07"
+TOOL_CANONICAL_NAME = "Dielectric_Properties"
+CITATIONS = [
+    "Singh & Heldman, Intro Food Engineering Ch.5 — microwave",
+    "Datta & Davidson (2000) J Food Sci 65:1 — MW food processing",
+    "Buffler, Microwave Cooking & Processing (1993)",
+]
+
+_EPSILON_0 = 8.8541878128e-12  # F/m
+
+
+@validate_bounds("MF-T07")
+def solve(params: dict) -> dict:
+    """Compute volumetric absorbed power density P_abs."""
+    val = Validator()
+    assumptions: list[str] = [
+        "uniform |E| within the volume element",
+        "ε'' treated as effective dielectric loss factor",
+        "no magnetic loss contribution (non-magnetic food)",
+    ]
+
+    eps2 = params.get("epsilon_double_prime", params.get("epsilon_pp"))
+    freq = params.get("frequency", params.get("f"))
+    e_field = params.get("E_field", params.get("E"))
+
+    val.require_positive("epsilon_double_prime", eps2, allow_zero=True)
+    val.require_positive("frequency", freq)
+    val.require_positive("E_field", e_field, allow_zero=True)
+
+    p_abs: float | None = None
+    if all(
+        isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+        for x in (eps2, freq, e_field)
+    ) and eps2 >= 0 and freq > 0 and e_field >= 0:
+        p_abs = 2.0 * math.pi * float(freq) * _EPSILON_0 * float(eps2) * float(e_field) ** 2
+
+    return build_result(
+        value=p_abs if p_abs is not None else float("nan"),
+        unit="W/m³",
+        symbol="P_abs",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={
+            "epsilon_double_prime": eps2,
+            "frequency": freq,
+            "E_field": e_field,
+        },
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=p_abs if p_abs is not None else float("nan"),
+            unit="W/m³",
+            symbol="P_abs",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
+    )
+===== engine/solver/mf_t08.py =====
+"""MF-T08 Ohmic_Heating — Joule heating in conducting food.
+
+Formula:
+    Q_dot = sigma(T) · |E|^2
+
+where sigma(T) ≈ sigma_25 · (1 + alpha·(T - 25))
+
+Inputs:
+    sigma_25 [S/m]:      electrical conductivity at 25°C
+    alpha [1/°C]:        temperature coefficient (default 0.0)
+    E_field [V/m]:       applied electric field
+    T_C [°C]:            current temperature
+
+Output:
+    Q_dot (volumetric heating rate W/m³)
+"""
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+TOOL_ID = "MF-T08"
+TOOL_CANONICAL_NAME = "Ohmic_Heating"
+CITATIONS = [
+    "Sastry & Barach (2000) Ohmic Heating Food Processing",
+    "Singh & Heldman Ch.5 — Electrical food processing",
+]
+
+
+@validate_bounds("MF-T08")
+def solve(params: dict) -> dict:
+    val = Validator()
+    assumptions = [
+        "linear T-dependence of sigma",
+        "uniform |E| in element",
+        "Joule heating Q = sigma·E²",
+    ]
+    sigma_25 = params.get("sigma_25", params.get("sigma_T", params.get("sigma")))
+    alpha = params.get("alpha", 0.0)
+    e_field = params.get("E_field", params.get("E"))
+    t_c = params.get("T_C", params.get("T_c", 25.0))
+
+    val.require_positive("sigma_25", sigma_25, allow_zero=True)
+    val.require_finite("alpha", alpha)
+    val.require_positive("E_field", e_field, allow_zero=True)
+    val.require_temperature_celsius("T_C", t_c)
+
+    q_dot = None
+    if all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+           for x in (sigma_25, alpha, e_field, t_c)):
+        sigma_t = float(sigma_25) * (1.0 + float(alpha) * (float(t_c) - 25.0))
+        if sigma_t < 0:
+            val.issues.append(f"WARN: sigma(T)={sigma_t} negative at T_C={t_c}")
+            sigma_t = max(sigma_t, 0.0)
+        q_dot = sigma_t * float(e_field) ** 2
+
+    return build_result(
+        value=q_dot if q_dot is not None else float("nan"),
+        unit="W/m³",
+        symbol="Q_dot",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={"sigma_25": sigma_25, "alpha": alpha, "E_field": e_field, "T_C": t_c},
+        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+        llm_summary=llm_summary_for(
+            value=q_dot if q_dot is not None else float("nan"),
+            unit="W/m³", symbol="Q_dot",
+            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+        ),
+    )
+===== engine/solver/mf_t09.py =====
+"""MF-T09 Respiration_Heat — postharvest produce respiration heat.
+
+Formula:
+    Q_resp = a · exp(b · T_C)
+
+Inputs:
+    a [W/kg]:   preexponential coefficient
+    b [1/°C]:   temperature coefficient
+    T_C [°C]:   storage temperature
+
+Output:
+    Q_resp (specific respiration heat, W/kg)
+
+References:
+    - ASHRAE Handbook: Refrigeration — Heat of respiration for fresh produce
+    - Becker et al. (1996) Heat & mass transfer in horticultural products
+"""
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import Validator, build_result, llm_summary_for, provenance_for, validate_bounds
+
+TOOL_ID = "MF-T09"
+TOOL_CANONICAL_NAME = "Respiration_Heat"
+CITATIONS = [
+    "ASHRAE Handbook 2022 Refrigeration — Postharvest heat of respiration",
+    "Becker, Misra & Fricke (1996) HVAC&R Research 2:4 — Fresh produce",
+]
+
+
+@validate_bounds("MF-T09")
+def solve(params: dict) -> dict:
+    val = Validator()
+    assumptions = ["empirical exponential T-dependence", "single produce species"]
+    a = params.get("a", params.get("a_coef"))
+    b = params.get("b", params.get("b_coef"))
+    t_c = params.get("T_C", params.get("T_c"))
+    val.require_positive("a", a, allow_zero=True)
+    val.require_finite("b", b)
+    val.require_temperature_celsius("T_C", t_c)
+
+    q_resp = None
+    if all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+           for x in (a, b, t_c)) and a >= 0:
+        arg = float(b) * float(t_c)
+        if arg > 700.0:
+            q_resp = float("inf")
+            val.issues.append(f"WARN: exponent {arg} too large — capped")
+        elif arg < -700.0:
+            q_resp = 0.0
+        else:
+            q_resp = float(a) * math.exp(arg)
+
+    return build_result(
+        value=q_resp if q_resp is not None else float("nan"),
+        unit="W/kg",
+        symbol="Q_resp",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={"a": a, "b": b, "T_C": t_c},
+        provenance=provenance_for(tool_id=TOOL_ID, tool_canonical_name=TOOL_CANONICAL_NAME, citations=CITATIONS),
+        llm_summary=llm_summary_for(
+            value=q_resp if q_resp is not None else float("nan"),
+            unit="W/kg", symbol="Q_resp",
+            tool_canonical_name=TOOL_CANONICAL_NAME, tool_id=TOOL_ID,
+        ),
+    )
+===== engine/solver/mf_t10.py =====
+"""MF-T10 Starch_Gelatinization — Avrami-like extent kinetics.
+
+Formula:
+    α(t) = 1 - exp(-k(T) · t^n)
+    k(T) = A · exp(-Ea/(R·T_K))
+
+Inputs:
+    T_C [°C]          — current temperature
+    time [s]          — heating time
+    A [s^-1]          — Avrami pre-exponential
+    Ea [J/mol]        — activation energy
+    n [-]             — Avrami exponent (typical 1.0–3.0)
+    water_content [-] — H₂O mass fraction (advisory; gelatinization needs ≥ ~0.5)
+
+Output:
+    alpha (gelatinization extent in [0, 1])
+
+References:
+    - Lund (1984) "Starch Gelatinization" CRC Food Sci Tech
+    - BeMiller & Whistler (2009) Starch: Chemistry & Technology Ch.7
+    - Marabi et al. (2003) — Avrami modeling of starch hydration
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from ._common import (
+    Validator,
+    build_result,
+    llm_summary_for,
+    provenance_for,
+    validate_bounds,
+)
+
+TOOL_ID = "MF-T10"
+TOOL_CANONICAL_NAME = "Starch_Gelatinization"
+CITATIONS = [
+    "Lund (1984) Starch Gelatinization — CRC Food Sci Tech",
+    "BeMiller & Whistler (2009) Starch Ch.7",
+    "Marabi et al. (2003) J Food Eng — Avrami starch hydration",
+]
+
+_R_GAS_J = 8.31446261815324
+
+
+@validate_bounds("MF-T10")
+def solve(params: dict) -> dict:
+    """Compute starch gelatinization extent alpha."""
+    val = Validator()
+    assumptions: list[str] = [
+        "Avrami-like first-order with shape exponent n",
+        "k(T) follows Arrhenius",
+        "water sufficient for gelatinization (advisory: <0.30 likely incomplete)",
+    ]
+
+    t_c = params.get("T_C", params.get("T_c"))
+    time = params.get("time", params.get("t"))
+    a_factor = params.get("A")
+    ea = params.get("Ea")
+    n = params.get("n", 1.0)
+    water = params.get("water_content")
+
+    val.require_temperature_celsius("T_C", t_c)
+    val.require_positive("time", time, allow_zero=True)
+    val.require_positive("A", a_factor)
+    val.require_positive("Ea", ea, allow_zero=True)
+    val.require_positive("n", n)
+    if water is not None:
+        val.require_in_range("water_content", water, 0.0, 1.0)
+        if isinstance(water, (int, float)) and not isinstance(water, bool) \
+                and math.isfinite(water) and water < 0.30:
+            assumptions.append(
+                f"water_content={water} < 0.30 — gelatinization likely incomplete"
+            )
+
+    alpha: float | None = None
+    if (
+        all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+            for x in (t_c, time, a_factor, ea, n))
+        and time >= 0 and a_factor > 0 and ea >= 0 and n > 0
+    ):
+        t_k = float(t_c) + 273.15
+        if t_k <= 0:
+            val.issues.append(f"T_K={t_k} ≤ 0 (T_C={t_c}°C below absolute zero)")
+            alpha = None
+        else:
+            k_t = float(a_factor) * math.exp(-float(ea) / (_R_GAS_J * t_k))
+            # Compute alpha with overflow protection; use expm1 for small arg stability
+            arg = k_t * (float(time) ** float(n))
+            if arg > 700.0:
+                alpha = 1.0
+            elif arg < 0.0:
+                alpha = float("nan")
+            else:
+                alpha = -math.expm1(-arg)
+
+    return build_result(
+        value=alpha if alpha is not None else float("nan"),
+        unit="dimensionless",
+        symbol="alpha",
+        assumptions=assumptions,
+        validity=val.result(),
+        inputs_used={
+            "T_C": t_c, "time": time, "A": a_factor, "Ea": ea, "n": n,
+            "water_content": water,
+        },
+        provenance=provenance_for(
+            tool_id=TOOL_ID,
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            citations=CITATIONS,
+        ),
+        llm_summary=llm_summary_for(
+            value=alpha if alpha is not None else float("nan"),
+            unit="dimensionless",
+            symbol="alpha",
+            tool_canonical_name=TOOL_CANONICAL_NAME,
+            tool_id=TOOL_ID,
+        ),
+    )
+
+codex
+The solver directory confirms the likely import mismatch: files are `engine.solver.mf_t03`, `mf_t06`, etc., while `_build_tool()` is trying `engine.solver.mf_t03` only indirectly for `run()`, but a different path for eager loading and description extraction. I’m verifying that against the YAML entries and a real import now.
+exec
+/bin/zsh -lc "python - <<'PY'
+import yaml
+from pathlib import Path
+p=Path('config/solver_bounds.yaml')
+data=yaml.safe_load(p.read_text())
+solvers=data['solvers']
+print('solver_count', len(solvers))
+for k in ['MF-T02','MF-T02-CP','MF-T02-K','MF-T02-RHO','MF-T03','MF-T06']:
+    print(k, 'present=', k in solvers, 'spec_keys=', list(solvers.get(k, {}).keys()) if k in solvers else None)
+PY" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+solver_count 40
+MF-T02 present= True spec_keys= ['canonical_name', 'inputs', 'outputs_by_variant']
+MF-T02-CP present= False spec_keys= None
+MF-T02-K present= False spec_keys= None
+MF-T02-RHO present= False spec_keys= None
+MF-T03 present= True spec_keys= ['canonical_name', 'inputs', 'output']
+MF-T06 present= True spec_keys= ['canonical_name', 'inputs', 'output']
+
+exec
+/bin/zsh -lc "python - <<'PY'
+from engine.agent.tool_registry import get_all_mf_tools
+try:
+    tools = get_all_mf_tools()
+    print('count', len(tools))
+    print([t.mf_id for t in tools[:10]])
+except Exception as e:
+    print(type(e).__name__, e)
+PY" in /Users/jeff/culinary-mind
+exec
+/bin/zsh -lc "python - <<'PY'
+import importlib
+mods = ['engine.solver.mf_t03','engine.solver.mf_t06','engine.solver.mf_t02_cp','engine.solver.mf_t03']
+for m in mods:
+    try:
+        mod = importlib.import_module(m)
+        print(m, 'OK', hasattr(mod, 'solve'), (mod.__doc__ or '').splitlines()[0])
+    except Exception as e:
+        print(m, 'ERR', type(e).__name__, e)
+PY" in /Users/jeff/culinary-mind
+ succeeded in 1073ms:
+engine.solver.mf_t03 OK True MF-T03 Arrhenius — temperature dependence of a rate constant.
+engine.solver.mf_t06 OK True MF-T06 Protein_Denaturation — sigmoid (van't Hoff / DSC) model.
+engine.solver.mf_t02_cp OK True MF-T02-Cp Choi_Okos — food specific heat prediction.
+engine.solver.mf_t03 OK True MF-T03 Arrhenius — temperature dependence of a rate constant.
+
+ succeeded in 1075ms:
+count 39
+['MF-C01', 'MF-C02', 'MF-C03', 'MF-C04', 'MF-C05', 'MF-K01', 'MF-K02', 'MF-K03', 'MF-K04', 'MF-K05']
+
+codex
+The registry does load 39 tools from YAML, but that’s masking a more serious issue: eager loading uses `engine.solver.mf_t03`, while `run()` lazy loading uses `engine.solver.mf_mf_t03`. That means cached tools appear fine until you construct an uncached `MFTool` or clear `_solver_module`.
+exec
+/bin/zsh -lc "python - <<'PY'
+from engine.agent.tool_registry import get_mf_tool, MFTool
+
+t = get_mf_tool('MF-T03')
+print('cached module', t._solver_module.__name__ if t._solver_module else None)
+print('run_cached', t.run({'A':1e10,'Ea':50000,'T_K':363})['result']['symbol'])
+
+u = MFTool(mf_id='MF-T03', canonical_name='Arrhenius', description='x', inputs_schema={}, output_schema={})
+try:
+    u.run({'A':1e10,'Ea':50000,'T_K':363})
+except Exception as e:
+    print('fresh_run_error', type(e).__name__, e)
+PY" in /Users/jeff/culinary-mind
+exec
+/bin/zsh -lc "python - <<'PY'
+from engine.agent.tool_registry import get_mf_tool
+
+t = get_mf_tool('MF-T03')
+t._solver_module = None
+try:
+    t.run({'A':1e10,'Ea':50000,'T_K':363})
+except Exception as e:
+    print(type(e).__name__, e)
+PY" in /Users/jeff/culinary-mind
+exec
+/bin/zsh -lc "python - <<'PY'
+from engine.agent.tool_registry import get_mf_tool
+try:
+    tool = get_mf_tool('MF-T02-CP')
+    print('found', tool.name)
+except Exception as e:
+    print(type(e).__name__, e)
+PY" in /Users/jeff/culinary-mind
+ succeeded in 770ms:
+KeyError 'Unknown MF id: MF-T02-CP'
+
+ succeeded in 772ms:
+ModuleNotFoundError No module named 'engine.solver.mf_mf_t03'
+
+ succeeded in 811ms:
+cached module engine.solver.mf_t03
+run_cached k
+fresh_run_error ModuleNotFoundError No module named 'engine.solver.mf_mf_t03'
+
+codex
+I have enough to write the review, but I want exact line references first. I’m grabbing numbered output for the registry and the package export file so the findings are concrete.
+exec
+/bin/zsh -lc "nl -ba engine/agent/tool_registry.py | sed -n '1,240p'" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+     1	"""MF Solver Tool Registry — wrap 40 engine.solver.mf_xxx into LangGraph-style Tools.
+     2	
+     3	A MFTool is a thin invocation wrapper:
+     4	    tool = get_mf_tool("MF-T03")
+     5	    out = tool.run({"A": 1e10, "Ea": 50000, "T_K": 363})
+     6	
+     7	Design goals:
+     8	- No hard dependency on LangChain/LangGraph (stdlib only); but interface is
+     9	  compatible: name/description/run pattern matches @tool decorator output.
+    10	- Auto-discovery via importlib walking engine.solver.mf_*.
+    11	- Schema derived from config/solver_bounds.yaml (single source of truth).
+    12	"""
+    13	from __future__ import annotations
+    14	
+    15	import importlib
+    16	import json
+    17	from dataclasses import dataclass, field
+    18	from pathlib import Path
+    19	from typing import Any, Callable
+    20	
+    21	try:
+    22	    import yaml
+    23	except ImportError:
+    24	    yaml = None
+    25	
+    26	ROOT = Path(__file__).resolve().parents[2]
+    27	BOUNDS_FILE = ROOT / "config/solver_bounds.yaml"
+    28	
+    29	
+    30	@dataclass
+    31	class MFTool:
+    32	    """LangChain/LangGraph-compatible tool wrapper for an MF solver."""
+    33	    mf_id: str
+    34	    canonical_name: str
+    35	    description: str
+    36	    inputs_schema: dict  # {param_name: {min, max, unit}}
+    37	    output_schema: dict  # {symbol, min, max, unit}
+    38	    _solver_module: Any = field(default=None, repr=False)
+    39	
+    40	    @property
+    41	    def name(self) -> str:
+    42	        """LangChain tool name (snake_case)."""
+    43	        return f"{self.mf_id.lower().replace('-', '_')}_{self.canonical_name.lower().replace('-', '_')}"
+    44	
+    45	    def run(self, params: dict) -> dict:
+    46	        """Invoke the underlying solver; returns full validity-checked output."""
+    47	        if self._solver_module is None:
+    48	            mod_name = f"engine.solver.mf_{self.mf_id.lower().replace('-', '_')}"
+    49	            self._solver_module = importlib.import_module(mod_name)
+    50	        return self._solver_module.solve(params)
+    51	
+    52	    def to_langchain_tool(self):
+    53	        """Optional: return a LangChain Tool if langchain is installed.
+    54	        
+    55	        Usage:
+    56	            from langchain.tools import Tool
+    57	            ai_tool = mf_tool.to_langchain_tool()
+    58	        """
+    59	        try:
+    60	            from langchain.tools import Tool
+    61	        except ImportError:
+    62	            raise ImportError("Install langchain: pip install langchain")
+    63	        return Tool(
+    64	            name=self.name,
+    65	            description=self.description,
+    66	            func=lambda params_json: json.dumps(self.run(json.loads(params_json) if isinstance(params_json, str) else params_json)),
+    67	        )
+    68	
+    69	    def get_input_summary(self) -> str:
+    70	        """Human-readable input description for LLM agent prompt."""
+    71	        lines = [f"Inputs for {self.mf_id} ({self.canonical_name}):"]
+    72	        for name, spec in self.inputs_schema.items():
+    73	            unit = spec.get("unit", "")
+    74	            lo, hi = spec.get("min"), spec.get("max")
+    75	            lines.append(f"  - {name}: {unit} (range: [{lo}, {hi}])")
+    76	        lines.append(f"Output: {self.output_schema.get('symbol', '?')} {self.output_schema.get('unit', '')}")
+    77	        return "\n".join(lines)
+    78	
+    79	
+    80	_TOOLS_CACHE: list[MFTool] = []
+    81	
+    82	
+    83	def _load_bounds() -> dict:
+    84	    if yaml is None:
+    85	        raise ImportError("PyYAML required to load solver_bounds.yaml")
+    86	    return yaml.safe_load(BOUNDS_FILE.read_text())
+    87	
+    88	
+    89	def _build_tool(mf_id: str, mf_spec: dict) -> MFTool:
+    90	    canonical = mf_spec.get("canonical_name", mf_id)
+    91	    inputs = mf_spec.get("inputs", [])
+    92	    inputs_schema = {i["name"]: {"min": i.get("min"), "max": i.get("max"), "unit": i.get("unit", "")} for i in inputs}
+    93	    output = mf_spec.get("output", {})
+    94	    # Try to load module to get docstring
+    95	    mod_name = f"engine.solver.{mf_id.lower().replace('-', '_')}"
+    96	    try:
+    97	        mod = importlib.import_module(mod_name)
+    98	        description = (mod.__doc__ or "").strip().split("\n")[0]
+    99	    except (ModuleNotFoundError, AttributeError):
+   100	        mod = None
+   101	        description = f"{canonical} solver"
+   102	    return MFTool(
+   103	        mf_id=mf_id,
+   104	        canonical_name=canonical,
+   105	        description=description,
+   106	        inputs_schema=inputs_schema,
+   107	        output_schema=output if isinstance(output, dict) else {},
+   108	        _solver_module=mod,
+   109	    )
+   110	
+   111	
+   112	def get_all_mf_tools() -> list[MFTool]:
+   113	    """Return all 40 MF tools (cached on first call)."""
+   114	    global _TOOLS_CACHE
+   115	    if _TOOLS_CACHE:
+   116	        return list(_TOOLS_CACHE)
+   117	    bounds = _load_bounds()
+   118	    solvers = bounds.get("solvers", {})
+   119	    tools = []
+   120	    for mf_id, spec in sorted(solvers.items()):
+   121	        # Skip MF-T02 parent (parent_only — children are routable)
+   122	        if mf_id == "MF-T02":
+   123	            continue
+   124	        try:
+   125	            tool = _build_tool(mf_id, spec)
+   126	            if tool._solver_module is not None:
+   127	                tools.append(tool)
+   128	        except Exception:
+   129	            pass  # silent skip if solver missing
+   130	    _TOOLS_CACHE = tools
+   131	    return list(tools)
+   132	
+   133	
+   134	def get_mf_tool(mf_id: str) -> MFTool:
+   135	    """Get a single MF tool by id, e.g. 'MF-T03'."""
+   136	    for t in get_all_mf_tools():
+   137	        if t.mf_id == mf_id:
+   138	            return t
+   139	    raise KeyError(f"Unknown MF id: {mf_id}")
+   140	
+   141	
+   142	def get_tools_by_keyword(keyword: str) -> list[MFTool]:
+   143	    """Find tools whose name/description/canonical_name contain a keyword.
+   144	    
+   145	    Useful for agent's first-pass tool selection (before invoking).
+   146	    """
+   147	    kw = keyword.lower()
+   148	    return [t for t in get_all_mf_tools()
+   149	            if kw in t.canonical_name.lower() or kw in t.description.lower() or kw in t.mf_id.lower()]
+
+exec
+/bin/zsh -lc "nl -ba engine/agent/__init__.py | sed -n '1,200p'
+nl -ba engine/agent/demo_simple_router.py | sed -n '1,240p'
+nl -ba engine/agent/tests/test_tool_registry.py | sed -n '1,220p'" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+     1	"""Engine.agent — LangGraph-compatible Tool wrappers for 40 MF solvers.
+     2	
+     3	Exports:
+     4	    get_all_mf_tools()   → list of LangChain-compatible @tool functions
+     5	    get_mf_tool(mf_id)   → single tool
+     6	
+     7	Each tool wraps engine.solver.mf_xxx.solve and exposes:
+     8	- name: 'mf_t03_arrhenius' etc
+     9	- description: docstring of solve()
+    10	- input_schema: pydantic-style {param: type}
+    11	- run(params) → result dict
+    12	"""
+    13	from engine.agent.tool_registry import get_all_mf_tools, get_mf_tool, MFTool
+    14	
+    15	__all__ = ["get_all_mf_tools", "get_mf_tool", "MFTool"]
+     1	#!/usr/bin/env python3
+     2	"""Simple demo: natural-language query → MF tool routing (keyword-based).
+     3	
+     4	This is a STUB for real LangGraph integration. It demonstrates how a future
+     5	agent would dispatch MF tools based on user intent.
+     6	
+     7	Example:
+     8	    python engine/agent/demo_simple_router.py "煮 70°C 30min 蛋白质变性多少"
+     9	"""
+    10	import re
+    11	import sys
+    12	from pathlib import Path
+    13	sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    14	
+    15	from engine.agent.tool_registry import get_all_mf_tools, get_mf_tool
+    16	
+    17	
+    18	# Keyword → MF mapping (manual; would be LLM-driven in production)
+    19	INTENT_MAP = {
+    20	    "protein.*denaturation|蛋白质.*变性|protein.*coagulation|肉.*嫩": "MF-T06",
+    21	    "growth.*limit|microbial.*growth|食品安全|MIC|pH.*min": "MF-K06",
+    22	    "microwave|RF.*heat|dielectric|微波|射频": "MF-T07",
+    23	    "starch.*gelatinization|淀粉.*糊化|淀粉.*糊化": "MF-T10",
+    24	    "logP|partition.*coefficient|溶解度.*油水|octanol": "MF-M07",
+    25	    "gas.*permeability|packaging|包装.*透.*气|WVTR|O2.*transmission": "MF-M08",
+    26	    "ohmic.*heating|joule.*heat|焦耳|电导率.*加热": "MF-T08",
+    27	    "binding.*equilibrium|ligand.*protein|配体|结合常数": "MF-K07",
+    28	    "respiration|呼吸.*热|cold.*storage.*produce": "MF-T09",
+    29	    "osmotic.*pressure|渗透压|van.t.*hoff": "MF-M09",
+    30	    "supercritical|SCFE|超临界": "MF-M11",
+    31	    "membrane.*transport|膜.*分离|membrane.*flux": "MF-M10",
+    32	    "arrhenius|reaction.*rate|activation.*energy|Ea": "MF-T03",
+    33	    "fourier|heat.*conduction|热传导|temperature.*center": "MF-T01",
+    34	    "Choi.Okos|composition|specific.*heat|Cp.*food": "MF-T02-CP",
+    35	    "Michaelis.Menten|enzyme.*kinetics|Vmax|Km": "MF-K01",
+    36	    "D.value|thermal.*death|pasteurization.*D": "MF-K02",
+    37	    "F.value|pasteurization|F0": "MF-K04",
+    38	    "Gompertz|microbial.*growth.*curve": "MF-K05",
+    39	    "GAB|sorption.*isotherm|water.*activity": "MF-M02",
+    40	    "Antoine|vapor.*pressure": "MF-M03",
+    41	    "Henderson.Hasselbalch|pKa.*buffer|pH.*buffer": "MF-M04",
+    42	    "Henry.law|aroma.*volatile": "MF-M05",
+    43	    "latent.*heat|相变.*焓": "MF-M06",
+    44	    "viscosity|粘度|power.*law": "MF-R01",
+    45	    "Casson|yield.*stress": "MF-R03",
+    46	    "WLF|glass.*transition.*shift": "MF-R05",
+    47	    "Stokes|sedimentation|沉降": "MF-C01",
+    48	    "DLVO|colloid.*stability": "MF-C03",
+    49	    "Q10.*rule|温度系数": "MF-C05",
+    50	}
+    51	
+    52	
+    53	def route_query(query: str) -> list[tuple[str, str]]:
+    54	    """Return list of (mf_id, matched_keyword)."""
+    55	    matches = []
+    56	    for pattern, mf_id in INTENT_MAP.items():
+    57	        if re.search(pattern, query, re.IGNORECASE):
+    58	            matches.append((mf_id, pattern.split("|")[0]))
+    59	    return matches
+    60	
+    61	
+    62	def main():
+    63	    if len(sys.argv) < 2:
+    64	        print("Usage: demo_simple_router.py '<natural language query>'")
+    65	        print("\nExamples:")
+    66	        print("  '蛋白质变性温度多少'           → MF-T06")
+    67	        print("  '微波加热鸡肉 200g'             → MF-T07")
+    68	        print("  '淀粉糊化温度'                  → MF-T10")
+    69	        print("  '冰箱苹果呼吸热'                → MF-T09")
+    70	        sys.exit(1)
+    71	
+    72	    query = " ".join(sys.argv[1:])
+    73	    print(f"Query: '{query}'")
+    74	    print()
+    75	    matches = route_query(query)
+    76	    if not matches:
+    77	        print("No MF matched. Try keywords like: protein denaturation / microwave / starch gelatinization")
+    78	        sys.exit(0)
+    79	    print(f"Matched {len(matches)} MF tool(s):")
+    80	    for mf_id, kw in matches:
+    81	        try:
+    82	            tool = get_mf_tool(mf_id)
+    83	            print(f"\n  → {tool.name} ({mf_id}: {tool.canonical_name})")
+    84	            print(f"    Triggered by keyword: '{kw}'")
+    85	            print(f"    Description: {tool.description}")
+    86	            print(f"    {tool.get_input_summary()}")
+    87	        except KeyError as e:
+    88	            print(f"  → {mf_id} (tool not loaded: {e})")
+    89	
+    90	
+    91	if __name__ == "__main__":
+    92	    main()
+     1	"""Tests for engine.agent.tool_registry — 40 MF Tool wrappers."""
+     2	import unittest
+     3	
+     4	from engine.agent.tool_registry import get_all_mf_tools, get_mf_tool, get_tools_by_keyword
+     5	
+     6	
+     7	class TestToolRegistry(unittest.TestCase):
+     8	
+     9	    def test_40_tools_loaded(self):
+    10	        tools = get_all_mf_tools()
+    11	        # 40 MF base + 3 T02 children - 1 T02 parent = 42 routable
+    12	        self.assertGreaterEqual(len(tools), 39, f"only {len(tools)} tools loaded")
+    13	
+    14	    def test_get_mf_t03(self):
+    15	        tool = get_mf_tool("MF-T03")
+    16	        self.assertEqual(tool.canonical_name, "Arrhenius")
+    17	        self.assertEqual(tool.name, "mf_t03_arrhenius")
+    18	        self.assertIn("A", tool.inputs_schema)
+    19	        self.assertIn("Ea", tool.inputs_schema)
+    20	        self.assertIn("T_K", tool.inputs_schema)
+    21	
+    22	    def test_run_mf_t03(self):
+    23	        tool = get_mf_tool("MF-T03")
+    24	        out = tool.run({"A": 1.0e10, "Ea": 50000.0, "T_K": 363.0})
+    25	        self.assertTrue(out["validity"]["passed"])
+    26	        self.assertGreater(out["result"]["value"], 0)
+    27	        self.assertEqual(out["result"]["symbol"], "k")
+    28	
+    29	    def test_get_mf_t06_protein_denaturation(self):
+    30	        tool = get_mf_tool("MF-T06")
+    31	        self.assertEqual(tool.canonical_name, "Protein_Denaturation")
+    32	        out = tool.run({"T_d": 70.0, "dH_d": 300.0, "T_C": 70.0})
+    33	        self.assertTrue(out["validity"]["passed"])
+    34	        self.assertAlmostEqual(out["result"]["value"], 0.5, places=4)
+    35	
+    36	    def test_get_tools_by_keyword_protein(self):
+    37	        tools = get_tools_by_keyword("protein")
+    38	        ids = {t.mf_id for t in tools}
+    39	        self.assertIn("MF-T06", ids)  # Protein_Denaturation
+    40	
+    41	    def test_get_tools_by_keyword_thermal(self):
+    42	        tools = get_tools_by_keyword("thermal")
+    43	        # Many tools mention thermal in description (k, conductivity, dynamics)
+    44	        self.assertGreaterEqual(len(tools), 1)
+    45	
+    46	    def test_get_input_summary_readable(self):
+    47	        tool = get_mf_tool("MF-T03")
+    48	        summary = tool.get_input_summary()
+    49	        self.assertIn("Inputs for MF-T03", summary)
+    50	        self.assertIn("A:", summary)
+    51	        self.assertIn("range:", summary)
+    52	
+    53	    def test_unknown_mf_raises(self):
+    54	        with self.assertRaises(KeyError):
+    55	            get_mf_tool("MF-X99")
+    56	
+    57	
+    58	if __name__ == "__main__":
+    59	    unittest.main(verbosity=2)
+
+codex
+## tool_registry.py
+
+**VERDICT:** REJECT
+
+**BUGS**
+- `P0` [engine/agent/tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tool_registry.py:45): `MFTool.run()` imports `engine.solver.mf_{mf_id...}`, so `MF-T03` becomes `engine.solver.mf_mf_t03`. A fresh tool instance, or any cached tool with `_solver_module` cleared, fails with `ModuleNotFoundError`. This is a real dispatch bug, not theoretical.
+- `P1` [engine/agent/tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tool_registry.py:89): `_build_tool()` only reads `output`, but `solver_bounds.yaml` encodes `MF-T02` variants under `outputs_by_variant`. As written, the registry never materializes `MF-T02-CP` / `MF-T02-K` / `MF-T02-RHO`, so `get_mf_tool("MF-T02-CP")` raises `KeyError` even though the router expects it.
+- `P1` [engine/agent/tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tool_registry.py:52): `to_langchain_tool()` is not LangChain/LangGraph-compatible for structured tool calling. It returns `langchain.tools.Tool`, not a structured tool with `args_schema`; it serializes outputs to JSON strings; and it expects a JSON string or dict ad hoc instead of exposing a schema-native callable. That breaks the stated “LangGraph-compatible MF Tool registry” goal.
+- `P1` [engine/agent/tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tool_registry.py:91): `inputs_schema` does not match `solver_bounds.yaml`. It drops fields like `type`, `default`, `soft`, and `source`, and collapses repeated names via dict overwrite. That is already wrong for entries like `MF-M03.substance` (`type: string`) and for duplicated hard/soft bounds such as `MF-M02.a_w`.
+- `P1` [engine/agent/tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tool_registry.py:120): `get_all_mf_tools()` silently swallows all exceptions and just skips tools. Missing modules, malformed YAML, or build bugs degrade the registry without any signal, which makes partial tool availability hard to detect and impossible to trust.
+- `P2` [engine/agent/tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tool_registry.py:80): caching returns a new list but the same mutable `MFTool` objects. Callers can mutate `_solver_module` or schemas globally, and the cache currently masks the broken lazy-import path because eager-loaded modules hide it.
+- `P2` [engine/agent/tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tool_registry.py:94): the description is taken from the module docstring first line, while the file header says it should expose the `solve()` docstring. That is contract drift.
+
+**IMPROVEMENTS**
+- Build a real schema object from YAML instead of a lossy `{name: {min,max,unit}}` dict. At minimum preserve `type`, `default`, and whether bounds are soft vs hard.
+- Materialize variant tools explicitly from `outputs_by_variant` so the registry matches the routable solver surface.
+- Replace silent skip with explicit error aggregation or at least warnings that identify which `mf_id` failed and why.
+- If LangChain support is required, emit `StructuredTool` or a `@tool`-compatible callable with `args_schema`, not a plain `Tool` with a JSON-string shim.
+- Make cache semantics explicit: immutable tool objects, keyed cache, and a way to refresh when YAML changes.
+
+## __init__.py
+
+**VERDICT:** APPROVE_WITH_NOTES
+
+**BUGS**
+- `P2` [engine/agent/__init__.py](/Users/jeff/culinary-mind/engine/agent/__init__.py:1): the module docstring is inaccurate in multiple ways. `get_all_mf_tools()` returns `MFTool` objects, not “LangChain-compatible @tool functions”; the wrappers do not expose `input_schema`; and the description is not the `solve()` docstring in the current implementation.
+
+**IMPROVEMENTS**
+- Tighten the package contract to match reality, especially around return type, schema shape, and LangChain compatibility.
+- If `MFTool` is the public abstraction, document that directly instead of describing decorator-produced tools.
+
+## demo_simple_router.py
+
+**VERDICT:** REJECT
+
+**BUGS**
+- `P1` [engine/agent/demo_simple_router.py](/Users/jeff/culinary-mind/engine/agent/demo_simple_router.py:34): the router maps Choi-Okos queries to `MF-T02-CP`, but the registry cannot load that tool. This guarantees false routing for a documented intent.
+- `P2` [engine/agent/demo_simple_router.py](/Users/jeff/culinary-mind/engine/agent/demo_simple_router.py:15): `get_all_mf_tools` is imported but unused.
+
+**IMPROVEMENTS**
+- Derive routable IDs from the registry instead of hardcoding IDs that may not exist.
+- If this remains a stub, add a startup self-check that validates every `INTENT_MAP` target against `get_mf_tool()`.
+
+## tests/test_tool_registry.py
+
+**VERDICT:** REJECT
+
+**BUGS**
+- `P1` [engine/agent/tests/test_tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tests/test_tool_registry.py:9): `test_40_tools_loaded` explicitly comments that 42 tools should be routable, then accepts `>= 39`. That tolerance hides the missing `MF-T02` variants and any future silent skips.
+- `P1` [engine/agent/tests/test_tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tests/test_tool_registry.py:22): `test_run_mf_t03` only exercises the cached/eager-loaded module path, so it does not catch the broken lazy import in `MFTool.run()`.
+- `P2` [engine/agent/tests/test_tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tests/test_tool_registry.py:1): there is no coverage for `to_langchain_tool()`, malformed JSON / malformed params, or the `MF-T02-*` variant tools.
+
+**IMPROVEMENTS**
+- Add a regression test that constructs a fresh `MFTool` with `_solver_module=None` and verifies `run()` imports the correct solver.
+- Add explicit tests for `MF-T02-CP`, `MF-T02-K`, and `MF-T02-RHO`.
+- Add schema tests that compare registry metadata against `solver_bounds.yaml`, including typed/string params and duplicated soft/hard bounds.
+- Add LangChain adapter tests that assert the returned tool accepts structured arguments in the intended calling style.
+tokens used
+41,320
+## tool_registry.py
+
+**VERDICT:** REJECT
+
+**BUGS**
+- `P0` [engine/agent/tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tool_registry.py:45): `MFTool.run()` imports `engine.solver.mf_{mf_id...}`, so `MF-T03` becomes `engine.solver.mf_mf_t03`. A fresh tool instance, or any cached tool with `_solver_module` cleared, fails with `ModuleNotFoundError`. This is a real dispatch bug, not theoretical.
+- `P1` [engine/agent/tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tool_registry.py:89): `_build_tool()` only reads `output`, but `solver_bounds.yaml` encodes `MF-T02` variants under `outputs_by_variant`. As written, the registry never materializes `MF-T02-CP` / `MF-T02-K` / `MF-T02-RHO`, so `get_mf_tool("MF-T02-CP")` raises `KeyError` even though the router expects it.
+- `P1` [engine/agent/tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tool_registry.py:52): `to_langchain_tool()` is not LangChain/LangGraph-compatible for structured tool calling. It returns `langchain.tools.Tool`, not a structured tool with `args_schema`; it serializes outputs to JSON strings; and it expects a JSON string or dict ad hoc instead of exposing a schema-native callable. That breaks the stated “LangGraph-compatible MF Tool registry” goal.
+- `P1` [engine/agent/tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tool_registry.py:91): `inputs_schema` does not match `solver_bounds.yaml`. It drops fields like `type`, `default`, `soft`, and `source`, and collapses repeated names via dict overwrite. That is already wrong for entries like `MF-M03.substance` (`type: string`) and for duplicated hard/soft bounds such as `MF-M02.a_w`.
+- `P1` [engine/agent/tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tool_registry.py:120): `get_all_mf_tools()` silently swallows all exceptions and just skips tools. Missing modules, malformed YAML, or build bugs degrade the registry without any signal, which makes partial tool availability hard to detect and impossible to trust.
+- `P2` [engine/agent/tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tool_registry.py:80): caching returns a new list but the same mutable `MFTool` objects. Callers can mutate `_solver_module` or schemas globally, and the cache currently masks the broken lazy-import path because eager-loaded modules hide it.
+- `P2` [engine/agent/tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tool_registry.py:94): the description is taken from the module docstring first line, while the file header says it should expose the `solve()` docstring. That is contract drift.
+
+**IMPROVEMENTS**
+- Build a real schema object from YAML instead of a lossy `{name: {min,max,unit}}` dict. At minimum preserve `type`, `default`, and whether bounds are soft vs hard.
+- Materialize variant tools explicitly from `outputs_by_variant` so the registry matches the routable solver surface.
+- Replace silent skip with explicit error aggregation or at least warnings that identify which `mf_id` failed and why.
+- If LangChain support is required, emit `StructuredTool` or a `@tool`-compatible callable with `args_schema`, not a plain `Tool` with a JSON-string shim.
+- Make cache semantics explicit: immutable tool objects, keyed cache, and a way to refresh when YAML changes.
+
+## __init__.py
+
+**VERDICT:** APPROVE_WITH_NOTES
+
+**BUGS**
+- `P2` [engine/agent/__init__.py](/Users/jeff/culinary-mind/engine/agent/__init__.py:1): the module docstring is inaccurate in multiple ways. `get_all_mf_tools()` returns `MFTool` objects, not “LangChain-compatible @tool functions”; the wrappers do not expose `input_schema`; and the description is not the `solve()` docstring in the current implementation.
+
+**IMPROVEMENTS**
+- Tighten the package contract to match reality, especially around return type, schema shape, and LangChain compatibility.
+- If `MFTool` is the public abstraction, document that directly instead of describing decorator-produced tools.
+
+## demo_simple_router.py
+
+**VERDICT:** REJECT
+
+**BUGS**
+- `P1` [engine/agent/demo_simple_router.py](/Users/jeff/culinary-mind/engine/agent/demo_simple_router.py:34): the router maps Choi-Okos queries to `MF-T02-CP`, but the registry cannot load that tool. This guarantees false routing for a documented intent.
+- `P2` [engine/agent/demo_simple_router.py](/Users/jeff/culinary-mind/engine/agent/demo_simple_router.py:15): `get_all_mf_tools` is imported but unused.
+
+**IMPROVEMENTS**
+- Derive routable IDs from the registry instead of hardcoding IDs that may not exist.
+- If this remains a stub, add a startup self-check that validates every `INTENT_MAP` target against `get_mf_tool()`.
+
+## tests/test_tool_registry.py
+
+**VERDICT:** REJECT
+
+**BUGS**
+- `P1` [engine/agent/tests/test_tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tests/test_tool_registry.py:9): `test_40_tools_loaded` explicitly comments that 42 tools should be routable, then accepts `>= 39`. That tolerance hides the missing `MF-T02` variants and any future silent skips.
+- `P1` [engine/agent/tests/test_tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tests/test_tool_registry.py:22): `test_run_mf_t03` only exercises the cached/eager-loaded module path, so it does not catch the broken lazy import in `MFTool.run()`.
+- `P2` [engine/agent/tests/test_tool_registry.py](/Users/jeff/culinary-mind/engine/agent/tests/test_tool_registry.py:1): there is no coverage for `to_langchain_tool()`, malformed JSON / malformed params, or the `MF-T02-*` variant tools.
+
+**IMPROVEMENTS**
+- Add a regression test that constructs a fresh `MFTool` with `_solver_module=None` and verifies `run()` imports the correct solver.
+- Add explicit tests for `MF-T02-CP`, `MF-T02-K`, and `MF-T02-RHO`.
+- Add schema tests that compare registry metadata against `solver_bounds.yaml`, including typed/string params and duplicated soft/hard bounds.
+- Add LangChain adapter tests that assert the returned tool accepts structured arguments in the intended calling style.
