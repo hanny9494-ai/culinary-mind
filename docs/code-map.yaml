@@ -3,10 +3,11 @@
 # 更新: 2026-05-02
 # 维护者: repo-curator agent
 
-version: "1.24"
+version: "1.25"
 status: "draft"  # draft → reviewed → locked
-last_updated: "2026-05-01"
+last_updated: "2026-05-03"
 changelog:
+  - "1.25 (2026-05-03): 补录 d35e270 — test(D70) PR #21 post-merge test gap closed，tests/test_lingya_gemini_calls.py +56 行新增 B1 (transport-exception retry) + B2 (Ollama dim mismatch) 两条 P1 测试，8/8 tests pass；更新 tests/ 目录条目补齐 integration/ + prompts/ + top-level test file"
   - "1.24 (2026-05-01): PR #45 合并 — fix(codex-p2-layer3) **P0 NaN comparison bug + rule guards**，修复 float(_ or 'nan') → NaN → NaN < threshold = False → temperature gates 静默跳过导致 over-matching，新增 _parse_float() helper returns None on parse failure，Step→PHN edges **25K (false positives) → 9.5K (accurate semantic matches)**，P1 rule improvements: caramelize (>150°C gate) / ferment (15-45°C narrow) / emulsify (keyword tightened) / char/carbonize (removed)，审核文档 raw/code-reviewer/codex-p2-layer3-review-20260513.txt (1,437 LOC Codex 2nd cross-review)，里程碑：Layer 3 Step→PHN rule matching P0 数据正确性保证，25K 噪声边消除，推理链纯净度显著提升"
   - "1.23 (2026-05-01): PR #44 合并 — feat(P2) **PHN alias map + multi-case analytical queries**，Step→PHN edges 6,560 → 23,742 (+17,182 via alias resolution，generic rule names → real PHN IDs)，新增 scripts/l2b/multi_case_examples.py (113 LOC analytical query suite)，**多案例验证**：Alinea Chocolate Mousse (10 MFs × 5 PHNs 分子料理精密物理) + Cooking for Geeks (13 PHNs 科学方法论验证) + Q4 most-triggered PHNs (protein_denat 5191 / Maillard 5091 / emulsion 3145 / thermal_kill 2566) + Q5 most diverse books (Cooking for Geeks/Eleven Madison Park/Relæ 各 13 PHN, Professional Baking 781 recipes × 12 PHN)，里程碑：Layer 3 culinary intelligence 首次多配方分析能力展示，CKG_L2B_TMP_* namespace (migratable after schema lock)"
   - "1.22 (2026-05-01): PR #43 合并 — feat(P2-Ic3) **Full Layer 3 dual-output chain LIVE**，12,088 L0 TMP atoms (CKG_L0_TMP_* namespace) + 26,082 TAGGED_BY_PHN edges 导入 Neo4j，新增 scripts/l2b/etl/extract_l0_tmp.py (62 LOC L0 TMP ETL) + scripts/l2b/smoke_test_full_chain.py (119 LOC 完整链路 smoke test)，Ebi-imo Deep-fry（海老芋揚げ物）真实日本料理 **首次验证双重输出**：①数值计算 (MF solver: temperature kinetics/Maillard rate) ②科学依据 (L0 atoms tagged to PHN nodes)，**里程碑：Recipe → Step → PHN ← L0 (scientific evidence) + PHN → MF → solver (numerical output) 完整因果链闭环，Layer 3 reasoning 从单纯 MF 计算升级为科学依据 + 数值双支撑**"
@@ -165,7 +166,10 @@ directories:
     purpose: "单元测试 + 集成测试"
     status: active
     children:
-      l2a/:     "L2a ingredient tree ETL tests (69 tests, PR #31) — prefilter/main_distill/peer_review/post_normalizer/hard_pruning/cluster_merge/relationship_build/export_neo4j"
+      l2a/:         "L2a ingredient tree ETL tests (69 tests, PR #31) — prefilter/main_distill/peer_review/post_normalizer/hard_pruning/cluster_merge/relationship_build/export_neo4j"
+      integration/: "Neo4j integrity + performance baseline tests (PR #38) — test_l2a_neo4j_integrity.py (58 LOC) + test_performance_baseline.py (84 LOC)"
+      prompts/:     "Prompt registry tests (PR #38) — test_prompt_registry.py (51 LOC)"
+      test_lingya_gemini_calls.py: "D70 Lingya/Gemini API unify tests (221 LOC, 8 tests) — transport/auth/embedding correctness; B1 transport-retry + B2 dim-mismatch added post-merge d35e270"
 
   # ── 待清理 ──
   src/:
