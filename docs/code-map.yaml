@@ -3,10 +3,11 @@
 # 更新: 2026-05-02
 # 维护者: repo-curator agent
 
-version: "1.31"
+version: "1.32"
 status: "draft"  # draft → reviewed → locked
 last_updated: "2026-05-13"
 changelog:
+  - "1.32 (2026-05-13): PR #52 合并 — feat(全面推进) **P4-Bj1 judge + Codex 5th P0 fix + L1 17 devices + 30 rules + 12.9K Step→PHN edges**。P2-L1b: 17 CKG_L1_Equipment nodes (Vitamix/Anova/Breville/Wolf/PolyScience 等) 导入 Neo4j，output/l1/equipment_seed.yaml (19K) + raw/researcher/p2-l1b-equipment-survey-20260513.md (27K)，researcher 1h 交付（目标 10-15d）。step_phn_rules 16→30 条 (+14: egg coagulation/deep-fry/smoke/sous_vide/convective/wok_hei/baking/freeze-dry/crispness/milk_coag/foam/brining/gluten/ice_crystal)，Step→PHN 9,533→12,921 (+35%)，Step→MF transitive 17,101→17,538。Codex 5th P0 修复: llm_agent_v2 step-sub {stepN.value} unresolved crash → safe step_map resolution。P4-Bj1 LLM-as-Judge (scripts/benchmark/llm_as_judge.py, 157 LOC): 8 queries, Agent 4/Bare 4，agent wins citation (+0.87 via [MF-XX])，bare wins prose clarity，**里程碑：L1 设备层首次有数据 + 30 rules + judge baseline = 全系统进入 Phase 2+ ready 状态**"
   - "1.31 (2026-05-13): PR #51 合并 — feat(P4-Bench + frontend) **bare GPT vs culinary-mind benchmark + Flask chat UI**。P4 Benchmark (scripts/benchmark/bare_vs_graph_bench.py, 223 LOC): 8 food-science queries × 2 pipelines，**8/8 tool routing accuracy (100%)**，numeric agreement 2/8 within 30% (baseline established)，verified MF routing: Arrhenius→T03 / Protein denat→T06 / Fourier→T01 / Water Cp→T02-CP / Density→T02-RHO / Microwave→T07 / F-value→K04 / Q10→C05。Flask Chat UI (engine/agent/web_chat.py, 130 LOC): POST /ask → JSON {answer,mf_id,value,unit}，dark theme，example queries，async fetch，localhost:5001，**里程碑：P4 baseline benchmark established + end-user demo frontend LIVE**"
   - "1.30 (2026-05-13): PR #50 合并 — feat **multi-step LLM agent v2 + MF-T02 family registered + Recipe→FT 120K edges**。LLM v2 (engine/agent/llm_agent_v2.py, 259 LOC): ReAct 多步链 plan→execute→synthesize，{stepN.value} 引用机制，Demo: Choi-Okos→Fourier→Protein-Denat chain，80°C 蛋白质变性 f_native=0.0018 (99.8%)。Tool Registry 修复：MF-T02 children (K/CP/RHO) 缺失补注册，39→42 tools，Beef Cp@25°C = 3,379.5 J/(kg·K) 验证。Recipe→FT 链接：120,195 TARGETS_FT edges (recipe name aesthetic_word 子串匹配)，**里程碑：~270K 跨层 edges 总计，L1+L3 完全统一，多步 LLM agent 生产可用**"
   - "1.29 (2026-05-13): PR #49 合并 — feat(A+B+C+D) **Codex 4th P0/P1 + Step→MF 17K transitive + REAL LLM agent + stirfry demo**。A: Codex 4th cross-review — P0 extract_ft_l6 target_states_json 截断 [:1000] 修复（JSON poison 风险消除）+ P1 link_l2a_l2b 1-token suffix match (organic_chicken→chicken) → L2B↔L2A 7,899→12,792 (+62%)，Recipe→L2A 77,292→87,521。B: 17,101 GOVERNED_BY_MF transitive edges pre-computed (Step→PHN→MF)，查询 2-hop → 1-hop 简化。C: **engine/agent/llm_agent.py (183 LOC) ReAct-style REAL LLM agent** — 39 MF tool catalog in system prompt，balanced-brace JSON parser，Live demo: 牛肉 5cm 沸水 30min → MF-T01 27.8°C + 科学解释 / 酶动力学 correctly REJECTED (需要 A factor) / MF-T06 蛋白质变性 0.5 + validity warning，**里程碑：无需 LangGraph 依赖，production-quality LLM agent TODAY**。D: scripts/l2b/demo_chinese_stirfry_query.py (101 LOC) 镬气 PHN + L0 evidence + Modernist Cuisine 高温炒。新增 raw/code-reviewer/codex-4th-review-20260513.txt (1,258 LOC)，pytest 498→506 passing"
@@ -86,7 +87,7 @@ directories:
     owner: coder
     children:
       golden/:    "Golden Dataset（50-60 题）"
-      benchmark/: "Benchmark 套件 — scripts/benchmark/bare_vs_graph_bench.py (PR #51, 223 LOC, 8-query P4 baseline: 100% tool routing)"
+      benchmark/: "Benchmark 套件 — bare_vs_graph_bench.py (PR #51, 223 LOC, 8/8 routing) + llm_as_judge.py (PR #52, 157 LOC, Agent4/Bare4, agent wins citation quality)"
       reports/:   "评测报告"
 
   # ── 基础设施 ──
@@ -115,7 +116,7 @@ directories:
       solver_bounds.yaml:              "40 MF solver 输入/输出范围定义（P1-21a 28 baseline + P2-Sa1 6 扩展 + P3-Tier1 4 新增 + P3-Tier2-3 8 新增）"
       mf_fingerprints.json:            "40 MF 指纹配置（P1-22 28 baseline + P2-Sa1 6 扩展 + P3-Tier1 4 新增 + P3-Tier2-3 8 新增）"
       new_mf_candidates_backlog.yaml:  "已清空（P1-21c-D 12 new MF 全部实施完成）"
-      step_phn_rules.yaml:             "**Step → PHN mapping 规则（P2-Lb1，PR #42，16 rules，D71 设计）** — verb_patterns + ingredient_context trigger PHN nodes，Layer 3 recipe reasoning 核心配置"
+      step_phn_rules.yaml:             "**Step → PHN mapping 规则（PR #42/#52）** — 16→**30 rules** (PR #52 +14: egg/deep-fry/smoke/sous_vide/wok_hei/baking/freeze-dry/crispness/milk_coag/foam/brining/gluten/ice_crystal)，Step→PHN 9,533→**12,921 edges (+35%)**，Layer 3 recipe reasoning 核心配置"
       api.yaml:                        "API 配置"
 
   docs/:
@@ -135,7 +136,7 @@ directories:
       orchestrator.py: "蒸馏编排器"
       y_s1/:           "Neo4j 导入（应迁移到 graph/import/）"
       l2a/:            "L2a ingredient tree ETL 完整链路（P1-13~16，PR #31）— Step 5 cluster_merge / Step 6 relationship_build / Step 7 export_neo4j，CKG_L2A_* namespace，24,335 nodes + 52,313 edges"
-      l2b/:            "**L2b recipe ingest + ingredient linking + FT/L6（P2-Lb1/Ic5/Ft1/L6，PR #42/#46/#47/#48）** — etl/ (6 scripts: extract_recipes/apply_step_phn_rules/extract_phn_mf_edges/link_l2a_l2b_ingredients/extract_ft_l6/extract_l0_tmp，~638 LOC) + smoke_test_*.py (267 LOC) + multi_case_examples.py (113 LOC) + demo_ingredient_substitution.py (82 LOC) + demo_ft_l6_reasoning.py (87 LOC)，Neo4j: 23,584 recipes + 80,056 steps + 9,500 TRIGGERS_PHN + 26,082 TAGGED_BY_PHN + 7,899 MATCHES_L2A + 77,292 USES_L2A_INGREDIENT + CKG_FT 7,361 + **CKG_L6_Term 10,447 (deduped)** + **TRANSLATES_TO 3,960 (accurate)**，**里程碑：完整七层推理链 LIVE + Jeff 质量审计通过**"
+      l2b/:            "**L2b recipe ingest + ingredient linking + FT/L6（PR #42/#46/#47/#48/#52）** — etl/ (6 scripts, ~638 LOC) + demo scripts (356 LOC)，Neo4j: 23,584 recipes + 80,056 steps + **12,921 TRIGGERS_PHN** (+35% from 30 rules) + 26,082 TAGGED_BY_PHN + 12,792 MATCHES_L2A + 87,521 USES_L2A_INGREDIENT + CKG_FT 7,361 + CKG_L6_Term 10,447 + TRANSLATES_TO 3,960 + **CKG_L1_Equipment 17** + **Step→MF 17,538** + **Recipe→FT 120,195**，**里程碑：完整七层推理链 LIVE，~270K 跨层 edges**"
       skill_a/:        "Skill A 二期数据处理（P1-21c-D/P2-Sa1/P3-Tier1/P4-Be2-lite/P4-case-studies）— ontology mapping（P1-21c-D，PR #32，5 scripts，34.2% mapped to 28 MF solvers，13,080 new MF candidates）+ etl/（P2-Sa1，PR #33，3 ETL scripts: build_mf_value_database/extend_mf_schemas/rescue_backlog_to_new_fields，11,004 records 41.2% coverage）+ etl/（P3-Tier1，PR #34，2 ETL scripts: add_p3_tier1_mf_schemas + p2_sa2_outlier_cleaning，10,462 production-ready records）+ benchmark/（P4-Be2-lite，PR #36，2 scripts: mf_real_data_benchmark + case_study_beef_boiling，2,220 tests / 1,359 passed 61.2% pass rate + beef boiling 6-MF end-to-end chain）+ benchmark/（P4-case-studies，PR #37，case_studies_batch.py，4 food scenarios 跨 thermal/kinetic/mass-transfer/dielectric 域，13 unique MFs chained，Layer 3 推理链跨域验证完成）"
 
   # ── 数据（不入 git） ──
