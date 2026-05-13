@@ -3,10 +3,11 @@
 # 更新: 2026-05-02
 # 维护者: repo-curator agent
 
-version: "1.32"
+version: "1.33"
 status: "draft"  # draft → reviewed → locked
 last_updated: "2026-05-13"
 changelog:
+  - "1.33 (2026-05-13): PR #53 合并 — feat(llm_agent) **knowledge query fallback — Cannot determine tool → graph + Codex synthesize**。触发：Jeff feedback '白切鸡跟膀胱鸡' query 返回 Cannot determine tool。根因：agent 仅处理 MF 数值查询。修复 engine/agent/llm_agent.py +89 行：mf_id=none → knowledge_query_fallback() — 提取中英关键词 → Neo4j 搜索 (Recipe/L0/L2A) → Codex 综合 NL 答案 + 稀疏时标 (从通用知识)。Demo: 白切鸡 vs 膀胱鸡 返回 200+ 字粤菜技术对比（浸熟 vs 密封蒸/清鲜弹滑 vs 封存浓鲜），**里程碑：agent 双路路由 — 数值 MF path + 知识 knowledge fallback path，culinary-mind agent 能回答任意粤菜问题**"
   - "1.32 (2026-05-13): PR #52 合并 — feat(全面推进) **P4-Bj1 judge + Codex 5th P0 fix + L1 17 devices + 30 rules + 12.9K Step→PHN edges**。P2-L1b: 17 CKG_L1_Equipment nodes (Vitamix/Anova/Breville/Wolf/PolyScience 等) 导入 Neo4j，output/l1/equipment_seed.yaml (19K) + raw/researcher/p2-l1b-equipment-survey-20260513.md (27K)，researcher 1h 交付（目标 10-15d）。step_phn_rules 16→30 条 (+14: egg coagulation/deep-fry/smoke/sous_vide/convective/wok_hei/baking/freeze-dry/crispness/milk_coag/foam/brining/gluten/ice_crystal)，Step→PHN 9,533→12,921 (+35%)，Step→MF transitive 17,101→17,538。Codex 5th P0 修复: llm_agent_v2 step-sub {stepN.value} unresolved crash → safe step_map resolution。P4-Bj1 LLM-as-Judge (scripts/benchmark/llm_as_judge.py, 157 LOC): 8 queries, Agent 4/Bare 4，agent wins citation (+0.87 via [MF-XX])，bare wins prose clarity，**里程碑：L1 设备层首次有数据 + 30 rules + judge baseline = 全系统进入 Phase 2+ ready 状态**"
   - "1.31 (2026-05-13): PR #51 合并 — feat(P4-Bench + frontend) **bare GPT vs culinary-mind benchmark + Flask chat UI**。P4 Benchmark (scripts/benchmark/bare_vs_graph_bench.py, 223 LOC): 8 food-science queries × 2 pipelines，**8/8 tool routing accuracy (100%)**，numeric agreement 2/8 within 30% (baseline established)，verified MF routing: Arrhenius→T03 / Protein denat→T06 / Fourier→T01 / Water Cp→T02-CP / Density→T02-RHO / Microwave→T07 / F-value→K04 / Q10→C05。Flask Chat UI (engine/agent/web_chat.py, 130 LOC): POST /ask → JSON {answer,mf_id,value,unit}，dark theme，example queries，async fetch，localhost:5001，**里程碑：P4 baseline benchmark established + end-user demo frontend LIVE**"
   - "1.30 (2026-05-13): PR #50 合并 — feat **multi-step LLM agent v2 + MF-T02 family registered + Recipe→FT 120K edges**。LLM v2 (engine/agent/llm_agent_v2.py, 259 LOC): ReAct 多步链 plan→execute→synthesize，{stepN.value} 引用机制，Demo: Choi-Okos→Fourier→Protein-Denat chain，80°C 蛋白质变性 f_native=0.0018 (99.8%)。Tool Registry 修复：MF-T02 children (K/CP/RHO) 缺失补注册，39→42 tools，Beef Cp@25°C = 3,379.5 J/(kg·K) 验证。Recipe→FT 链接：120,195 TARGETS_FT edges (recipe name aesthetic_word 子串匹配)，**里程碑：~270K 跨层 edges 总计，L1+L3 完全统一，多步 LLM agent 生产可用**"
@@ -68,7 +69,7 @@ directories:
     children:
       solver/:    "40 MF 数值求解器（40/40 已完成，PR #20/25/26/27/28/34/35/40，495 tests passing）— T01-10 (10), K01-07 (7), M01-11 (11), R01-07 (7), C01-05 (5) + 统一 provenance/llm_summary 返回格式（P1-22）+ @validate_bounds 装饰器（P1-21a）+ Hypothesis property tests（P1-21b, 46 tests 覆盖 15 高价值 MF）+ P3-Tier1 新增 T06/K06/T07/T10 (protein denaturation/hurdle tech/microwave dielectric/crystallization kinetics) + P3-Tier2-3 新增 M07/M08/T08/K07/T09/M09/M11/M10 (solubility/gas_permeability/ohmic_heating/binding_kinetics/respiration_rate/osmotic_dehydration/supercritical_extraction/membrane_transport) — 里程碑：P1-21c-D 12 new MF candidates backlog 全部实施完成"
       tools/:     "Task-oriented wrapper（estimate_heating_time 等，待建 P1-20）"
-      agent/:     "**Tool Registry + LLM v1/v2 + Flask UI (PR #40/#49/#50/#51)**：42 MF tools + llm_agent.py (183 LOC v1) + llm_agent_v2.py (259 LOC v2 multi-step) + web_chat.py (130 LOC Flask UI, POST /ask, localhost:5001) — **里程碑：end-user chat frontend LIVE**"
+      agent/:     "**Tool Registry + LLM v1/v2 + Flask UI (PR #40/#49/#50/#51/#53)**：42 MF tools + llm_agent.py (272 LOC v1 + knowledge fallback, PR #53) + llm_agent_v2.py (283 LOC v2 multi-step) + web_chat.py (130 LOC Flask UI) — **双路路由: 数值 MF path + 知识 knowledge fallback path，能回答任意粤菜问题**"
       retrieval/: "检索策略（Phase 4B，待建）"
     note: "D65 决策：不引入 SymPy/SciPy，所有 MF 手写解析解或数值解；依赖 CoolProp/fluids/ht/pint/scipy. P1-21a: solver_bounds.yaml sanity envelopes + @validate_bounds decorator 入参/输出范围校验"
 
