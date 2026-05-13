@@ -24,10 +24,15 @@ except ImportError:
     print("Install neo4j driver: pip install neo4j")
     sys.exit(1)
 
+import os
 ROOT = Path("/Users/jeff/culinary-mind")
 OUT = ROOT / "output/quality/data_quality_report.yaml"
 
-driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "cmind_p1_33_proto"))
+# Env-aware connection (P2-Ops1)
+NEO4J_URI = os.environ.get("CMIND_NEO4J_DEV_URI", "bolt://localhost:7687")
+NEO4J_USER = os.environ.get("CMIND_NEO4J_DEV_USER", "neo4j")
+NEO4J_PW = os.environ.get("CMIND_NEO4J_DEV_PW", "cmind_p1_33_proto")
+driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PW))
 
 
 def query(sess, cypher, **kwargs):
@@ -111,31 +116,56 @@ def main():
             ("TAGGED_BY_PHN", "CKG_L0_TMP_Principle", "atom_id", "CKG_PHN", "phn_id"),
             ("GOVERNS_PHN", "CKG_MF", "mf_id", "CKG_PHN", "phn_id"),
         ]:
+            # Canonical edges
             r = query(sess, f"MATCH (s:{src_label})-[r:{edge_type}]->(t:{tgt_label}) RETURN count(r) AS valid")
             canonical_valid = r[0]["valid"] if r else 0
-            # Identify edges of this type that exist OUTSIDE the canonical src/tgt pair
+            # Whitelisted alternate namespaces (e.g., test fixtures); update label list when adding new ones
+            ALLOWED_ALT_PAIRS = [("CKG_TEST_Recipe", "CKG_TEST_Ingredient"),
+                                 ("CKG_TEST_Recipe", "CKG_TEST_Step"),
+                                 ("CKG_TEST_Step", "CKG_PHN")]
+            # Total edges of this type
+            r_all = query(sess, f"MATCH ()-[r:{edge_type}]->() RETURN count(r) AS n")
+            total_of_type = r_all[0]["n"] if r_all else 0
+            # All non-canonical edges (source-target label pair details)
             r2 = query(sess, f"""
                 MATCH (s)-[r:{edge_type}]->(t)
                 WHERE NOT (s:{src_label} AND t:{tgt_label})
-                RETURN count(r) AS foreign
+                RETURN labels(s) AS sl, labels(t) AS tl, count(r) AS n
             """)
-            foreign = r2[0]["foreign"] if r2 else 0
-            # Check broken edges: source/target label not as expected AND source/target lacks required key
+            allowed_foreign = 0
+            unallowed_foreign = 0
+            unallowed_details = []
+            for row in r2:
+                sl = row["sl"]; tl = row["tl"]; cnt = row["n"]
+                matched_alt = any((any(a == s_lbl for s_lbl in sl) and any(b == t_lbl for t_lbl in tl)) for (a, b) in ALLOWED_ALT_PAIRS)
+                if matched_alt:
+                    allowed_foreign += cnt
+                else:
+                    unallowed_foreign += cnt
+                    unallowed_details.append({"src_labels": sl, "tgt_labels": tl, "count": cnt})
+            # Hard-broken: source/target missing required key — always fail
             r3 = query(sess, f"""
                 MATCH (s)-[r:{edge_type}]->(t)
                 WHERE NOT (s:{src_label} AND t:{tgt_label})
                   AND (s.`{src_field}` IS NULL OR t.`{tgt_field}` IS NULL)
                 RETURN count(r) AS broken
             """)
-            broken = r3[0]["broken"] if r3 else 0
-            # Integrity passes if no broken edges. Foreign edges in alternate namespaces are informational.
-            integrity = "pass" if broken == 0 else "fail"
-            if integrity == "fail": hard_fail += 1
+            hard_broken = r3[0]["broken"] if r3 else 0
+            # Status hierarchy: pass < warn < fail
+            if hard_broken > 0:
+                integrity = "fail"; hard_fail += 1
+            elif unallowed_foreign > 0:
+                integrity = "warn"; warnings += 1
+            else:
+                integrity = "pass"
             ref_checks.append({
                 "edge": edge_type,
                 "canonical_valid": canonical_valid,
-                "foreign_namespace_edges": foreign,
-                "broken_edges": broken,
+                "allowed_foreign_namespace_edges": allowed_foreign,
+                "unallowed_foreign_namespace_edges": unallowed_foreign,
+                "unallowed_details": unallowed_details,
+                "hard_broken_edges": hard_broken,
+                "total_of_type": total_of_type,
                 "status": integrity,
             })
         checks.append({"name": "referential_integrity", "status": "fail" if any(c["status"] == "fail" for c in ref_checks) else "pass", "data": ref_checks})

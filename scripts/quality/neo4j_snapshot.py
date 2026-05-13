@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
-"""P2-Rb1: Neo4j Snapshot + Rollback.
+"""P2-Rb1: Neo4j Snapshot + Rollback (Codex-6th hardened).
+
+Fixes:
+- P0: Atomic snapshot write (temp file → fsync → rename, complete flag in meta)
+- P0: Fail-fast rollback (abort on first replay error, verify counts match snapshot meta)
+- P2: URI/auth loaded from CMIND_NEO4J_* env vars (fallback to dev defaults)
 
 Modes:
-- snapshot  — dump current DB to neo4j-admin export OR cypher-shell APOC export
-- list      — list snapshots in /Users/jeff/culinary-mind/output/snapshots/
-- rollback  — restore from snapshot
-
-Strategy:
-- Use APOC export.cypher.all (writes Cypher CREATE statements)
-- Snapshots stored under output/snapshots/{tag}/all.cypher
-- Snapshot meta in {tag}/meta.yaml: {created_at, node_count, edge_count, git_commit}
-- Rollback: WIPES current DB then replays Cypher
-
-Caveats:
-- APOC must be installed. If not, fallback to manual JSON export.
-- Rollback is destructive — requires --i-know-what-im-doing flag
+- snapshot  — dump current DB via APOC export.cypher.all
+- list      — list snapshots
+- rollback  — restore from snapshot (destructive; --i-know-what-im-doing required)
 """
 import sys
+import os
 import time
+import hashlib
 import subprocess
 import argparse
 from pathlib import Path
@@ -29,8 +26,17 @@ ROOT = Path("/Users/jeff/culinary-mind")
 SNAP_DIR = ROOT / "output/snapshots"
 SNAP_DIR.mkdir(parents=True, exist_ok=True)
 
-URI = "bolt://localhost:7687"
-AUTH = ("neo4j", "cmind_p1_33_proto")
+
+def get_driver(env: str = "dev"):
+    """Resolve URI + auth from env vars per docs/ops/staging_environment.md."""
+    env_u = env.upper()
+    uri = os.environ.get(f"CMIND_NEO4J_{env_u}_URI", "bolt://localhost:7687")
+    user = os.environ.get(f"CMIND_NEO4J_{env_u}_USER", "neo4j")
+    pw = os.environ.get(f"CMIND_NEO4J_{env_u}_PW", "cmind_p1_33_proto")
+    if env != "dev" and not os.environ.get(f"CMIND_NEO4J_{env_u}_PW"):
+        print(f"REFUSING: CMIND_NEO4J_{env_u}_PW must be set explicitly for non-dev env", file=sys.stderr)
+        sys.exit(2)
+    return GraphDatabase.driver(uri, auth=(user, pw)), uri
 
 
 def git_commit():
@@ -46,35 +52,65 @@ def stats(sess):
     return n, e
 
 
-def snapshot(tag: str):
+def sha256_of(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def snapshot(tag: str, env: str = "dev"):
     out_dir = SNAP_DIR / tag
     out_dir.mkdir(parents=True, exist_ok=True)
-    d = GraphDatabase.driver(URI, auth=AUTH)
+    cypher_final = out_dir / "all.cypher"
+    cypher_tmp = out_dir / f"all.cypher.tmp.{os.getpid()}"
+    meta_path = out_dir / "meta.yaml"
+    if cypher_final.exists():
+        print(f"REFUSING: snapshot '{tag}' already exists. Pick a new tag.", file=sys.stderr)
+        sys.exit(3)
+
+    driver, uri = get_driver(env)
     t0 = time.time()
-    with d.session() as s:
-        n, e = stats(s)
-        # Try APOC export
-        try:
-            cypher_file = out_dir / "all.cypher"
-            # APOC writes to Neo4j import dir by default; use stream mode then save
-            res = s.run(
-                "CALL apoc.export.cypher.all(null, {format:'plain', stream:true}) "
-                "YIELD cypherStatements RETURN cypherStatements"
-            )
-            with open(cypher_file, "w") as f:
-                for r in res:
-                    f.write(r["cypherStatements"])
-            mode = "apoc_cypher"
-        except Exception as ex:
-            # Fallback: manual JSON
-            json_file = out_dir / "nodes_edges.jsonl"
-            import json
-            with open(json_file, "w") as f:
-                for r in s.run("MATCH (n) RETURN labels(n) AS l, properties(n) AS p, id(n) AS i"):
-                    f.write(json.dumps({"kind": "node", "id": r["i"], "labels": r["l"], "props": r["p"]}, default=str) + "\n")
-                for r in s.run("MATCH (s)-[r]->(t) RETURN id(s) AS s, id(t) AS t, type(r) AS rt, properties(r) AS p"):
-                    f.write(json.dumps({"kind": "edge", "src_id": r["s"], "tgt_id": r["t"], "rel": r["rt"], "props": r["p"]}, default=str) + "\n")
-            mode = f"fallback_jsonl ({ex.__class__.__name__})"
+    mode = None
+    n = e = 0
+    try:
+        with driver.session() as s:
+            n, e = stats(s)
+            try:
+                res = s.run(
+                    "CALL apoc.export.cypher.all(null, {format:'plain', stream:true}) "
+                    "YIELD cypherStatements RETURN cypherStatements"
+                )
+                with open(cypher_tmp, "w") as f:
+                    for r in res:
+                        f.write(r["cypherStatements"])
+                    f.flush()
+                    os.fsync(f.fileno())
+                mode = "apoc_cypher"
+            except Exception as ex:
+                # Cleanup partial cypher file if APOC failed
+                if cypher_tmp.exists():
+                    cypher_tmp.unlink()
+                # Fallback: manual JSONL
+                import json
+                json_tmp = out_dir / f"nodes_edges.jsonl.tmp.{os.getpid()}"
+                json_final = out_dir / "nodes_edges.jsonl"
+                with open(json_tmp, "w") as f:
+                    for r in s.run("MATCH (n) RETURN labels(n) AS l, properties(n) AS p, id(n) AS i"):
+                        f.write(__import__("json").dumps({"kind": "node", "id": r["i"], "labels": r["l"], "props": r["p"]}, default=str) + "\n")
+                    for r in s.run("MATCH (s)-[r]->(t) RETURN id(s) AS s, id(t) AS t, type(r) AS rt, properties(r) AS p"):
+                        f.write(__import__("json").dumps({"kind": "edge", "src_id": r["s"], "tgt_id": r["t"], "rel": r["rt"], "props": r["p"]}, default=str) + "\n")
+                    f.flush(); os.fsync(f.fileno())
+                json_tmp.rename(json_final)
+                mode = f"fallback_jsonl ({ex.__class__.__name__})"
+    except Exception as ex:
+        if cypher_tmp.exists(): cypher_tmp.unlink()
+        raise
+
+    # Atomic finalize: rename tmp → final ONLY if write completed
+    if mode == "apoc_cypher":
+        cypher_tmp.rename(cypher_final)
 
     meta = {
         "tag": tag,
@@ -82,41 +118,76 @@ def snapshot(tag: str):
         "node_count": n,
         "edge_count": e,
         "git_commit": git_commit(),
+        "uri": uri,
+        "env": env,
         "mode": mode,
+        "complete": True,  # Only written if we reach here
         "elapsed_s": round(time.time() - t0, 2),
     }
-    (out_dir / "meta.yaml").write_text(yaml.safe_dump(meta, sort_keys=False))
+    if mode == "apoc_cypher":
+        meta["sha256"] = sha256_of(cypher_final)
+        meta["bytes"] = cypher_final.stat().st_size
+
+    # Atomic meta write
+    meta_tmp = meta_path.with_suffix(".tmp")
+    meta_tmp.write_text(yaml.safe_dump(meta, sort_keys=False))
+    meta_tmp.rename(meta_path)
+
     print(f"✅ Snapshot '{tag}' created in {out_dir}")
     print(yaml.safe_dump(meta, sort_keys=False))
 
 
 def list_snapshots():
-    snaps = sorted(SNAP_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
-    for s in snaps:
-        meta_f = s / "meta.yaml"
+    snaps = sorted([p for p in SNAP_DIR.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True)
+    for sd in snaps:
+        meta_f = sd / "meta.yaml"
         if meta_f.exists():
             m = yaml.safe_load(meta_f.read_text())
-            print(f"{s.name:<30} {m.get('created_at')} nodes={m.get('node_count')} edges={m.get('edge_count')} commit={m.get('git_commit')}")
+            complete = m.get("complete", False)
+            mark = "✓" if complete else "✗ INCOMPLETE"
+            print(f"{mark} {sd.name:<30} {m.get('created_at')} nodes={m.get('node_count')} edges={m.get('edge_count')} mode={m.get('mode')} commit={m.get('git_commit')}")
+        else:
+            print(f"✗ NO-META {sd.name}")
 
 
-def rollback(tag: str, confirm: bool):
+def rollback(tag: str, confirm: bool, env: str = "dev"):
     if not confirm:
-        print("Refusing to rollback without --i-know-what-im-doing")
+        print("Refusing to rollback without --i-know-what-im-doing", file=sys.stderr)
         sys.exit(1)
+
     out_dir = SNAP_DIR / tag
     if not out_dir.exists():
-        print(f"Snapshot not found: {out_dir}")
-        sys.exit(1)
+        print(f"Snapshot not found: {out_dir}", file=sys.stderr); sys.exit(1)
+
+    meta_path = out_dir / "meta.yaml"
+    if not meta_path.exists():
+        print(f"REFUSING: no meta.yaml — snapshot integrity unknown", file=sys.stderr); sys.exit(1)
+    meta = yaml.safe_load(meta_path.read_text())
+    if not meta.get("complete"):
+        print(f"REFUSING: meta.complete is False — snapshot incomplete", file=sys.stderr); sys.exit(1)
+    if meta.get("mode") != "apoc_cypher":
+        print(f"REFUSING: snapshot mode={meta.get('mode')}; rollback supports apoc_cypher only", file=sys.stderr); sys.exit(1)
+
     cypher_file = out_dir / "all.cypher"
     if not cypher_file.exists():
-        print(f"Cypher file missing — APOC-mode snapshot required for rollback: {cypher_file}")
-        sys.exit(1)
+        print(f"REFUSING: all.cypher missing", file=sys.stderr); sys.exit(1)
 
-    d = GraphDatabase.driver(URI, auth=AUTH)
-    print(f"WIPING current Neo4j DB and replaying {cypher_file}")
-    with d.session() as s:
+    # Verify checksum
+    expected_sha = meta.get("sha256")
+    if expected_sha:
+        actual_sha = sha256_of(cypher_file)
+        if actual_sha != expected_sha:
+            print(f"REFUSING: checksum mismatch (expected {expected_sha[:12]}, got {actual_sha[:12]})", file=sys.stderr)
+            sys.exit(1)
+
+    driver, uri = get_driver(env)
+    expected_n = meta.get("node_count")
+    expected_e = meta.get("edge_count")
+    print(f"WIPING {uri} and replaying {cypher_file} (expect nodes={expected_n}, edges={expected_e})")
+
+    errors = []
+    with driver.session() as s:
         s.run("MATCH (n) DETACH DELETE n")
-        # Replay in batches (cypher file may be large)
         with open(cypher_file) as f:
             stmt_buf = ""
             for line in f:
@@ -125,24 +196,43 @@ def rollback(tag: str, confirm: bool):
                     try:
                         s.run(stmt_buf)
                     except Exception as ex:
-                        print(f"WARN: {ex} on stmt: {stmt_buf[:200]}")
+                        errors.append((str(ex), stmt_buf[:200]))
+                        # Fail-fast: abort on first error
+                        break
                     stmt_buf = ""
-    print(f"✅ Rollback to '{tag}' complete")
+
+        if errors:
+            print(f"❌ Rollback FAILED: {len(errors)} replay error(s). DB is partially restored.", file=sys.stderr)
+            for err, snippet in errors[:3]:
+                print(f"  - {err}\n    stmt: {snippet}", file=sys.stderr)
+            sys.exit(2)
+
+        # Verify counts match
+        actual_n, actual_e = stats(s)
+        if actual_n != expected_n or actual_e != expected_e:
+            print(f"❌ Rollback count mismatch: got nodes={actual_n}/expected {expected_n}, edges={actual_e}/expected {expected_e}", file=sys.stderr)
+            sys.exit(2)
+
+    print(f"✅ Rollback to '{tag}' complete; verified {actual_n} nodes / {actual_e} edges")
 
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--env", default="dev", choices=["dev", "staging", "prod"])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p_snap = sub.add_parser("snapshot"); p_snap.add_argument("--tag", required=True)
     sub.add_parser("list")
-    p_back = sub.add_parser("rollback"); p_back.add_argument("--tag", required=True); p_back.add_argument("--i-know-what-im-doing", action="store_true", dest="confirm")
+    p_back = sub.add_parser("rollback")
+    p_back.add_argument("--tag", required=True)
+    p_back.add_argument("--i-know-what-im-doing", action="store_true", dest="confirm")
     args = ap.parse_args()
     if args.cmd == "snapshot":
-        snapshot(args.tag)
+        snapshot(args.tag, args.env)
     elif args.cmd == "list":
         list_snapshots()
     elif args.cmd == "rollback":
-        rollback(args.tag, args.confirm)
+        rollback(args.tag, args.confirm, args.env)
+
 
 if __name__ == "__main__":
     main()

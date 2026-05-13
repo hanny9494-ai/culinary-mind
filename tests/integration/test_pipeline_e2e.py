@@ -12,9 +12,12 @@ from pathlib import Path
 import pytest
 from neo4j import GraphDatabase
 
+import os
 ROOT = Path(__file__).resolve().parents[2]
-URI = "bolt://localhost:7687"
-AUTH = ("neo4j", "cmind_p1_33_proto")
+URI = os.environ.get("CMIND_NEO4J_DEV_URI", "bolt://localhost:7687")
+USER = os.environ.get("CMIND_NEO4J_DEV_USER", "neo4j")
+PW = os.environ.get("CMIND_NEO4J_DEV_PW", "cmind_p1_33_proto")
+AUTH = (USER, PW)
 
 # Synthetic recipe matching extract_recipes.py output schema
 SYNTH = {
@@ -27,8 +30,8 @@ SYNTH = {
         {"slug": "salt", "raw": "kosher salt 30g", "quantity": 30, "unit": "g"},
     ],
     "steps": [
-        {"step_id": "s1", "step_idx": 0, "text": "Brine chicken in 6% salt solution for 4 hours at 4°C.", "temp_c": 4.0, "time_min": 240.0},
-        {"step_id": "s2", "step_idx": 1, "text": "Pan-sear at 200°C until skin crisps, 8 minutes.", "temp_c": 200.0, "time_min": 8.0},
+        {"step_id": "s1", "step_idx": 0, "text": "Sear chicken in pan at 200°C to brown the surface.", "temp_c": 200.0, "time_min": 4.0},
+        {"step_id": "s2", "step_idx": 1, "text": "Continue cooking at 180°C until internal temp 75°C.", "temp_c": 180.0, "time_min": 8.0},
     ],
 }
 
@@ -36,6 +39,14 @@ SYNTH = {
 @pytest.fixture(scope="module")
 def driver():
     d = GraphDatabase.driver(URI, auth=AUTH)
+    # Pre-flight: required seed nodes for assertion-based tests
+    with d.session() as s:
+        for phn_id in ("maillard_browning",):
+            r = s.run("MATCH (p:CKG_PHN {phn_id:$pid}) RETURN p", pid=phn_id).single()
+            assert r is not None, f"Required seed missing: CKG_PHN({phn_id}) — load PHN seed first"
+        # maillard_browning must have MF governance (MF-T01 + MF-T03 expected)
+        r = s.run("MATCH (p:CKG_PHN {phn_id:'maillard_browning'})<-[:GOVERNS_PHN]-(mf:CKG_MF) RETURN count(mf) AS n").single()
+        assert r["n"] >= 1, "Required seed missing: at least one MF must :GOVERNS_PHN maillard_browning"
     yield d
     # Cleanup namespace after tests
     with d.session() as s:
@@ -67,15 +78,11 @@ def loaded_synth(driver):
             MERGE (r)-[:HAS_STEP]->(s)
         """, rid=SYNTH["recipe_id"], steps=SYNTH["steps"])
 
-        # Apply step→PHN rule (simplified — brining_curing for step 1, deep_frying for step 2)
+        # Apply step→PHN rule: searing at high temp → maillard_browning
         s.run("""
-            MATCH (st:CKG_TEST_Step), (p:CKG_PHN)
-            WHERE st.text CONTAINS 'Brine' AND p.phn_id = 'brining_curing'
-            MERGE (st)-[:TRIGGERS_PHN]->(p)
-        """)
-        s.run("""
-            MATCH (st:CKG_TEST_Step), (p:CKG_PHN)
-            WHERE st.text CONTAINS 'sear' AND p.phn_id IN ['maillard_browning','convective_heat_transfer']
+            MATCH (st:CKG_TEST_Step), (p:CKG_PHN {phn_id:'maillard_browning'})
+            WHERE (st.text CONTAINS 'Sear' OR st.text CONTAINS 'sear' OR st.text CONTAINS 'brown')
+              AND st.temp_c >= 140
             MERGE (st)-[:TRIGGERS_PHN]->(p)
         """)
     yield driver
@@ -99,8 +106,8 @@ def test_steps_loaded_in_order(loaded_synth):
     with loaded_synth.session() as s:
         steps = list(s.run("MATCH (r:CKG_TEST_Recipe {recipe_id:$rid})-[:HAS_STEP]->(st) RETURN st.step_idx AS idx, st.temp_c AS t ORDER BY st.step_idx", rid=SYNTH["recipe_id"]))
         assert len(steps) == 2
-        assert steps[0]["idx"] == 0 and steps[0]["t"] == 4.0
-        assert steps[1]["idx"] == 1 and steps[1]["t"] == 200.0
+        assert steps[0]["idx"] == 0 and steps[0]["t"] == 200.0
+        assert steps[1]["idx"] == 1 and steps[1]["t"] == 180.0
 
 
 def test_step_phn_triggered(loaded_synth):
@@ -111,21 +118,21 @@ def test_step_phn_triggered(loaded_synth):
             ORDER BY idx
         """, rid=SYNTH["recipe_id"])
         rows = list(r)
-        # Brining step should trigger brining_curing
-        brining = next((row for row in rows if row["idx"] == 0), None)
-        if brining:
-            assert "brining_curing" in brining["phns"], f"Step 0 should trigger brining_curing, got {brining['phns']}"
+        # Sear step must trigger maillard_browning (PHN+MF seed verified in driver fixture)
+        sear = next((row for row in rows if row["idx"] == 0), None)
+        assert sear is not None, "Step idx=0 (sear) must have TRIGGERS_PHN edge"
+        assert "maillard_browning" in sear["phns"], f"Step 0 must trigger maillard_browning, got {sear['phns']}"
 
 
 def test_phn_governed_by_mf(loaded_synth):
-    """If brining_curing PHN is reachable, it should be governed by an MF (e.g., MF-M03)."""
+    """maillard_browning PHN must be governed by ≥1 MF (MF-T01/MF-T03). Seed verified in fixture."""
     with loaded_synth.session() as s:
         r = s.run("""
-            MATCH (p:CKG_PHN {phn_id:'brining_curing'})<-[:GOVERNS_PHN]-(mf:CKG_MF)
+            MATCH (p:CKG_PHN {phn_id:'maillard_browning'})<-[:GOVERNS_PHN]-(mf:CKG_MF)
             RETURN collect(mf.mf_id) AS mfs
         """).single()
-        if r and r["mfs"]:
-            assert len(r["mfs"]) > 0, f"brining_curing should have ≥1 governing MF; got {r['mfs']}"
+        assert r is not None, "Query must return at least an empty row"
+        assert len(r["mfs"]) >= 1, f"maillard_browning must have ≥1 governing MF; got {r['mfs']}"
 
 
 def test_referential_integrity_test_namespace(loaded_synth):
