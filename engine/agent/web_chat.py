@@ -145,15 +145,22 @@ def ask():
             "tool_unit": result.get("result", {}).get("unit"),
             "tool_validity": result.get("validity"),
             "keywords": result.get("keywords"),
+            # P1 fix: capture all science-grounded path fields
+            "matched_phns": result.get("matched_phns") or [],
+            "n_governing_mfs": result.get("n_governing_mfs") or 0,
+            "n_l0_evidence": result.get("n_l0_evidence") or 0,
+            "n_recipe_examples": result.get("n_recipe_examples") or 0,
             "context_n": result.get("context_n"),
             "elapsed_s": elapsed_s,
             "answer_preview": (result.get("answer") or "")[:200],
         }
         _log_query(record)
         # Print to stdout so /tmp/web_chat.log captures it
-        print(f"[QUERY {elapsed_s}s] mode={record['mode']} tool={record['mf_id']} ctx={record.get('context_n')} kw={record.get('keywords')}")
-        print(f"  Q: {query[:120]}")
-        print(f"  A: {record['answer_preview'][:120]}")
+        import sys as _sys
+        print(f"[QUERY {elapsed_s}s] mode={record['mode']} tool={record['mf_id']} PHN={record['matched_phns']} MFs={record['n_governing_mfs']} L0={record['n_l0_evidence']} recipes={record['n_recipe_examples']}", flush=True)
+        print(f"  Q: {query[:120]}", flush=True)
+        print(f"  A: {record['answer_preview'][:120]}", flush=True)
+        _sys.stdout.flush()
         return jsonify({
             "answer": result.get("answer", ""),
             "mf_id": result.get("mf_id"),
