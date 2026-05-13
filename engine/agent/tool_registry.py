@@ -151,8 +151,31 @@ def get_all_mf_tools() -> list[MFTool]:
     tools = []
     errors: list[str] = []
     for mf_id, spec in sorted(solvers.items()):
-        # Skip MF-T02 parent (parent_only — children mf_t02_k/cp/rho are routable separately)
+        # MF-T02 is parent_only; expand into 3 children (T02-K/-CP/-RHO)
         if mf_id == "MF-T02":
+            # Synthesize child entries inheriting parent inputs
+            for child_suffix, child_canon in [
+                ("-K", "Choi_Okos_thermal_conductivity"),
+                ("-CP", "Choi_Okos_specific_heat"),
+                ("-RHO", "Choi_Okos_density"),
+            ]:
+                child_id = mf_id + child_suffix
+                child_spec = {
+                    "canonical_name": child_canon,
+                    "inputs": spec.get("inputs", []),
+                    "output": spec.get("outputs_by_variant", {}).get(
+                        f"mf_t02{child_suffix.lower().replace('-','_')}",
+                        {"symbol": child_canon.split('_')[-1], "unit": "varies"}
+                    ),
+                }
+                try:
+                    tool = _build_tool(child_id, child_spec)
+                    if tool._solver_module is not None:
+                        tools.append(tool)
+                    else:
+                        errors.append(f"{child_id}: solver missing")
+                except Exception as exc:
+                    errors.append(f"{child_id}: {exc}")
             continue
         try:
             tool = _build_tool(mf_id, spec)
