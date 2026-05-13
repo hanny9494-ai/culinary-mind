@@ -118,7 +118,9 @@ If no tool fits, reply: {{"mf_id": "none", "reason": "..."}}"""
 
     call = parse_tool_call(llm_out)
     if not call or call.get("mf_id") == "none":
-        return {"answer": "Cannot determine tool", "llm_raw": llm_out}
+        # FALLBACK: knowledge query — use graph context + Codex direct answer
+        if verbose: print(f"\n  No MF tool fits; trying knowledge query with graph context...")
+        return knowledge_query_fallback(user_query, verbose=verbose)
 
     mf_id = call["mf_id"]
     params = call.get("params", {})
@@ -164,6 +166,92 @@ Compose a short answer with citation to {mf_id}.
         "params": params,
         "result": result["result"],
         "validity": result["validity"]["passed"],
+    }
+
+
+
+
+def knowledge_query_fallback(user_query: str, verbose=True) -> dict:
+    """Knowledge query path: lookup graph context + Codex synthesizes natural answer.
+
+    Used when no MF tool fits (e.g., comparison, technique, recipe lookup).
+    Pulls relevant Recipe/Step/PHN/Ingredient context via Neo4j keyword match.
+    """
+    # 1. Extract noun keywords (Chinese terms + English)
+    import re
+    chinese_terms = re.findall(r"[\u4e00-\u9fff]{2,8}", user_query)
+    english_terms = re.findall(r"[a-zA-Z]{3,20}", user_query)
+    keywords = list(set(chinese_terms + english_terms))[:8]
+    if verbose: print(f"  Keywords extracted: {keywords}")
+
+    # 2. Query Neo4j for relevant context
+    context_pieces = []
+    try:
+        from neo4j import GraphDatabase
+        driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "cmind_p1_33_proto"))
+        with driver.session() as sess:
+            # 2a. Match recipes by name
+            for kw in keywords[:5]:
+                if len(kw) < 2: continue
+                recipes = sess.run(
+                    "MATCH (r:CKG_L2B_TMP_Recipe) WHERE r.name CONTAINS $kw "
+                    "RETURN r.name AS name, r.book_id AS book LIMIT 3",
+                    kw=kw
+                ).data()
+                for r in recipes:
+                    context_pieces.append(f"Recipe '{r['name']}' ({r['book']})")
+            
+            # 2b. Match L0 causal-chain evidence
+            for kw in keywords[:3]:
+                if len(kw) < 2: continue
+                l0s = sess.run(
+                    "MATCH (l:CKG_L0_TMP_Principle) WHERE l.scientific_statement CONTAINS $kw "
+                    "RETURN l.scientific_statement AS stmt, l.book_id AS book LIMIT 3",
+                    kw=kw
+                ).data()
+                for l in l0s:
+                    context_pieces.append(f"L0 principle ({l['book']}): {(l['stmt'] or '')[:150]}")
+
+            # 2c. Match L2A ingredient
+            for kw in keywords[:3]:
+                if len(kw) < 2: continue
+                ings = sess.run(
+                    "MATCH (i:CKG_L2A_Ingredient) WHERE i.display_name_zh CONTAINS $kw OR i.display_name_en CONTAINS $kw "
+                    "OPTIONAL MATCH (i)-[:IS_A]->(p) "
+                    "RETURN i.canonical_id AS cid, i.display_name_zh AS zh, collect(DISTINCT p.canonical_id) AS parents LIMIT 3",
+                    kw=kw
+                ).data()
+                for i in ings:
+                    context_pieces.append(f"L2A ingredient '{i['cid']}' ({i['zh']}) IS_A {i['parents']}")
+        driver.close()
+    except Exception as e:
+        if verbose: print(f"  Neo4j unreachable: {e}")
+    
+    # Deduplicate + cap
+    context_pieces = list(dict.fromkeys(context_pieces))[:15]
+    if verbose: print(f"  Context pieces: {len(context_pieces)}")
+
+    # 3. Codex synthesizes answer with context
+    context_text = "\n".join(f"- {c}" for c in context_pieces) if context_pieces else "(无相关图数据)"
+    syn_prompt = f"""<system>
+You are a food-science explainer with access to a knowledge graph.
+The user asked a culinary question. Use the graph context below to answer naturally.
+If graph context is insufficient, answer based on general culinary knowledge but note "(从通用知识)".
+Reply in user's language (中文 if 中文 query). Cite specific recipes/L0 principles where relevant.
+</system>
+
+<user>
+Question: {user_query}
+
+Graph context:
+{context_text}
+</user>"""
+    final = call_codex(syn_prompt)
+    return {
+        "answer": final,
+        "mode": "knowledge_query",
+        "keywords": keywords,
+        "context_n": len(context_pieces),
     }
 
 
