@@ -3,10 +3,11 @@
 # 更新: 2026-05-02
 # 维护者: repo-curator agent
 
-version: "1.35"
+version: "1.36"
 status: "draft"  # draft → reviewed → locked
-last_updated: "2026-05-13"
+last_updated: "2026-05-14"
 changelog:
+  - "1.36 (2026-05-14): PR #56 合并 — feat(P2-Tx/Rb/Ops) **data quality audit + snapshot/rollback + integration tests + Codex 6th fixes**。P2-Tx1: 7-check audit (node/edge counts/null rates/orphan rates/referential/bounds/dedup)，namespace-aware，hard_fail=0 / 4 Phase-0 WARNs (scripts/quality/data_quality_audit.py, 236 LOC)。P2-Tx2: 7 integration tests CKG_TEST_* isolation，pre-flight seed assertions，all 7 passing (tests/integration/test_pipeline_e2e.py, 155 LOC)。P2-Rb1: APOC snapshot atomic write (temp→fsync→rename, sha256+complete flag)，rollback fail-fast + count verify，180,393 nodes/534,525 edges/7s/141MB (scripts/quality/neo4j_snapshot.py, 238 LOC)。P2-Rb2: legacy cleanup 79 nodes+166 edges purged，multi-label protection (scripts/quality/cleanup_legacy_nodes.py, 70 LOC)。P2-Ops1: staging env doc dev/staging/prod 7687/7688/7689 (docs/ops/staging_environment.md, 80 LOC)。Codex 6th: 2 P0 (atomic write/fail-fast rollback) + 3 P1 (strict referential/seed preflight/multi-label) + 1 P2 (env vars) closed，**里程碑：P2 运维安全基础设施完整 — 审计/快照/回滚/清理/测试全部 production-ready**"
   - "1.35 (2026-05-13): PR #55 合并 — fix(web_chat) **log field capture fix — matched_phns/n_governing_mfs/n_l0_evidence/n_recipe_examples**。Jeff 从日志发现 PHN matched: [] 但答案引用了 PHN (根因：record builder 漏了 4 个字段，推理路径本身正确)。修复: web_chat.py record builder + stdout [QUERY] 显示 PHN/MF/L0 计数 + python -u flush=True 实时 tail -f。验证: [QUERY 39.87s] PHN=['brining_curing'] MFs=0 L0=4 recipes=2，engine/agent/web_chat.py +10/-3"
   - "1.34 (2026-05-13): PR #54 合并 — feat(agent) **science-grounded knowledge query v2 + structured logging**。触发：Jeff '应该用图谱 PHN/MF/L0，不是通用知识'。v2 pipeline: 18 regex 映射关键词→PHN，Neo4j 查 GOVERNS_PHN+TAGGED_BY_PHN+TRIGGERS_PHN，LLM prompt 要求每步必须引用 PHN/MF/L0 + 数值范围。Demo: 脆皮鸡 SOP 8步 (腌渍@4°C×12-18h/风干@4°C×12-24h/炸@170°C 12-16min + 195°C 60-90s/中心温度 72-75°C) + 真实 L0 引用 (food_lab/salt_fat_acid_heat)。结构化日志: web_chat_history.jsonl + /history endpoint + stdout mode 标签 (mf_tool/knowledge_query_science/knowledge_query)，engine/agent/llm_agent.py +191/-50 + web_chat.py +55，**里程碑：agent 全图谱科学溯源，每个回答都有 PHN→MF→L0 证据链**"
   - "1.33 (2026-05-13): PR #53 合并 — feat(llm_agent) **knowledge query fallback — Cannot determine tool → graph + Codex synthesize**。触发：Jeff feedback '白切鸡跟膀胱鸡' query 返回 Cannot determine tool。根因：agent 仅处理 MF 数值查询。修复 engine/agent/llm_agent.py +89 行：mf_id=none → knowledge_query_fallback() — 提取中英关键词 → Neo4j 搜索 (Recipe/L0/L2A) → Codex 综合 NL 答案 + 稀疏时标 (从通用知识)。Demo: 白切鸡 vs 膀胱鸡 返回 200+ 字粤菜技术对比（浸熟 vs 密封蒸/清鲜弹滑 vs 封存浓鲜），**里程碑：agent 双路路由 — 数值 MF path + 知识 knowledge fallback path，culinary-mind agent 能回答任意粤菜问题**"
@@ -129,6 +130,7 @@ directories:
       schemas/:         "Schema 版本文档（各层 v1.x.md + CHANGELOG.md）"
       code-map.yaml:    "本文件（repo-curator 独占）"
       merge-policy.yaml: "合并策略"
+      ops/:             "运维文档 — staging_environment.md (PR #56, dev/staging/prod 7687/7688/7689, docker-compose, snapshot promotion)"
 
   # ── 脚本 ──
   scripts/:
@@ -140,6 +142,7 @@ directories:
       y_s1/:           "Neo4j 导入（应迁移到 graph/import/）"
       l2a/:            "L2a ingredient tree ETL 完整链路（P1-13~16，PR #31）— Step 5 cluster_merge / Step 6 relationship_build / Step 7 export_neo4j，CKG_L2A_* namespace，24,335 nodes + 52,313 edges"
       l2b/:            "**L2b recipe ingest + ingredient linking + FT/L6（PR #42/#46/#47/#48/#52）** — etl/ (6 scripts, ~638 LOC) + demo scripts (356 LOC)，Neo4j: 23,584 recipes + 80,056 steps + **12,921 TRIGGERS_PHN** (+35% from 30 rules) + 26,082 TAGGED_BY_PHN + 12,792 MATCHES_L2A + 87,521 USES_L2A_INGREDIENT + CKG_FT 7,361 + CKG_L6_Term 10,447 + TRANSLATES_TO 3,960 + **CKG_L1_Equipment 17** + **Step→MF 17,538** + **Recipe→FT 120,195**，**里程碑：完整七层推理链 LIVE，~270K 跨层 edges**"
+      quality/:        "**P2 运维安全工具 (PR #56)**：data_quality_audit.py (236 LOC, 7-check audit, hard_fail=0) + neo4j_snapshot.py (238 LOC, APOC atomic snapshot/rollback, sha256, 180K nodes/534K edges/7s) + cleanup_legacy_nodes.py (70 LOC, multi-label-safe, 79 nodes+166 edges purged)"
       skill_a/:        "Skill A 二期数据处理（P1-21c-D/P2-Sa1/P3-Tier1/P4-Be2-lite/P4-case-studies）— ontology mapping（P1-21c-D，PR #32，5 scripts，34.2% mapped to 28 MF solvers，13,080 new MF candidates）+ etl/（P2-Sa1，PR #33，3 ETL scripts: build_mf_value_database/extend_mf_schemas/rescue_backlog_to_new_fields，11,004 records 41.2% coverage）+ etl/（P3-Tier1，PR #34，2 ETL scripts: add_p3_tier1_mf_schemas + p2_sa2_outlier_cleaning，10,462 production-ready records）+ benchmark/（P4-Be2-lite，PR #36，2 scripts: mf_real_data_benchmark + case_study_beef_boiling，2,220 tests / 1,359 passed 61.2% pass rate + beef boiling 6-MF end-to-end chain）+ benchmark/（P4-case-studies，PR #37，case_studies_batch.py，4 food scenarios 跨 thermal/kinetic/mass-transfer/dielectric 域，13 unique MFs chained，Layer 3 推理链跨域验证完成）"
 
   # ── 数据（不入 git） ──
@@ -177,7 +180,7 @@ directories:
     status: active
     children:
       l2a/:         "L2a ingredient tree ETL tests (69 tests, PR #31) — prefilter/main_distill/peer_review/post_normalizer/hard_pruning/cluster_merge/relationship_build/export_neo4j"
-      integration/: "Neo4j integrity + performance baseline tests (PR #38) — test_l2a_neo4j_integrity.py (58 LOC) + test_performance_baseline.py (84 LOC)"
+      integration/: "Neo4j integrity + performance + pipeline e2e tests — test_l2a_neo4j_integrity.py (58 LOC, PR #38) + test_performance_baseline.py (84 LOC, PR #38) + test_pipeline_e2e.py (155 LOC, PR #56, 7 tests CKG_TEST_* isolation, pre-flight seed assertions)"
       prompts/:     "Prompt registry tests (PR #38) — test_prompt_registry.py (51 LOC)"
       test_lingya_gemini_calls.py: "D70 Lingya/Gemini API unify tests (221 LOC, 8 tests) — transport/auth/embedding correctness; B1 transport-retry + B2 dim-mismatch added post-merge d35e270"
 
