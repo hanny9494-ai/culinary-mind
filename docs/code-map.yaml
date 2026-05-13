@@ -3,10 +3,11 @@
 # 更新: 2026-05-02
 # 维护者: repo-curator agent
 
-version: "1.34"
+version: "1.35"
 status: "draft"  # draft → reviewed → locked
 last_updated: "2026-05-13"
 changelog:
+  - "1.35 (2026-05-13): PR #55 合并 — fix(web_chat) **log field capture fix — matched_phns/n_governing_mfs/n_l0_evidence/n_recipe_examples**。Jeff 从日志发现 PHN matched: [] 但答案引用了 PHN (根因：record builder 漏了 4 个字段，推理路径本身正确)。修复: web_chat.py record builder + stdout [QUERY] 显示 PHN/MF/L0 计数 + python -u flush=True 实时 tail -f。验证: [QUERY 39.87s] PHN=['brining_curing'] MFs=0 L0=4 recipes=2，engine/agent/web_chat.py +10/-3"
   - "1.34 (2026-05-13): PR #54 合并 — feat(agent) **science-grounded knowledge query v2 + structured logging**。触发：Jeff '应该用图谱 PHN/MF/L0，不是通用知识'。v2 pipeline: 18 regex 映射关键词→PHN，Neo4j 查 GOVERNS_PHN+TAGGED_BY_PHN+TRIGGERS_PHN，LLM prompt 要求每步必须引用 PHN/MF/L0 + 数值范围。Demo: 脆皮鸡 SOP 8步 (腌渍@4°C×12-18h/风干@4°C×12-24h/炸@170°C 12-16min + 195°C 60-90s/中心温度 72-75°C) + 真实 L0 引用 (food_lab/salt_fat_acid_heat)。结构化日志: web_chat_history.jsonl + /history endpoint + stdout mode 标签 (mf_tool/knowledge_query_science/knowledge_query)，engine/agent/llm_agent.py +191/-50 + web_chat.py +55，**里程碑：agent 全图谱科学溯源，每个回答都有 PHN→MF→L0 证据链**"
   - "1.33 (2026-05-13): PR #53 合并 — feat(llm_agent) **knowledge query fallback — Cannot determine tool → graph + Codex synthesize**。触发：Jeff feedback '白切鸡跟膀胱鸡' query 返回 Cannot determine tool。根因：agent 仅处理 MF 数值查询。修复 engine/agent/llm_agent.py +89 行：mf_id=none → knowledge_query_fallback() — 提取中英关键词 → Neo4j 搜索 (Recipe/L0/L2A) → Codex 综合 NL 答案 + 稀疏时标 (从通用知识)。Demo: 白切鸡 vs 膀胱鸡 返回 200+ 字粤菜技术对比（浸熟 vs 密封蒸/清鲜弹滑 vs 封存浓鲜），**里程碑：agent 双路路由 — 数值 MF path + 知识 knowledge fallback path，culinary-mind agent 能回答任意粤菜问题**"
   - "1.32 (2026-05-13): PR #52 合并 — feat(全面推进) **P4-Bj1 judge + Codex 5th P0 fix + L1 17 devices + 30 rules + 12.9K Step→PHN edges**。P2-L1b: 17 CKG_L1_Equipment nodes (Vitamix/Anova/Breville/Wolf/PolyScience 等) 导入 Neo4j，output/l1/equipment_seed.yaml (19K) + raw/researcher/p2-l1b-equipment-survey-20260513.md (27K)，researcher 1h 交付（目标 10-15d）。step_phn_rules 16→30 条 (+14: egg coagulation/deep-fry/smoke/sous_vide/convective/wok_hei/baking/freeze-dry/crispness/milk_coag/foam/brining/gluten/ice_crystal)，Step→PHN 9,533→12,921 (+35%)，Step→MF transitive 17,101→17,538。Codex 5th P0 修复: llm_agent_v2 step-sub {stepN.value} unresolved crash → safe step_map resolution。P4-Bj1 LLM-as-Judge (scripts/benchmark/llm_as_judge.py, 157 LOC): 8 queries, Agent 4/Bare 4，agent wins citation (+0.87 via [MF-XX])，bare wins prose clarity，**里程碑：L1 设备层首次有数据 + 30 rules + judge baseline = 全系统进入 Phase 2+ ready 状态**"
