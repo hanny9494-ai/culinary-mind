@@ -3,10 +3,11 @@
 # 更新: 2026-05-02
 # 维护者: repo-curator agent
 
-version: "1.30"
+version: "1.31"
 status: "draft"  # draft → reviewed → locked
 last_updated: "2026-05-13"
 changelog:
+  - "1.31 (2026-05-13): PR #51 合并 — feat(P4-Bench + frontend) **bare GPT vs culinary-mind benchmark + Flask chat UI**。P4 Benchmark (scripts/benchmark/bare_vs_graph_bench.py, 223 LOC): 8 food-science queries × 2 pipelines，**8/8 tool routing accuracy (100%)**，numeric agreement 2/8 within 30% (baseline established)，verified MF routing: Arrhenius→T03 / Protein denat→T06 / Fourier→T01 / Water Cp→T02-CP / Density→T02-RHO / Microwave→T07 / F-value→K04 / Q10→C05。Flask Chat UI (engine/agent/web_chat.py, 130 LOC): POST /ask → JSON {answer,mf_id,value,unit}，dark theme，example queries，async fetch，localhost:5001，**里程碑：P4 baseline benchmark established + end-user demo frontend LIVE**"
   - "1.30 (2026-05-13): PR #50 合并 — feat **multi-step LLM agent v2 + MF-T02 family registered + Recipe→FT 120K edges**。LLM v2 (engine/agent/llm_agent_v2.py, 259 LOC): ReAct 多步链 plan→execute→synthesize，{stepN.value} 引用机制，Demo: Choi-Okos→Fourier→Protein-Denat chain，80°C 蛋白质变性 f_native=0.0018 (99.8%)。Tool Registry 修复：MF-T02 children (K/CP/RHO) 缺失补注册，39→42 tools，Beef Cp@25°C = 3,379.5 J/(kg·K) 验证。Recipe→FT 链接：120,195 TARGETS_FT edges (recipe name aesthetic_word 子串匹配)，**里程碑：~270K 跨层 edges 总计，L1+L3 完全统一，多步 LLM agent 生产可用**"
   - "1.29 (2026-05-13): PR #49 合并 — feat(A+B+C+D) **Codex 4th P0/P1 + Step→MF 17K transitive + REAL LLM agent + stirfry demo**。A: Codex 4th cross-review — P0 extract_ft_l6 target_states_json 截断 [:1000] 修复（JSON poison 风险消除）+ P1 link_l2a_l2b 1-token suffix match (organic_chicken→chicken) → L2B↔L2A 7,899→12,792 (+62%)，Recipe→L2A 77,292→87,521。B: 17,101 GOVERNED_BY_MF transitive edges pre-computed (Step→PHN→MF)，查询 2-hop → 1-hop 简化。C: **engine/agent/llm_agent.py (183 LOC) ReAct-style REAL LLM agent** — 39 MF tool catalog in system prompt，balanced-brace JSON parser，Live demo: 牛肉 5cm 沸水 30min → MF-T01 27.8°C + 科学解释 / 酶动力学 correctly REJECTED (需要 A factor) / MF-T06 蛋白质变性 0.5 + validity warning，**里程碑：无需 LangGraph 依赖，production-quality LLM agent TODAY**。D: scripts/l2b/demo_chinese_stirfry_query.py (101 LOC) 镬气 PHN + L0 evidence + Modernist Cuisine 高温炒。新增 raw/code-reviewer/codex-4th-review-20260513.txt (1,258 LOC)，pytest 498→506 passing"
   - "1.28 (2026-05-13): PR #48 合并 — fix(quality-audit) **L6 dedup by term key — 13K→10K nodes, 35K→4K accurate TRANSLATES_TO**，Jeff quality audit 发现 L6 节点以 book__term 为 key 导致重复（'tender' 21个节点跨21本书 × ~170 FT pool = 假 35,840 边），修复：按 term_en.lower/term_zh 去重，book_ids 合并为逗号数组，definition 保留最长版本，TRANSLATES_TO 35,840 → 3,960 (准确)，改动 scripts/l2b/etl/extract_ft_l6.py (+18/-6)，**里程碑：Jeff 质量审计通过，所有图边语义验证完成 (L2B↔L2A/Step→PHN/L6→FT 三路全部 VALIDATED)**"
@@ -66,7 +67,7 @@ directories:
     children:
       solver/:    "40 MF 数值求解器（40/40 已完成，PR #20/25/26/27/28/34/35/40，495 tests passing）— T01-10 (10), K01-07 (7), M01-11 (11), R01-07 (7), C01-05 (5) + 统一 provenance/llm_summary 返回格式（P1-22）+ @validate_bounds 装饰器（P1-21a）+ Hypothesis property tests（P1-21b, 46 tests 覆盖 15 高价值 MF）+ P3-Tier1 新增 T06/K06/T07/T10 (protein denaturation/hurdle tech/microwave dielectric/crystallization kinetics) + P3-Tier2-3 新增 M07/M08/T08/K07/T09/M09/M11/M10 (solubility/gas_permeability/ohmic_heating/binding_kinetics/respiration_rate/osmotic_dehydration/supercritical_extraction/membrane_transport) — 里程碑：P1-21c-D 12 new MF candidates backlog 全部实施完成"
       tools/:     "Task-oriented wrapper（estimate_heating_time 等，待建 P1-20）"
-      agent/:     "**Tool Registry (PR #40/#50) + LLM Agent v1/v2 (PR #49/#50)**：42 MF tools (T02-K/CP/RHO 补注册，PR #50) + llm_agent.py (183 LOC, v1 single-step) + llm_agent_v2.py (259 LOC, v2 multi-step {stepN.value} chain) — 牛肉导热/酶动力学/蛋白质变性 live demos，无 LangGraph 依赖 — **里程碑：multi-step reasoning chain production-ready**"
+      agent/:     "**Tool Registry + LLM v1/v2 + Flask UI (PR #40/#49/#50/#51)**：42 MF tools + llm_agent.py (183 LOC v1) + llm_agent_v2.py (259 LOC v2 multi-step) + web_chat.py (130 LOC Flask UI, POST /ask, localhost:5001) — **里程碑：end-user chat frontend LIVE**"
       retrieval/: "检索策略（Phase 4B，待建）"
     note: "D65 决策：不引入 SymPy/SciPy，所有 MF 手写解析解或数值解；依赖 CoolProp/fluids/ht/pint/scipy. P1-21a: solver_bounds.yaml sanity envelopes + @validate_bounds decorator 入参/输出范围校验"
 
@@ -85,7 +86,7 @@ directories:
     owner: coder
     children:
       golden/:    "Golden Dataset（50-60 题）"
-      benchmark/: "Benchmark 套件"
+      benchmark/: "Benchmark 套件 — scripts/benchmark/bare_vs_graph_bench.py (PR #51, 223 LOC, 8-query P4 baseline: 100% tool routing)"
       reports/:   "评测报告"
 
   # ── 基础设施 ──
