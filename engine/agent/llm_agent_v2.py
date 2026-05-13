@@ -165,19 +165,29 @@ def execute_plan(plan, verbose=True):
         mf_id = step_def.get("mf_id")
         params = dict(step_def.get("params", {}))
         if mf_id == "none": continue
-        # Substitute {stepN.value} references
+        # P0 fix (Codex 5th): safe step reference resolution by actual step number
+        step_map = {h.get("step"): h for h in history}
         for k, v in list(params.items()):
             if isinstance(v, str) and "{step" in v:
                 m = re.match(r"\{step(\d+)\.(\w+)\}", v.strip())
                 if m:
                     ref_step = int(m.group(1))
                     ref_field = m.group(2)
-                    if ref_step <= len(history):
-                        ref_result = history[ref_step-1]
-                        if ref_field == "value":
-                            params[k] = ref_result["value"]
-                        else:
-                            params[k] = ref_result.get(ref_field)
+                    ref_result = step_map.get(ref_step)
+                    if ref_result is None or "value" not in ref_result:
+                        # Step failed or no output; cannot resolve — mark error and skip tool
+                        params[k] = None
+                        # Tool will likely fail validation; record reason
+                        continue
+                    if ref_field == "value":
+                        params[k] = ref_result.get("value")
+                    else:
+                        params[k] = ref_result.get(ref_field)
+        # Skip step if any param is None due to unresolved reference
+        if None in params.values() and any(isinstance(v, str) and "{step" in v for v in step_def.get("params", {}).values()):
+            history.append({"step": step_n, "mf_id": mf_id, "error": "unresolved step reference"})
+            if verbose: print(f"  ⚠ Step {step_n}: unresolved reference, skipping")
+            continue
         try:
             tool = get_mf_tool(mf_id)
         except KeyError as e:

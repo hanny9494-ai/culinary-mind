@@ -1,0 +1,2950 @@
+Reading additional input from stdin...
+OpenAI Codex v0.128.0-alpha.1 (research preview)
+--------
+workdir: /Users/jeff/culinary-mind
+model: gpt-5.4
+provider: openai
+approval: never
+sandbox: danger-full-access
+reasoning effort: medium
+reasoning summaries: none
+session id: 019e1f7d-318e-7bd1-922b-7cda3a86314d
+--------
+user
+Reviewer. Review these new agent + integration scripts. Focus on:
+1. LLM prompt engineering correctness (Codex returns reliable structured JSON)
+2. Tool registry interaction (uses get_mf_tool correctly)
+3. Step substitution logic for multi-step chains
+4. Recipe→FT substring match risks (over-matching short aesthetic_word_en)
+5. Production hardening (timeout, retries, errors)
+
+Output strict markdown. For each file: VERDICT + BUGS (P0/P1/P2) + IMPROVEMENTS.
+---
+
+
+=== engine/agent/llm_agent_v2.py ===
+#!/usr/bin/env python3
+"""LLM agent v2: multi-tool ReAct chain.
+
+Difference from v1:
+- v1: query → choose ONE tool → invoke → answer (single-step)
+- v2: query → reason → invoke multiple tools in sequence (chain dependent calculations)
+  e.g. "煮牛肉 30 min, 中心 protein 变性 fraction?"
+       → Step 1: MF-T02-CP/RHO/K → α
+       → Step 2: MF-T01 Fourier → T_center
+       → Step 3: MF-T06 → f_native at T_center
+  Each step's output feeds the next.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from engine.agent.tool_registry import get_all_mf_tools, get_mf_tool
+
+
+CODEX_CMD = [
+    "codex", "exec",
+    "--ephemeral",
+    "--ignore-user-config",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "-s", "read-only",
+    "-m", "gpt-5.4",
+    "-c", "model_reasoning_effort=medium",
+]
+
+
+def call_codex(prompt: str, timeout=180) -> str:
+    proc = subprocess.run(
+        CODEX_CMD + [prompt],
+        capture_output=True, text=True, timeout=timeout,
+        env={**os.environ, "NO_PROXY": "*"},
+        stdin=subprocess.DEVNULL,
+    )
+    out = proc.stdout
+    idx = out.rfind("\ncodex\n")
+    if idx < 0: idx = out.rfind("codex\n")
+    if idx >= 0:
+        body = out[idx + len("\ncodex\n"):]
+        end = body.find("\ntokens used\n")
+        if end > 0: body = body[:end]
+        return body.strip()
+    return out.strip()
+
+
+def parse_json(text: str):
+    """Extract a JSON object from text using balanced braces."""
+    if not text: return None
+    idx = text.find('"plan"')  # outer wrapper FIRST
+    if idx < 0: idx = text.find('"action"')
+    if idx < 0: idx = text.find('"mf_id"')
+    if idx < 0: idx = text.find("{")
+    if idx < 0: return None
+    start = text.rfind("{", 0, idx + 1)
+    if start < 0: return None
+    depth = 0; in_str = False; esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if esc: esc = False; continue
+        if ch == "\\": esc = True; continue
+        if ch == '"' and not esc: in_str = not in_str; continue
+        if in_str: continue
+        if ch == "{": depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try: return json.loads(text[start:i+1])
+                except: return None
+    return None
+
+
+def build_tool_catalog():
+    """Build LLM-friendly catalog with USE descriptions."""
+    USAGE = {
+        "MF-T01": "1D heat conduction in slab; T(x,t)",
+        "MF-T02-K": "Choi-Okos food thermal conductivity k from composition",
+        "MF-T02-CP": "Choi-Okos food specific heat Cp from composition",
+        "MF-T02-RHO": "Choi-Okos food density rho from composition",
+        "MF-T03": "Arrhenius rate constant k(T) from A,Ea,T_K",
+        "MF-T04": "Nusselt correlation for heat transfer",
+        "MF-T05": "Plank freezing time",
+        "MF-T06": "Protein denaturation sigmoid f_native(T_C, T_d, dH_d)",
+        "MF-T07": "Microwave/RF volumetric heating P_abs",
+        "MF-T08": "Ohmic Joule heating Q from sigma+E",
+        "MF-T09": "Postharvest respiration heat Q=a·exp(b·T)",
+        "MF-T10": "Starch gelatinization Avrami α(t,T)",
+        "MF-K01": "Michaelis-Menten enzyme kinetics v(S,Km,Vmax)",
+        "MF-K02": "Thermal D-value (microbial decimal reduction time)",
+        "MF-K03": "z-value (D vs T temperature dependence)",
+        "MF-K04": "F-value sterilization equivalent",
+        "MF-K05": "Gompertz microbial growth log10(N/N0)",
+        "MF-K06": "Microbial growth hurdle limit (boolean)",
+        "MF-K07": "Ligand-protein binding equilibrium f_bound",
+        "MF-M01": "Fick 2nd law diffusion C(x,t)",
+        "MF-M02": "GAB sorption isotherm W(a_w)",
+        "MF-M03": "Antoine vapor pressure of substance",
+        "MF-M04": "Henderson-Hasselbalch pH of buffer",
+        "MF-M05": "Henry law aroma volatility c_aq(p_gas)",
+        "MF-M06": "Latent heat of substance",
+        "MF-M07": "Octanol-water partition K=10^logP",
+        "MF-M08": "Gas permeability through film Q=P·Δp/L",
+        "MF-M09": "Van't Hoff osmotic pressure π=iMRT",
+        "MF-M10": "Membrane solute flux J=P·ΔC/L",
+        "MF-M11": "SCFE-CO2 Chrastil solubility y(ρ,T)",
+        "MF-R01": "Power-law fluid viscosity τ=K·γ^n",
+        "MF-R02": "Herschel-Bulkley yield-stress fluid",
+        "MF-R03": "Casson model fluid",
+        "MF-R04": "Gordon-Taylor Tg mix",
+        "MF-R05": "WLF time-temperature superposition",
+        "MF-R06": "Stevens psychophysical power law",
+        "MF-R07": "Griffith fracture stress",
+        "MF-C01": "Stokes sedimentation velocity v",
+        "MF-C02": "HLB Griffin emulsifier balance",
+        "MF-C03": "DLVO colloid stability V_T",
+        "MF-C04": "Laplace pressure ΔP across curved interface",
+        "MF-C05": "Q10 temperature rate doubling",
+    }
+    lines = ["Available MF tools (40 total). USE descriptions:"]
+    for t in get_all_mf_tools():
+        desc = USAGE.get(t.mf_id, t.canonical_name)
+        fields = list(t.inputs_schema.keys())[:5]
+        out_sym = t.output_schema.get("symbol", "?")
+        lines.append(f"  - {t.mf_id}: {desc}  | inputs: {fields} → out: {out_sym}")
+    return "\n".join(lines)
+
+
+def plan_steps(user_query: str):
+    """Step 1: Ask LLM to plan a sequence of MF tool invocations."""
+    catalog = build_tool_catalog()
+    system = f"""You are a food science reasoning planner. Decompose the user query
+into a SEQUENCE of MF tool calls. Each call may use outputs from prior calls.
+
+{catalog}
+
+Output strict JSON only:
+{{
+  "plan": [
+    {{"step": 1, "mf_id": "MF-T02-CP", "params": {{...}}, "uses": "X"}},
+    {{"step": 2, "mf_id": "MF-T02-K", "params": {{...}}, "uses": "X"}},
+    {{"step": 3, "mf_id": "MF-T01", "params": {{...alpha from steps 1+2...}}, "uses": "T_center"}},
+    {{"step": 4, "mf_id": "MF-T06", "params": {{"T_C": "{{step3.value}}", ...}}, "uses": "f_native"}}
+  ],
+  "rationale": "..."
+}}
+
+Reference prior step outputs with {{stepN.value}}.
+Max 5 steps. If 1 tool suffices, plan with 1 step.
+If no tool fits, plan=[]."""
+    prompt = f"<system>\n{system}\n</system>\n\n<user>\n{user_query}\n</user>"
+    return call_codex(prompt)
+
+
+def execute_plan(plan, verbose=True):
+    """Execute steps in sequence, substituting prior outputs."""
+    history = []  # step results
+    for step_def in plan:
+        step_n = step_def.get("step")
+        mf_id = step_def.get("mf_id")
+        params = dict(step_def.get("params", {}))
+        if mf_id == "none": continue
+        # Substitute {stepN.value} references
+        for k, v in list(params.items()):
+            if isinstance(v, str) and "{step" in v:
+                m = re.match(r"\{step(\d+)\.(\w+)\}", v.strip())
+                if m:
+                    ref_step = int(m.group(1))
+                    ref_field = m.group(2)
+                    if ref_step <= len(history):
+                        ref_result = history[ref_step-1]
+                        if ref_field == "value":
+                            params[k] = ref_result["value"]
+                        else:
+                            params[k] = ref_result.get(ref_field)
+        try:
+            tool = get_mf_tool(mf_id)
+        except KeyError as e:
+            if verbose: print(f"  Step {step_n}: tool {mf_id} not found")
+            history.append({"step": step_n, "mf_id": mf_id, "error": str(e)})
+            continue
+        try:
+            out = tool.run(params)
+            v = out["result"]["value"]
+            sym = out["result"]["symbol"]
+            unit = out["result"]["unit"]
+            passed = out["validity"]["passed"]
+            history.append({"step": step_n, "mf_id": mf_id, "value": v, "symbol": sym,
+                            "unit": unit, "validity": passed, "params": params})
+            if verbose:
+                ok = "✅" if passed else "⚠️"
+                print(f"  {ok} Step {step_n} {mf_id}: {sym} = {v} {unit}")
+        except Exception as e:
+            history.append({"step": step_n, "mf_id": mf_id, "error": str(e)})
+            if verbose: print(f"  ❌ Step {step_n} {mf_id}: {e}")
+    return history
+
+
+def synthesize(user_query, plan_text, plan, history):
+    """LLM composes final answer with chain reasoning."""
+    chain_summary = "\n".join(
+        f"  Step {h['step']} {h['mf_id']}: " +
+        (f"{h.get('symbol','?')} = {h.get('value','?')} {h.get('unit','?')} {'✓' if h.get('validity') else '⚠ validity-fail'}" if "value" in h else f"ERROR: {h.get('error')}")
+        for h in history
+    )
+    syn_prompt = f"""<system>
+You are a food science explainer. Compose a brief natural-language answer
+(in the user's language) for this multi-step MF chain.
+Cite each MF tool used. Note any validity issues.
+</system>
+
+<user>
+Query: {user_query}
+
+Reasoning chain executed:
+{chain_summary}
+
+Compose answer.
+</user>"""
+    return call_codex(syn_prompt)
+
+
+def answer_multistep(user_query, verbose=True):
+    if verbose:
+        print(f"\n{'='*90}\nUSER: {user_query}\n{'='*90}")
+        print("\n[Step 1] Planning multi-MF chain...")
+    plan_text = plan_steps(user_query)
+    p = parse_json(plan_text)
+    if not p or not p.get("plan"):
+        return {"answer": "Cannot decompose query", "plan_raw": plan_text}
+    plan = p["plan"]
+    if verbose:
+        print(f"Plan: {len(plan)} step(s)")
+        for s in plan:
+            print(f"  Step {s.get('step')}: {s.get('mf_id')} — {s.get('uses')}")
+    history = execute_plan(plan, verbose=verbose)
+    if verbose: print(f"\n[Step 2] Synthesizing answer...")
+    final = synthesize(user_query, plan_text, plan, history)
+    return {"answer": final, "plan": plan, "history": history}
+
+
+def main():
+    queries = [
+        "5cm 牛肉块沸水煮 30 分钟，中心蛋白质变性大概几成？(用 Choi-Okos 算 α，再 Fourier 算中心温度，最后 sigmoid 估变性)",
+        "75°C 鸡蛋蛋白质 (T_d=70°C dH=400) 多久达到 95% 变性？",
+    ]
+    for q in queries:
+        r = answer_multistep(q, verbose=True)
+        print(f"\n{'='*90}\nFINAL ANSWER:\n{r.get('answer','')[:800]}")
+        print('='*90)
+
+
+if __name__ == "__main__":
+    main()
+
+=== scripts/benchmark/bare_vs_graph_bench.py ===
+#!/usr/bin/env python3
+"""P4-Be Benchmark: bare LLM vs +graph+tools (culinary-mind LLM agent).
+
+Setup:
+- Pipeline A (bare): Codex gpt-5.4 直接回答, 无 graph 无 tool
+- Pipeline B (our agent): engine.agent.llm_agent.answer_query
+                          (uses tool registry + Neo4j optional)
+
+For each query:
+  - Run A, save answer + tokens
+  - Run B, save answer + tokens + which tools invoked
+  - Compare side-by-side (manual or auto rubric)
+
+Output: output/benchmark/bench_results.yaml
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from engine.agent.llm_agent import answer_query as agent_answer
+
+CODEX = ["codex", "exec", "--ephemeral", "--ignore-user-config",
+         "--dangerously-bypass-approvals-and-sandbox", "-s", "read-only",
+         "-m", "gpt-5.4", "-c", "model_reasoning_effort=low"]
+
+
+def bare_llm(query, timeout=90):
+    """Pipeline A: bare Codex, no system prompt, no tools."""
+    t0 = time.time()
+    proc = subprocess.run(
+        CODEX + [query],
+        capture_output=True, text=True, timeout=timeout,
+        env={**os.environ, "NO_PROXY": "*"},
+        stdin=subprocess.DEVNULL,
+    )
+    elapsed = time.time() - t0
+    out = proc.stdout
+    idx = out.rfind("\ncodex\n")
+    if idx >= 0:
+        body = out[idx+len("\ncodex\n"):]
+        end = body.find("\ntokens used\n")
+        # capture tokens used
+        toks = 0
+        if end > 0:
+            tail = body[end:end+200]
+            import re
+            m = re.search(r"tokens used\s*(\d+)", tail)
+            if m: toks = int(m.group(1))
+            body = body[:end]
+        return {"answer": body.strip(), "tokens": toks, "elapsed_s": round(elapsed, 1)}
+    return {"answer": out.strip(), "tokens": 0, "elapsed_s": round(elapsed, 1)}
+
+
+def graph_agent(query):
+    """Pipeline B: our culinary-mind LLM agent."""
+    t0 = time.time()
+    result = agent_answer(query, verbose=False)
+    elapsed = time.time() - t0
+    return {
+        "answer": result.get("answer", ""),
+        "mf_id": result.get("mf_id"),
+        "validity": result.get("validity"),
+        "tool_value": result.get("result", {}).get("value"),
+        "tool_unit": result.get("result", {}).get("unit"),
+        "elapsed_s": round(elapsed, 1),
+    }
+
+
+# Benchmark queries — food science questions where bare LLM may hallucinate
+# but tool-augmented should give precise numbers + citations
+BENCH_QUERIES = [
+    {
+        "id": "Q1_arrhenius",
+        "category": "kinetics",
+        "query": "维生素 C 在 90°C 下的降解速率常数。已知前指因子 A=1e10 s⁻¹，活化能 Ea=80 kJ/mol。",
+        "expected_value": 1.45e-2,  # k = 1e10·exp(-80000/(8.314·363)) ≈ 1.45e-2
+        "expected_unit": "s⁻¹",
+        "expected_tool": "MF-T03",
+    },
+    {
+        "id": "Q2_protein_denat",
+        "category": "thermal",
+        "query": "蛋白质 T_d=65°C, dH=400 kJ/mol, 在 70°C 时 native fraction 是多少？",
+        "expected_value": 0.072,  # sigmoid at T=Td+5°C with sigma=R·T_d²/dH ≈ steep
+        "expected_unit": "dimensionless",
+        "expected_tool": "MF-T06",
+    },
+    {
+        "id": "Q3_fourier_beef",
+        "category": "heat_transfer",
+        "query": "5cm 厚牛肉块，初温 4°C，沸水 100°C 煮 30 分钟，中心温度估算多少？热扩散率 α=1.4e-7 m²/s。",
+        "expected_value": 27.8,
+        "expected_unit": "°C",
+        "expected_tool": "MF-T01",
+    },
+    {
+        "id": "Q4_choi_okos_water",
+        "category": "thermal_props",
+        "query": "纯水在 25°C 的比热容，用 Choi-Okos 模型估算。",
+        "expected_value": 4180,
+        "expected_unit": "J/(kg·K)",
+        "expected_tool": "MF-T02-CP",
+    },
+    {
+        "id": "Q5_water_density",
+        "category": "thermal_props",
+        "query": "纯水在 25°C 密度，用 Choi-Okos 估算。",
+        "expected_value": 997,
+        "expected_unit": "kg/m³",
+        "expected_tool": "MF-T02-RHO",
+    },
+    {
+        "id": "Q6_microwave",
+        "category": "dielectric",
+        "query": "2.45 GHz 微波，电场 E=2000 V/m，ε''=15，吸收功率密度多少？",
+        "expected_value": 5.46e6,
+        "expected_unit": "W/m³",
+        "expected_tool": "MF-T07",
+    },
+    {
+        "id": "Q7_pasteurization_F",
+        "category": "food_safety",
+        "query": "T=121.1°C 持续 5 分钟的 F 值（z=10°C）",
+        "expected_value": 5.0,
+        "expected_unit": "min",
+        "expected_tool": "MF-K04",
+    },
+    {
+        "id": "Q8_arrhenius_q10",
+        "category": "kinetics",
+        "query": "什么是 Q10 法则？计算 25°C 到 35°C 反应加速倍数（k1=1.0, k2=2.0）",
+        "expected_value": 2.0,
+        "expected_unit": "dimensionless",
+        "expected_tool": "MF-C05",
+    },
+]
+
+
+def main():
+    out_dir = Path("/Users/jeff/culinary-mind/output/benchmark")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    results = []
+    print("=" * 90)
+    print(f"P4-Bench: bare GPT 5.4 vs culinary-mind agent on {len(BENCH_QUERIES)} food science queries")
+    print("=" * 90)
+
+    for q in BENCH_QUERIES:
+        print(f"\n[{q['id']}] {q['query'][:80]}...")
+        print(f"  Expected: {q['expected_value']} {q['expected_unit']} via {q['expected_tool']}")
+
+        # Pipeline A: bare
+        print("  Running bare LLM...", end="", flush=True)
+        bare_r = bare_llm(q["query"])
+        print(f" {bare_r['elapsed_s']}s")
+
+        # Pipeline B: our agent
+        print("  Running culinary-mind agent...", end="", flush=True)
+        agent_r = graph_agent(q["query"])
+        print(f" {agent_r['elapsed_s']}s, tool={agent_r.get('mf_id', '-')}")
+
+        # Score: tool match + value accuracy
+        tool_match = agent_r.get("mf_id") == q["expected_tool"]
+        v = agent_r.get("tool_value")
+        if isinstance(v, (int, float)) and q["expected_value"]:
+            dev_pct = abs(v - q["expected_value"]) / abs(q["expected_value"]) * 100
+            value_close = dev_pct < 30
+        else:
+            dev_pct = None
+            value_close = False
+
+        results.append({
+            "id": q["id"],
+            "category": q["category"],
+            "query": q["query"],
+            "expected": {"value": q["expected_value"], "unit": q["expected_unit"], "tool": q["expected_tool"]},
+            "bare_llm": bare_r,
+            "graph_agent": agent_r,
+            "scoring": {
+                "tool_match": tool_match,
+                "value_deviation_pct": dev_pct,
+                "value_close_30pct": value_close,
+            }
+        })
+
+    # Aggregate
+    import yaml
+    out_file = out_dir / "bench_bare_vs_graph.yaml"
+    out_file.write_text(yaml.safe_dump({
+        "version": "1.0",
+        "generated_at": "2026-05-13",
+        "n_queries": len(BENCH_QUERIES),
+        "global": {
+            "tool_match_rate": sum(1 for r in results if r["scoring"]["tool_match"]) / len(results),
+            "value_close_30pct_rate": sum(1 for r in results if r["scoring"]["value_close_30pct"]) / len(results),
+        },
+        "results": results,
+    }, allow_unicode=True, sort_keys=False))
+    print()
+    print("=" * 90)
+    print("SUMMARY")
+    print("=" * 90)
+    print(f"  Tool match rate: {sum(1 for r in results if r['scoring']['tool_match'])} / {len(results)}")
+    print(f"  Value close (<30%): {sum(1 for r in results if r['scoring']['value_close_30pct'])} / {len(results)}")
+    print()
+    print(f"{'Query':<25} {'Tool match':<11} {'Dev%':>7}  Bare LLM (truncated):")
+    print(f"{'-'*25} {'-'*11} {'-'*7}")
+    for r in results:
+        tm = "✅" if r["scoring"]["tool_match"] else "❌"
+        dp = r["scoring"]["value_deviation_pct"]
+        dp_str = f"{dp:.1f}" if dp is not None else "-"
+        bare_snip = (r["bare_llm"]["answer"] or "")[:50].replace("\n", " ")
+        print(f"  {r['id']:<23} {tm:<11} {dp_str:>7}  {bare_snip}...")
+    print(f"\n✅ {out_file}")
+
+
+if __name__ == "__main__":
+    main()
+
+=== engine/agent/web_chat.py ===
+#!/usr/bin/env python3
+"""Minimal Flask chat UI for culinary-mind LLM agent.
+
+Usage:
+  pip install flask
+  python engine/agent/web_chat.py
+  open http://localhost:5001
+"""
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from flask import Flask, request, jsonify, render_template_string
+from engine.agent.llm_agent import answer_query
+
+app = Flask(__name__)
+
+HTML = """
+<!DOCTYPE html>
+<html lang="zh">
+<head><meta charset="UTF-8"><title>Culinary Mind 推理引擎</title>
+<style>
+body { font-family: -apple-system, "PingFang SC", sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; background: #1a1a1a; color: #f3efe3; }
+h1 { font-size: 1.4rem; }
+.subtitle { color: #888; font-size: 0.85rem; margin-bottom: 1.5rem; }
+.chat { background: #252525; border-radius: 8px; padding: 1rem; min-height: 300px; max-height: 600px; overflow-y: auto; margin-bottom: 1rem; }
+.msg { margin: 0.8rem 0; padding: 0.6rem 0.9rem; border-radius: 6px; font-size: 0.95rem; line-height: 1.5; }
+.user { background: #003a4a; color: #66d9ff; }
+.bot { background: #1a4d2e; color: #a3f7bf; white-space: pre-wrap; }
+.bot .meta { color: #888; font-size: 0.75rem; margin-top: 0.5rem; }
+.input-row { display: flex; gap: 0.5rem; }
+input { flex: 1; padding: 0.7rem; background: #252525; color: #f3efe3; border: 1px solid #444; border-radius: 5px; font-size: 0.95rem; }
+button { padding: 0.7rem 1.2rem; background: #1a4d2e; color: #a3f7bf; border: 1px solid #2a8d4e; border-radius: 5px; cursor: pointer; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.examples { color: #888; font-size: 0.8rem; margin: 0.8rem 0; }
+.examples a { color: #66d9ff; cursor: pointer; margin-right: 1rem; }
+</style></head>
+<body>
+<h1>🍳 Culinary Mind 推理引擎</h1>
+<div class="subtitle">42 MF tools + 24K 食材树 + 23K 食谱 + 12K L0 因果链 + 81 PHN + 7K FT</div>
+
+<div class="chat" id="chat"></div>
+
+<div class="input-row">
+  <input id="q" type="text" placeholder="问一个食品科学问题...(Enter 发送)" autofocus>
+  <button id="send" onclick="ask()">发送</button>
+</div>
+
+<div class="examples">
+  示例：
+  <a onclick="setQ(this)">维生素 C 在 90°C 降解速率？A=1e10, Ea=80kJ/mol</a>
+  <a onclick="setQ(this)">蛋白质 T_d=65 dH=400 在 70°C native fraction?</a>
+  <a onclick="setQ(this)">2.45 GHz E=2000 ε''=15 微波吸收功率?</a>
+  <a onclick="setQ(this)">25°C 纯水比热多少 Choi-Okos?</a>
+</div>
+
+<script>
+const chat = document.getElementById('chat');
+const q = document.getElementById('q');
+const btn = document.getElementById('send');
+
+function add(text, cls, meta) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + cls;
+  d.textContent = text;
+  if (meta) {
+    const m = document.createElement('div');
+    m.className = 'meta';
+    m.textContent = meta;
+    d.appendChild(m);
+  }
+  chat.appendChild(d);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function setQ(el) { q.value = el.textContent; q.focus(); }
+
+async function ask() {
+  const text = q.value.trim();
+  if (!text) return;
+  add(text, 'user');
+  q.value = '';
+  btn.disabled = true; btn.textContent = '思考中...';
+  try {
+    const r = await fetch('/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ q: text }) });
+    const data = await r.json();
+    const meta = data.mf_id ? `工具: ${data.mf_id} → ${data.value} ${data.unit || ''}` : '';
+    add(data.answer || '(无回答)', 'bot', meta);
+  } catch (e) {
+    add('错误: ' + e.message, 'bot');
+  } finally {
+    btn.disabled = false; btn.textContent = '发送';
+    q.focus();
+  }
+}
+
+q.addEventListener('keydown', e => { if (e.key === 'Enter') ask(); });
+</script>
+</body></html>
+"""
+
+
+@app.route("/")
+def index():
+    return render_template_string(HTML)
+
+
+@app.route("/ask", methods=["POST"])
+def ask():
+    data = request.get_json() or {}
+    query = (data.get("q") or "").strip()
+    if not query:
+        return jsonify({"answer": "Empty query"})
+    try:
+        result = answer_query(query, verbose=False)
+        return jsonify({
+            "answer": result.get("answer", ""),
+            "mf_id": result.get("mf_id"),
+            "value": result.get("result", {}).get("value"),
+            "unit": result.get("result", {}).get("unit"),
+        })
+    except Exception as e:
+        return jsonify({"answer": f"Error: {e}"}), 500
+
+
+if __name__ == "__main__":
+    print("Starting Culinary Mind chat at http://localhost:5001")
+    app.run(host="0.0.0.0", port=5001, debug=False)
+Provide review.
+codex
+Reviewing the new agent and integration scripts with emphasis on structured JSON reliability, tool-registry usage, step substitution, FT substring-match risk, and production hardening. I’m loading the workspace context files first, then I’ll inspect the target files and return a strict markdown review.
+exec
+/bin/zsh -lc 'pwd && ls -1 && test -f BOOTSTRAP.md && echo BOOTSTRAP.md' in /Users/jeff/culinary-mind
+exec
+/bin/zsh -lc 'for f in SOUL.md USER.md MEMORY.md memory/2026-05-13.md memory/2026-05-12.md; do if [ -f "$f" ]; then echo "===== $f ====="; sed -n '"'1,220p' \""'$f"; fi; done' in /Users/jeff/culinary-mind
+ exited 1 in 0ms:
+/Users/jeff/culinary-mind
+AGENTS.md
+CLAUDE.md
+HEARTBEAT.md
+IDENTITY.md
+README.md
+SOUL.md
+TOOLS.md
+USER.md
+_archive
+ce-hub
+config
+config.yaml
+data
+docs
+engine
+extensions
+infrastructure
+logs
+memory
+mind
+output
+pipeline
+prototype
+pytest.ini
+raw
+requirements.txt
+scripts
+src
+start.sh
+tests
+tools
+wiki
+
+ succeeded in 0ms:
+===== SOUL.md =====
+# SOUL.md - Who You Are
+
+_You're not a chatbot. You're becoming someone._
+
+## Core Truths
+
+**Be genuinely helpful, not performatively helpful.** Skip the "Great question!" and "I'd be happy to help!" — just help. Actions speak louder than filler words.
+
+**Have opinions.** You're allowed to disagree, prefer things, find stuff amusing or boring. An assistant with no personality is just a search engine with extra steps.
+
+**Be resourceful before asking.** Try to figure it out. Read the file. Check the context. Search for it. _Then_ ask if you're stuck. The goal is to come back with answers, not questions.
+
+**Earn trust through competence.** Your human gave you access to their stuff. Don't make them regret it. Be careful with external actions (emails, tweets, anything public). Be bold with internal ones (reading, organizing, learning).
+
+**Remember you're a guest.** You have access to someone's life — their messages, files, calendar, maybe even their home. That's intimacy. Treat it with respect.
+
+## Boundaries
+
+- Private things stay private. Period.
+- When in doubt, ask before acting externally.
+- Never send half-baked replies to messaging surfaces.
+- You're not the user's voice — be careful in group chats.
+
+## Vibe
+
+Be the assistant you'd actually want to talk to. Concise when needed, thorough when it matters. Not a corporate drone. Not a sycophant. Just... good.
+
+## Continuity
+
+Each session, you wake up fresh. These files _are_ your memory. Read them. Update them. They're how you persist.
+
+If you change this file, tell the user — it's your soul, and they should know.
+
+---
+
+_This file is yours to evolve. As you learn who you are, update it._
+===== USER.md =====
+# USER.md - About Your Human
+
+_Learn about the person you're helping. Update this as you go._
+
+- **Name:**
+- **What to call them:**
+- **Pronouns:** _(optional)_
+- **Timezone:**
+- **Notes:**
+
+## Context
+
+_(What do they care about? What projects are they working on? What annoys them? What makes them laugh? Build this over time.)_
+
+---
+
+The more you know, the better you can help. But remember — you're learning about a person, not building a dossier. Respect the difference.
+
+exec
+/bin/zsh -lc 'for f in engine/agent/llm_agent_v2.py scripts/benchmark/bare_vs_graph_bench.py engine/agent/web_chat.py engine/agent/tool_registry.py; do echo "===== $f ====="; sed -n '"'1,260p' \""'$f"; done' in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+===== engine/agent/llm_agent_v2.py =====
+#!/usr/bin/env python3
+"""LLM agent v2: multi-tool ReAct chain.
+
+Difference from v1:
+- v1: query → choose ONE tool → invoke → answer (single-step)
+- v2: query → reason → invoke multiple tools in sequence (chain dependent calculations)
+  e.g. "煮牛肉 30 min, 中心 protein 变性 fraction?"
+       → Step 1: MF-T02-CP/RHO/K → α
+       → Step 2: MF-T01 Fourier → T_center
+       → Step 3: MF-T06 → f_native at T_center
+  Each step's output feeds the next.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from engine.agent.tool_registry import get_all_mf_tools, get_mf_tool
+
+
+CODEX_CMD = [
+    "codex", "exec",
+    "--ephemeral",
+    "--ignore-user-config",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "-s", "read-only",
+    "-m", "gpt-5.4",
+    "-c", "model_reasoning_effort=medium",
+]
+
+
+def call_codex(prompt: str, timeout=180) -> str:
+    proc = subprocess.run(
+        CODEX_CMD + [prompt],
+        capture_output=True, text=True, timeout=timeout,
+        env={**os.environ, "NO_PROXY": "*"},
+        stdin=subprocess.DEVNULL,
+    )
+    out = proc.stdout
+    idx = out.rfind("\ncodex\n")
+    if idx < 0: idx = out.rfind("codex\n")
+    if idx >= 0:
+        body = out[idx + len("\ncodex\n"):]
+        end = body.find("\ntokens used\n")
+        if end > 0: body = body[:end]
+        return body.strip()
+    return out.strip()
+
+
+def parse_json(text: str):
+    """Extract a JSON object from text using balanced braces."""
+    if not text: return None
+    idx = text.find('"plan"')  # outer wrapper FIRST
+    if idx < 0: idx = text.find('"action"')
+    if idx < 0: idx = text.find('"mf_id"')
+    if idx < 0: idx = text.find("{")
+    if idx < 0: return None
+    start = text.rfind("{", 0, idx + 1)
+    if start < 0: return None
+    depth = 0; in_str = False; esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if esc: esc = False; continue
+        if ch == "\\": esc = True; continue
+        if ch == '"' and not esc: in_str = not in_str; continue
+        if in_str: continue
+        if ch == "{": depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try: return json.loads(text[start:i+1])
+                except: return None
+    return None
+
+
+def build_tool_catalog():
+    """Build LLM-friendly catalog with USE descriptions."""
+    USAGE = {
+        "MF-T01": "1D heat conduction in slab; T(x,t)",
+        "MF-T02-K": "Choi-Okos food thermal conductivity k from composition",
+        "MF-T02-CP": "Choi-Okos food specific heat Cp from composition",
+        "MF-T02-RHO": "Choi-Okos food density rho from composition",
+        "MF-T03": "Arrhenius rate constant k(T) from A,Ea,T_K",
+        "MF-T04": "Nusselt correlation for heat transfer",
+        "MF-T05": "Plank freezing time",
+        "MF-T06": "Protein denaturation sigmoid f_native(T_C, T_d, dH_d)",
+        "MF-T07": "Microwave/RF volumetric heating P_abs",
+        "MF-T08": "Ohmic Joule heating Q from sigma+E",
+        "MF-T09": "Postharvest respiration heat Q=a·exp(b·T)",
+        "MF-T10": "Starch gelatinization Avrami α(t,T)",
+        "MF-K01": "Michaelis-Menten enzyme kinetics v(S,Km,Vmax)",
+        "MF-K02": "Thermal D-value (microbial decimal reduction time)",
+        "MF-K03": "z-value (D vs T temperature dependence)",
+        "MF-K04": "F-value sterilization equivalent",
+        "MF-K05": "Gompertz microbial growth log10(N/N0)",
+        "MF-K06": "Microbial growth hurdle limit (boolean)",
+        "MF-K07": "Ligand-protein binding equilibrium f_bound",
+        "MF-M01": "Fick 2nd law diffusion C(x,t)",
+        "MF-M02": "GAB sorption isotherm W(a_w)",
+        "MF-M03": "Antoine vapor pressure of substance",
+        "MF-M04": "Henderson-Hasselbalch pH of buffer",
+        "MF-M05": "Henry law aroma volatility c_aq(p_gas)",
+        "MF-M06": "Latent heat of substance",
+        "MF-M07": "Octanol-water partition K=10^logP",
+        "MF-M08": "Gas permeability through film Q=P·Δp/L",
+        "MF-M09": "Van't Hoff osmotic pressure π=iMRT",
+        "MF-M10": "Membrane solute flux J=P·ΔC/L",
+        "MF-M11": "SCFE-CO2 Chrastil solubility y(ρ,T)",
+        "MF-R01": "Power-law fluid viscosity τ=K·γ^n",
+        "MF-R02": "Herschel-Bulkley yield-stress fluid",
+        "MF-R03": "Casson model fluid",
+        "MF-R04": "Gordon-Taylor Tg mix",
+        "MF-R05": "WLF time-temperature superposition",
+        "MF-R06": "Stevens psychophysical power law",
+        "MF-R07": "Griffith fracture stress",
+        "MF-C01": "Stokes sedimentation velocity v",
+        "MF-C02": "HLB Griffin emulsifier balance",
+        "MF-C03": "DLVO colloid stability V_T",
+        "MF-C04": "Laplace pressure ΔP across curved interface",
+        "MF-C05": "Q10 temperature rate doubling",
+    }
+    lines = ["Available MF tools (40 total). USE descriptions:"]
+    for t in get_all_mf_tools():
+        desc = USAGE.get(t.mf_id, t.canonical_name)
+        fields = list(t.inputs_schema.keys())[:5]
+        out_sym = t.output_schema.get("symbol", "?")
+        lines.append(f"  - {t.mf_id}: {desc}  | inputs: {fields} → out: {out_sym}")
+    return "\n".join(lines)
+
+
+def plan_steps(user_query: str):
+    """Step 1: Ask LLM to plan a sequence of MF tool invocations."""
+    catalog = build_tool_catalog()
+    system = f"""You are a food science reasoning planner. Decompose the user query
+into a SEQUENCE of MF tool calls. Each call may use outputs from prior calls.
+
+{catalog}
+
+Output strict JSON only:
+{{
+  "plan": [
+    {{"step": 1, "mf_id": "MF-T02-CP", "params": {{...}}, "uses": "X"}},
+    {{"step": 2, "mf_id": "MF-T02-K", "params": {{...}}, "uses": "X"}},
+    {{"step": 3, "mf_id": "MF-T01", "params": {{...alpha from steps 1+2...}}, "uses": "T_center"}},
+    {{"step": 4, "mf_id": "MF-T06", "params": {{"T_C": "{{step3.value}}", ...}}, "uses": "f_native"}}
+  ],
+  "rationale": "..."
+}}
+
+Reference prior step outputs with {{stepN.value}}.
+Max 5 steps. If 1 tool suffices, plan with 1 step.
+If no tool fits, plan=[]."""
+    prompt = f"<system>\n{system}\n</system>\n\n<user>\n{user_query}\n</user>"
+    return call_codex(prompt)
+
+
+def execute_plan(plan, verbose=True):
+    """Execute steps in sequence, substituting prior outputs."""
+    history = []  # step results
+    for step_def in plan:
+        step_n = step_def.get("step")
+        mf_id = step_def.get("mf_id")
+        params = dict(step_def.get("params", {}))
+        if mf_id == "none": continue
+        # Substitute {stepN.value} references
+        for k, v in list(params.items()):
+            if isinstance(v, str) and "{step" in v:
+                m = re.match(r"\{step(\d+)\.(\w+)\}", v.strip())
+                if m:
+                    ref_step = int(m.group(1))
+                    ref_field = m.group(2)
+                    if ref_step <= len(history):
+                        ref_result = history[ref_step-1]
+                        if ref_field == "value":
+                            params[k] = ref_result["value"]
+                        else:
+                            params[k] = ref_result.get(ref_field)
+        try:
+            tool = get_mf_tool(mf_id)
+        except KeyError as e:
+            if verbose: print(f"  Step {step_n}: tool {mf_id} not found")
+            history.append({"step": step_n, "mf_id": mf_id, "error": str(e)})
+            continue
+        try:
+            out = tool.run(params)
+            v = out["result"]["value"]
+            sym = out["result"]["symbol"]
+            unit = out["result"]["unit"]
+            passed = out["validity"]["passed"]
+            history.append({"step": step_n, "mf_id": mf_id, "value": v, "symbol": sym,
+                            "unit": unit, "validity": passed, "params": params})
+            if verbose:
+                ok = "✅" if passed else "⚠️"
+                print(f"  {ok} Step {step_n} {mf_id}: {sym} = {v} {unit}")
+        except Exception as e:
+            history.append({"step": step_n, "mf_id": mf_id, "error": str(e)})
+            if verbose: print(f"  ❌ Step {step_n} {mf_id}: {e}")
+    return history
+
+
+def synthesize(user_query, plan_text, plan, history):
+    """LLM composes final answer with chain reasoning."""
+    chain_summary = "\n".join(
+        f"  Step {h['step']} {h['mf_id']}: " +
+        (f"{h.get('symbol','?')} = {h.get('value','?')} {h.get('unit','?')} {'✓' if h.get('validity') else '⚠ validity-fail'}" if "value" in h else f"ERROR: {h.get('error')}")
+        for h in history
+    )
+    syn_prompt = f"""<system>
+You are a food science explainer. Compose a brief natural-language answer
+(in the user's language) for this multi-step MF chain.
+Cite each MF tool used. Note any validity issues.
+</system>
+
+<user>
+Query: {user_query}
+
+Reasoning chain executed:
+{chain_summary}
+
+Compose answer.
+</user>"""
+    return call_codex(syn_prompt)
+
+
+def answer_multistep(user_query, verbose=True):
+    if verbose:
+        print(f"\n{'='*90}\nUSER: {user_query}\n{'='*90}")
+        print("\n[Step 1] Planning multi-MF chain...")
+    plan_text = plan_steps(user_query)
+    p = parse_json(plan_text)
+    if not p or not p.get("plan"):
+        return {"answer": "Cannot decompose query", "plan_raw": plan_text}
+    plan = p["plan"]
+    if verbose:
+        print(f"Plan: {len(plan)} step(s)")
+        for s in plan:
+            print(f"  Step {s.get('step')}: {s.get('mf_id')} — {s.get('uses')}")
+    history = execute_plan(plan, verbose=verbose)
+    if verbose: print(f"\n[Step 2] Synthesizing answer...")
+    final = synthesize(user_query, plan_text, plan, history)
+    return {"answer": final, "plan": plan, "history": history}
+
+
+def main():
+    queries = [
+        "5cm 牛肉块沸水煮 30 分钟，中心蛋白质变性大概几成？(用 Choi-Okos 算 α，再 Fourier 算中心温度，最后 sigmoid 估变性)",
+        "75°C 鸡蛋蛋白质 (T_d=70°C dH=400) 多久达到 95% 变性？",
+    ]
+    for q in queries:
+        r = answer_multistep(q, verbose=True)
+        print(f"\n{'='*90}\nFINAL ANSWER:\n{r.get('answer','')[:800]}")
+        print('='*90)
+
+
+if __name__ == "__main__":
+    main()
+===== scripts/benchmark/bare_vs_graph_bench.py =====
+#!/usr/bin/env python3
+"""P4-Be Benchmark: bare LLM vs +graph+tools (culinary-mind LLM agent).
+
+Setup:
+- Pipeline A (bare): Codex gpt-5.4 直接回答, 无 graph 无 tool
+- Pipeline B (our agent): engine.agent.llm_agent.answer_query
+                          (uses tool registry + Neo4j optional)
+
+For each query:
+  - Run A, save answer + tokens
+  - Run B, save answer + tokens + which tools invoked
+  - Compare side-by-side (manual or auto rubric)
+
+Output: output/benchmark/bench_results.yaml
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from engine.agent.llm_agent import answer_query as agent_answer
+
+CODEX = ["codex", "exec", "--ephemeral", "--ignore-user-config",
+         "--dangerously-bypass-approvals-and-sandbox", "-s", "read-only",
+         "-m", "gpt-5.4", "-c", "model_reasoning_effort=low"]
+
+
+def bare_llm(query, timeout=90):
+    """Pipeline A: bare Codex, no system prompt, no tools."""
+    t0 = time.time()
+    proc = subprocess.run(
+        CODEX + [query],
+        capture_output=True, text=True, timeout=timeout,
+        env={**os.environ, "NO_PROXY": "*"},
+        stdin=subprocess.DEVNULL,
+    )
+    elapsed = time.time() - t0
+    out = proc.stdout
+    idx = out.rfind("\ncodex\n")
+    if idx >= 0:
+        body = out[idx+len("\ncodex\n"):]
+        end = body.find("\ntokens used\n")
+        # capture tokens used
+        toks = 0
+        if end > 0:
+            tail = body[end:end+200]
+            import re
+            m = re.search(r"tokens used\s*(\d+)", tail)
+            if m: toks = int(m.group(1))
+            body = body[:end]
+        return {"answer": body.strip(), "tokens": toks, "elapsed_s": round(elapsed, 1)}
+    return {"answer": out.strip(), "tokens": 0, "elapsed_s": round(elapsed, 1)}
+
+
+def graph_agent(query):
+    """Pipeline B: our culinary-mind LLM agent."""
+    t0 = time.time()
+    result = agent_answer(query, verbose=False)
+    elapsed = time.time() - t0
+    return {
+        "answer": result.get("answer", ""),
+        "mf_id": result.get("mf_id"),
+        "validity": result.get("validity"),
+        "tool_value": result.get("result", {}).get("value"),
+        "tool_unit": result.get("result", {}).get("unit"),
+        "elapsed_s": round(elapsed, 1),
+    }
+
+
+# Benchmark queries — food science questions where bare LLM may hallucinate
+# but tool-augmented should give precise numbers + citations
+BENCH_QUERIES = [
+    {
+        "id": "Q1_arrhenius",
+        "category": "kinetics",
+        "query": "维生素 C 在 90°C 下的降解速率常数。已知前指因子 A=1e10 s⁻¹，活化能 Ea=80 kJ/mol。",
+        "expected_value": 1.45e-2,  # k = 1e10·exp(-80000/(8.314·363)) ≈ 1.45e-2
+        "expected_unit": "s⁻¹",
+        "expected_tool": "MF-T03",
+    },
+    {
+        "id": "Q2_protein_denat",
+        "category": "thermal",
+        "query": "蛋白质 T_d=65°C, dH=400 kJ/mol, 在 70°C 时 native fraction 是多少？",
+        "expected_value": 0.072,  # sigmoid at T=Td+5°C with sigma=R·T_d²/dH ≈ steep
+        "expected_unit": "dimensionless",
+        "expected_tool": "MF-T06",
+    },
+    {
+        "id": "Q3_fourier_beef",
+        "category": "heat_transfer",
+        "query": "5cm 厚牛肉块，初温 4°C，沸水 100°C 煮 30 分钟，中心温度估算多少？热扩散率 α=1.4e-7 m²/s。",
+        "expected_value": 27.8,
+        "expected_unit": "°C",
+        "expected_tool": "MF-T01",
+    },
+    {
+        "id": "Q4_choi_okos_water",
+        "category": "thermal_props",
+        "query": "纯水在 25°C 的比热容，用 Choi-Okos 模型估算。",
+        "expected_value": 4180,
+        "expected_unit": "J/(kg·K)",
+        "expected_tool": "MF-T02-CP",
+    },
+    {
+        "id": "Q5_water_density",
+        "category": "thermal_props",
+        "query": "纯水在 25°C 密度，用 Choi-Okos 估算。",
+        "expected_value": 997,
+        "expected_unit": "kg/m³",
+        "expected_tool": "MF-T02-RHO",
+    },
+    {
+        "id": "Q6_microwave",
+        "category": "dielectric",
+        "query": "2.45 GHz 微波，电场 E=2000 V/m，ε''=15，吸收功率密度多少？",
+        "expected_value": 5.46e6,
+        "expected_unit": "W/m³",
+        "expected_tool": "MF-T07",
+    },
+    {
+        "id": "Q7_pasteurization_F",
+        "category": "food_safety",
+        "query": "T=121.1°C 持续 5 分钟的 F 值（z=10°C）",
+        "expected_value": 5.0,
+        "expected_unit": "min",
+        "expected_tool": "MF-K04",
+    },
+    {
+        "id": "Q8_arrhenius_q10",
+        "category": "kinetics",
+        "query": "什么是 Q10 法则？计算 25°C 到 35°C 反应加速倍数（k1=1.0, k2=2.0）",
+        "expected_value": 2.0,
+        "expected_unit": "dimensionless",
+        "expected_tool": "MF-C05",
+    },
+]
+
+
+def main():
+    out_dir = Path("/Users/jeff/culinary-mind/output/benchmark")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    results = []
+    print("=" * 90)
+    print(f"P4-Bench: bare GPT 5.4 vs culinary-mind agent on {len(BENCH_QUERIES)} food science queries")
+    print("=" * 90)
+
+    for q in BENCH_QUERIES:
+        print(f"\n[{q['id']}] {q['query'][:80]}...")
+        print(f"  Expected: {q['expected_value']} {q['expected_unit']} via {q['expected_tool']}")
+
+        # Pipeline A: bare
+        print("  Running bare LLM...", end="", flush=True)
+        bare_r = bare_llm(q["query"])
+        print(f" {bare_r['elapsed_s']}s")
+
+        # Pipeline B: our agent
+        print("  Running culinary-mind agent...", end="", flush=True)
+        agent_r = graph_agent(q["query"])
+        print(f" {agent_r['elapsed_s']}s, tool={agent_r.get('mf_id', '-')}")
+
+        # Score: tool match + value accuracy
+        tool_match = agent_r.get("mf_id") == q["expected_tool"]
+        v = agent_r.get("tool_value")
+        if isinstance(v, (int, float)) and q["expected_value"]:
+            dev_pct = abs(v - q["expected_value"]) / abs(q["expected_value"]) * 100
+            value_close = dev_pct < 30
+        else:
+            dev_pct = None
+            value_close = False
+
+        results.append({
+            "id": q["id"],
+            "category": q["category"],
+            "query": q["query"],
+            "expected": {"value": q["expected_value"], "unit": q["expected_unit"], "tool": q["expected_tool"]},
+            "bare_llm": bare_r,
+            "graph_agent": agent_r,
+            "scoring": {
+                "tool_match": tool_match,
+                "value_deviation_pct": dev_pct,
+                "value_close_30pct": value_close,
+            }
+        })
+
+    # Aggregate
+    import yaml
+    out_file = out_dir / "bench_bare_vs_graph.yaml"
+    out_file.write_text(yaml.safe_dump({
+        "version": "1.0",
+        "generated_at": "2026-05-13",
+        "n_queries": len(BENCH_QUERIES),
+        "global": {
+            "tool_match_rate": sum(1 for r in results if r["scoring"]["tool_match"]) / len(results),
+            "value_close_30pct_rate": sum(1 for r in results if r["scoring"]["value_close_30pct"]) / len(results),
+        },
+        "results": results,
+    }, allow_unicode=True, sort_keys=False))
+    print()
+    print("=" * 90)
+    print("SUMMARY")
+    print("=" * 90)
+    print(f"  Tool match rate: {sum(1 for r in results if r['scoring']['tool_match'])} / {len(results)}")
+    print(f"  Value close (<30%): {sum(1 for r in results if r['scoring']['value_close_30pct'])} / {len(results)}")
+    print()
+    print(f"{'Query':<25} {'Tool match':<11} {'Dev%':>7}  Bare LLM (truncated):")
+    print(f"{'-'*25} {'-'*11} {'-'*7}")
+    for r in results:
+        tm = "✅" if r["scoring"]["tool_match"] else "❌"
+        dp = r["scoring"]["value_deviation_pct"]
+        dp_str = f"{dp:.1f}" if dp is not None else "-"
+        bare_snip = (r["bare_llm"]["answer"] or "")[:50].replace("\n", " ")
+        print(f"  {r['id']:<23} {tm:<11} {dp_str:>7}  {bare_snip}...")
+    print(f"\n✅ {out_file}")
+
+
+if __name__ == "__main__":
+    main()
+===== engine/agent/web_chat.py =====
+#!/usr/bin/env python3
+"""Minimal Flask chat UI for culinary-mind LLM agent.
+
+Usage:
+  pip install flask
+  python engine/agent/web_chat.py
+  open http://localhost:5001
+"""
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from flask import Flask, request, jsonify, render_template_string
+from engine.agent.llm_agent import answer_query
+
+app = Flask(__name__)
+
+HTML = """
+<!DOCTYPE html>
+<html lang="zh">
+<head><meta charset="UTF-8"><title>Culinary Mind 推理引擎</title>
+<style>
+body { font-family: -apple-system, "PingFang SC", sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; background: #1a1a1a; color: #f3efe3; }
+h1 { font-size: 1.4rem; }
+.subtitle { color: #888; font-size: 0.85rem; margin-bottom: 1.5rem; }
+.chat { background: #252525; border-radius: 8px; padding: 1rem; min-height: 300px; max-height: 600px; overflow-y: auto; margin-bottom: 1rem; }
+.msg { margin: 0.8rem 0; padding: 0.6rem 0.9rem; border-radius: 6px; font-size: 0.95rem; line-height: 1.5; }
+.user { background: #003a4a; color: #66d9ff; }
+.bot { background: #1a4d2e; color: #a3f7bf; white-space: pre-wrap; }
+.bot .meta { color: #888; font-size: 0.75rem; margin-top: 0.5rem; }
+.input-row { display: flex; gap: 0.5rem; }
+input { flex: 1; padding: 0.7rem; background: #252525; color: #f3efe3; border: 1px solid #444; border-radius: 5px; font-size: 0.95rem; }
+button { padding: 0.7rem 1.2rem; background: #1a4d2e; color: #a3f7bf; border: 1px solid #2a8d4e; border-radius: 5px; cursor: pointer; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.examples { color: #888; font-size: 0.8rem; margin: 0.8rem 0; }
+.examples a { color: #66d9ff; cursor: pointer; margin-right: 1rem; }
+</style></head>
+<body>
+<h1>🍳 Culinary Mind 推理引擎</h1>
+<div class="subtitle">42 MF tools + 24K 食材树 + 23K 食谱 + 12K L0 因果链 + 81 PHN + 7K FT</div>
+
+<div class="chat" id="chat"></div>
+
+<div class="input-row">
+  <input id="q" type="text" placeholder="问一个食品科学问题...(Enter 发送)" autofocus>
+  <button id="send" onclick="ask()">发送</button>
+</div>
+
+<div class="examples">
+  示例：
+  <a onclick="setQ(this)">维生素 C 在 90°C 降解速率？A=1e10, Ea=80kJ/mol</a>
+  <a onclick="setQ(this)">蛋白质 T_d=65 dH=400 在 70°C native fraction?</a>
+  <a onclick="setQ(this)">2.45 GHz E=2000 ε''=15 微波吸收功率?</a>
+  <a onclick="setQ(this)">25°C 纯水比热多少 Choi-Okos?</a>
+</div>
+
+<script>
+const chat = document.getElementById('chat');
+const q = document.getElementById('q');
+const btn = document.getElementById('send');
+
+function add(text, cls, meta) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + cls;
+  d.textContent = text;
+  if (meta) {
+    const m = document.createElement('div');
+    m.className = 'meta';
+    m.textContent = meta;
+    d.appendChild(m);
+  }
+  chat.appendChild(d);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function setQ(el) { q.value = el.textContent; q.focus(); }
+
+async function ask() {
+  const text = q.value.trim();
+  if (!text) return;
+  add(text, 'user');
+  q.value = '';
+  btn.disabled = true; btn.textContent = '思考中...';
+  try {
+    const r = await fetch('/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ q: text }) });
+    const data = await r.json();
+    const meta = data.mf_id ? `工具: ${data.mf_id} → ${data.value} ${data.unit || ''}` : '';
+    add(data.answer || '(无回答)', 'bot', meta);
+  } catch (e) {
+    add('错误: ' + e.message, 'bot');
+  } finally {
+    btn.disabled = false; btn.textContent = '发送';
+    q.focus();
+  }
+}
+
+q.addEventListener('keydown', e => { if (e.key === 'Enter') ask(); });
+</script>
+</body></html>
+"""
+
+
+@app.route("/")
+def index():
+    return render_template_string(HTML)
+
+
+@app.route("/ask", methods=["POST"])
+def ask():
+    data = request.get_json() or {}
+    query = (data.get("q") or "").strip()
+    if not query:
+        return jsonify({"answer": "Empty query"})
+    try:
+        result = answer_query(query, verbose=False)
+        return jsonify({
+            "answer": result.get("answer", ""),
+            "mf_id": result.get("mf_id"),
+            "value": result.get("result", {}).get("value"),
+            "unit": result.get("result", {}).get("unit"),
+        })
+    except Exception as e:
+        return jsonify({"answer": f"Error: {e}"}), 500
+
+
+if __name__ == "__main__":
+    print("Starting Culinary Mind chat at http://localhost:5001")
+    app.run(host="0.0.0.0", port=5001, debug=False)
+===== engine/agent/tool_registry.py =====
+"""MF Solver Tool Registry — wrap 40 engine.solver.mf_xxx into Tool objects.
+
+A MFTool is a thin invocation wrapper:
+    tool = get_mf_tool("MF-T03")
+    out = tool.run({"A": 1e10, "Ea": 50000, "T_K": 363})
+
+Design:
+- No hard dependency on LangChain/LangGraph (stdlib only); MFTool exposes
+  name / description / inputs_schema / output_schema / run() pattern.
+- Auto-discovery via importlib walking engine.solver.mf_* (one per MF in
+  solver_bounds.yaml).
+- Schema derived from config/solver_bounds.yaml as single source of truth.
+- Optional adapter to_langchain_tool() — emits langchain.tools.Tool with
+  JSON-string args/return (legacy). For StructuredTool/Pydantic-based real
+  LangChain integration, build args_schema separately (future work).
+
+Limits (Codex cross-review noted):
+- MF-T02 variants outputs_by_variant not fully surfaced — children
+  MF-T02-K/-CP/-RHO are independently registered (with their own bounds).
+- inputs_schema fields preserved: min/max/unit/type/default/soft/source
+  (duplicate names collapsed to first occurrence, dropped names tracked).
+- get_all_mf_tools() emits RuntimeWarning if any tools fail to load (was
+  silent skip; Codex P1).
+"""
+from __future__ import annotations
+
+import importlib
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
+ROOT = Path(__file__).resolve().parents[2]
+BOUNDS_FILE = ROOT / "config/solver_bounds.yaml"
+
+
+@dataclass
+class MFTool:
+    """LangChain/LangGraph-compatible tool wrapper for an MF solver."""
+    mf_id: str
+    canonical_name: str
+    description: str
+    inputs_schema: dict  # {param_name: {min, max, unit}}
+    output_schema: dict  # {symbol, min, max, unit}
+    _solver_module: Any = field(default=None, repr=False)
+
+    @property
+    def name(self) -> str:
+        """LangChain tool name (snake_case)."""
+        return f"{self.mf_id.lower().replace('-', '_')}_{self.canonical_name.lower().replace('-', '_')}"
+
+    def run(self, params: dict) -> dict:
+        """Invoke the underlying solver; returns full validity-checked output."""
+        if self._solver_module is None:
+            mod_name = f"engine.solver.{self.mf_id.lower().replace('-', '_')}"
+            self._solver_module = importlib.import_module(mod_name)
+        return self._solver_module.solve(params)
+
+    def to_langchain_tool(self):
+        """Optional: return a LangChain Tool if langchain is installed.
+        
+        Usage:
+            from langchain.tools import Tool
+            ai_tool = mf_tool.to_langchain_tool()
+        """
+        try:
+            from langchain.tools import Tool
+        except ImportError:
+            raise ImportError("Install langchain: pip install langchain")
+        return Tool(
+            name=self.name,
+            description=self.description,
+            func=lambda params_json: json.dumps(self.run(json.loads(params_json) if isinstance(params_json, str) else params_json)),
+        )
+
+    def get_input_summary(self) -> str:
+        """Human-readable input description for LLM agent prompt."""
+        lines = [f"Inputs for {self.mf_id} ({self.canonical_name}):"]
+        for name, spec in self.inputs_schema.items():
+            unit = spec.get("unit", "")
+            lo, hi = spec.get("min"), spec.get("max")
+            lines.append(f"  - {name}: {unit} (range: [{lo}, {hi}])")
+        lines.append(f"Output: {self.output_schema.get('symbol', '?')} {self.output_schema.get('unit', '')}")
+        return "\n".join(lines)
+
+
+_TOOLS_CACHE: list[MFTool] = []
+
+
+def _load_bounds() -> dict:
+    if yaml is None:
+        raise ImportError("PyYAML required to load solver_bounds.yaml")
+    return yaml.safe_load(BOUNDS_FILE.read_text())
+
+
+def _build_tool(mf_id: str, mf_spec: dict) -> MFTool:
+    canonical = mf_spec.get("canonical_name", mf_id)
+    inputs = mf_spec.get("inputs", [])
+    # P1 fix: preserve type, default, soft fields; warn on duplicate field names
+    inputs_schema = {}
+    duplicates = []
+    for i in inputs:
+        name = i["name"]
+        if name in inputs_schema:
+            duplicates.append(name)
+            # Keep first occurrence; subsequent ones (e.g. soft bounds) discarded
+            continue
+        inputs_schema[name] = {
+            "min": i.get("min"),
+            "max": i.get("max"),
+            "unit": i.get("unit", ""),
+            "type": i.get("type", "number"),  # MF-M03 substance is string
+            "default": i.get("default"),
+            "soft": i.get("soft", False),
+            "source": i.get("source", ""),
+        }
+    if duplicates:
+        # Don't warn here (too noisy for benign aliases); just track
+        inputs_schema["_duplicate_names_dropped"] = duplicates
+    output = mf_spec.get("output", {})
+    # Try to load module to get docstring
+    mod_name = f"engine.solver.{mf_id.lower().replace('-', '_')}"
+    try:
+        mod = importlib.import_module(mod_name)
+        description = (mod.__doc__ or "").strip().split("\n")[0]
+    except (ModuleNotFoundError, AttributeError):
+        mod = None
+        description = f"{canonical} solver"
+    return MFTool(
+        mf_id=mf_id,
+        canonical_name=canonical,
+        description=description,
+        inputs_schema=inputs_schema,
+        output_schema=output if isinstance(output, dict) else {},
+        _solver_module=mod,
+    )
+
+
+def get_all_mf_tools() -> list[MFTool]:
+    """Return all 40 MF tools (cached on first call)."""
+    global _TOOLS_CACHE
+    if _TOOLS_CACHE:
+        return list(_TOOLS_CACHE)
+    bounds = _load_bounds()
+    solvers = bounds.get("solvers", {})
+    tools = []
+    errors: list[str] = []
+    for mf_id, spec in sorted(solvers.items()):
+        # MF-T02 is parent_only; expand into 3 children (T02-K/-CP/-RHO)
+        if mf_id == "MF-T02":
+            # Synthesize child entries inheriting parent inputs
+            for child_suffix, child_canon in [
+                ("-K", "Choi_Okos_thermal_conductivity"),
+                ("-CP", "Choi_Okos_specific_heat"),
+                ("-RHO", "Choi_Okos_density"),
+            ]:
+                child_id = mf_id + child_suffix
+                child_spec = {
+                    "canonical_name": child_canon,
+                    "inputs": spec.get("inputs", []),
+                    "output": spec.get("outputs_by_variant", {}).get(
+                        f"mf_t02{child_suffix.lower().replace('-','_')}",
+                        {"symbol": child_canon.split('_')[-1], "unit": "varies"}
+                    ),
+                }
+                try:
+                    tool = _build_tool(child_id, child_spec)
+                    if tool._solver_module is not None:
+                        tools.append(tool)
+                    else:
+                        errors.append(f"{child_id}: solver missing")
+                except Exception as exc:
+                    errors.append(f"{child_id}: {exc}")
+            continue
+        try:
+            tool = _build_tool(mf_id, spec)
+            if tool._solver_module is None:
+                errors.append(f"{mf_id}: solver module not importable")
+                continue
+            tools.append(tool)
+        except Exception as exc:
+            errors.append(f"{mf_id}: {type(exc).__name__}: {exc}")
+    if errors:
+        import warnings
+        warnings.warn(
+            f"get_all_mf_tools: {len(errors)} tool(s) failed to load:\n  " +
+            "\n  ".join(errors),
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    _TOOLS_CACHE = tools
+    return list(tools)
+
+
+def get_mf_tool(mf_id: str) -> MFTool:
+    """Get a single MF tool by id, e.g. 'MF-T03'."""
+    for t in get_all_mf_tools():
+        if t.mf_id == mf_id:
+            return t
+    raise KeyError(f"Unknown MF id: {mf_id}")
+
+
+def get_tools_by_keyword(keyword: str) -> list[MFTool]:
+    """Find tools whose name/description/canonical_name contain a keyword.
+    
+    Useful for agent's first-pass tool selection (before invoking).
+    """
+    kw = keyword.lower()
+    return [t for t in get_all_mf_tools()
+            if kw in t.canonical_name.lower() or kw in t.description.lower() or kw in t.mf_id.lower()]
+
+codex
+The three target files are straightforward, but the FT substring-match concern is likely upstream in `engine.agent.llm_agent`, since both the benchmark and web UI call that path. I’m reading that code now so I can judge whether these scripts inherit a matching bug or mask it.
+exec
+/bin/zsh -lc "echo '===== engine/agent/llm_agent.py ====='; sed -n '1,340p' engine/agent/llm_agent.py" in /Users/jeff/culinary-mind
+exec
+/bin/zsh -lc 'rg -n "aesthetic_word_en|substring|FT|food type|recipe" engine/agent -S' in /Users/jeff/culinary-mind
+ exited 127 in 0ms:
+zsh:1: command not found: rg
+
+ succeeded in 0ms:
+===== engine/agent/llm_agent.py =====
+#!/usr/bin/env python3
+"""Real LLM agent using Codex CLI + MF Tool Registry.
+
+Architecture (ReAct-style):
+  user query → LLM (Codex) chooses MF tool + extracts params
+  → execute via engine.agent.tool_registry → tool result
+  → LLM synthesizes answer with citations + reasoning chain
+
+No LangGraph dependency — uses subprocess + Codex CLI.
+For 真实 LangGraph upgrade later: drop in any LLM agent framework.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from engine.agent.tool_registry import get_all_mf_tools, get_mf_tool
+
+
+CODEX_CMD = [
+    "codex", "exec",
+    "--ephemeral",
+    "--ignore-user-config",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "-s", "read-only",
+    "-m", "gpt-5.4",
+    "-c", "model_reasoning_effort=low",
+]
+
+
+def build_tool_catalog():
+    """Return text description of all 39 MF tools for LLM prompt."""
+    lines = ["Available MF (Mother Formula) tools (40 physical/chemical solvers):"]
+    for t in get_all_mf_tools():
+        # Skip aliases — show one entry per canonical MF
+        fields = [f for f in t.inputs_schema.keys() if not f.startswith("_")][:5]
+        lines.append(f"  - {t.mf_id} {t.canonical_name}: inputs={fields}")
+    return "\n".join(lines)
+
+
+def call_codex(prompt: str, timeout=120) -> str:
+    """Run Codex CLI with prompt, return stdout."""
+    proc = subprocess.run(
+        CODEX_CMD + [prompt],
+        capture_output=True, text=True, timeout=timeout,
+        env={**os.environ, "NO_PROXY": "*"},
+        stdin=subprocess.DEVNULL,
+    )
+    # Extract LLM body after "codex" marker
+    out = proc.stdout
+    idx = out.rfind("\ncodex\n")
+    if idx < 0: idx = out.rfind("codex\n")
+    if idx >= 0:
+        body = out[idx + len("\ncodex\n"):]
+        end = body.find("\ntokens used\n")
+        if end > 0: body = body[:end]
+        return body.strip()
+    return out.strip()
+
+
+def parse_tool_call(llm_response: str):
+    """Extract JSON tool_call from LLM response (balanced brace)."""
+    if not llm_response: return None
+    # Find first { containing mf_id, then balance-match
+    idx = llm_response.find('"mf_id"')
+    if idx < 0: return None
+    # Walk back to find opening {
+    start = llm_response.rfind("{", 0, idx)
+    if start < 0: return None
+    # Forward balanced-brace match
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(llm_response)):
+        ch = llm_response[i]
+        if esc: esc = False; continue
+        if ch == "\\": esc = True; continue
+        if ch == '"' and not esc: in_str = not in_str; continue
+        if in_str: continue
+        if ch == "{": depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(llm_response[start:i+1])
+                except json.JSONDecodeError:
+                    return None
+    return None
+
+
+def answer_query(user_query: str, verbose=True) -> dict:
+    """End-to-end: query → tool selection → execute → synthesize answer."""
+    if verbose:
+        print(f"\n{'='*80}")
+        print(f"USER: {user_query}")
+        print('='*80)
+
+    # Step 1: LLM chooses tool + params
+    catalog = build_tool_catalog()
+    system = f"""You are a food science reasoning agent. You have access to 40 MF solver tools.
+
+{catalog}
+
+Task: Given a user query, decide ONE tool to invoke and what params.
+Reply with strict JSON only (no prose, no markdown):
+{{"mf_id": "MF-T03", "params": {{"A": 1e10, "Ea": 50000, "T_K": 363}}, "reason": "Arrhenius rate at 90°C"}}
+
+If no tool fits, reply: {{"mf_id": "none", "reason": "..."}}"""
+
+    prompt = f"<system>\n{system}\n</system>\n\n<user>\n{user_query}\n</user>"
+    if verbose: print(f"\nStep 1: Asking LLM to choose tool...")
+    llm_out = call_codex(prompt)
+    if verbose: print(f"LLM reply: {llm_out[:300]}")
+
+    call = parse_tool_call(llm_out)
+    if not call or call.get("mf_id") == "none":
+        return {"answer": "Cannot determine tool", "llm_raw": llm_out}
+
+    mf_id = call["mf_id"]
+    params = call.get("params", {})
+    reason = call.get("reason", "")
+
+    if verbose: print(f"\nStep 2: Invoke {mf_id} with {params}")
+
+    # Step 2: invoke
+    try:
+        tool = get_mf_tool(mf_id)
+        result = tool.run(params)
+    except Exception as e:
+        return {"answer": f"Tool error: {e}", "mf_id": mf_id, "params": params}
+
+    if verbose:
+        print(f"\nResult: validity={result['validity']['passed']}")
+        print(f"        value={result['result']['value']} {result['result']['unit']}")
+
+    # Step 3: synthesize answer
+    syn_prompt = f"""<system>
+You are a food science explainer. Convert this tool result into a natural-language answer in {'Chinese' if any(ord(c)>127 for c in user_query) else 'English'}.
+</system>
+
+<user>
+Query: {user_query}
+Tool: {mf_id} ({tool.canonical_name})
+Reason for choosing: {reason}
+Params: {json.dumps(params, ensure_ascii=False)}
+Result: {result['result']['symbol']} = {result['result']['value']:.4g} {result['result']['unit']}
+Validity: {result['validity']['passed']}
+Assumptions: {result['assumptions']}
+
+Compose a short answer with citation to {mf_id}.
+</user>"""
+
+    if verbose: print(f"\nStep 3: Synthesize answer...")
+    final = call_codex(syn_prompt)
+
+    return {
+        "answer": final,
+        "mf_id": mf_id,
+        "canonical_name": tool.canonical_name,
+        "params": params,
+        "result": result["result"],
+        "validity": result["validity"]["passed"],
+    }
+
+
+def main():
+    queries = [
+        "若以 90°C 加热酶，活化能 60 kJ/mol，速率常数是多少？",
+        "5cm 牛肉块沸水煮 30 分钟，中心温度估计是多少？",
+        "凝固蛋白的 sigmoid 温度范围，T_d=65°C dH=400 kJ/mol，65°C 时 native fraction?",
+    ]
+    for q in queries:
+        result = answer_query(q, verbose=True)
+        print(f"\n{'='*80}\nFINAL ANSWER:\n{result.get('answer', 'N/A')[:500]}")
+        print('='*80)
+
+
+if __name__ == "__main__":
+    main()
+
+codex
+`rg` isn’t installed here, so I’m falling back to `grep` to trace the FT matching path. I want to separate issues in the reviewed files from bugs inherited from the shared `answer_query` path they call.
+exec
+/bin/zsh -lc "grep -RIn \"aesthetic_word_en\\|substring\\|FT\\|food type\\|recipe\" engine scripts src | sed -n '1,220p'" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+engine/agent/tool_registry.py:3:A MFTool is a thin invocation wrapper:
+engine/agent/tool_registry.py:8:- No hard dependency on LangChain/LangGraph (stdlib only); MFTool exposes
+engine/agent/tool_registry.py:43:class MFTool:
+engine/agent/tool_registry.py:92:_TOOLS_CACHE: list[MFTool] = []
+engine/agent/tool_registry.py:101:def _build_tool(mf_id: str, mf_spec: dict) -> MFTool:
+engine/agent/tool_registry.py:134:    return MFTool(
+engine/agent/tool_registry.py:144:def get_all_mf_tools() -> list[MFTool]:
+engine/agent/tool_registry.py:200:def get_mf_tool(mf_id: str) -> MFTool:
+engine/agent/tool_registry.py:208:def get_tools_by_keyword(keyword: str) -> list[MFTool]:
+engine/agent/__init__.py:13:from engine.agent.tool_registry import get_all_mf_tools, get_mf_tool, MFTool
+engine/agent/__init__.py:15:__all__ = ["get_all_mf_tools", "get_mf_tool", "MFTool"]
+engine/agent/web_chat.py:42:<div class="subtitle">42 MF tools + 24K 食材树 + 23K 食谱 + 12K L0 因果链 + 81 PHN + 7K FT</div>
+engine/solver/tests/test_mf_t02_k.py:10:class TestMFT02K(unittest.TestCase):
+engine/solver/tests/test_mf_t08.py:6:class TestMFT08(unittest.TestCase):
+engine/solver/tests/test_mf_t02_split_consistency.py:59:class TestMFT02SplitConsistency(unittest.TestCase):
+engine/solver/tests/test_mf_t09.py:6:class TestMFT09(unittest.TestCase):
+engine/solver/tests/test_mf_t02_cp_hypothesis.py:21:class TestMFT02CpPropertyRangeInvariance(unittest.TestCase):
+engine/solver/tests/test_mf_t02_cp_hypothesis.py:42:class TestMFT02CpPropertyBoundaryBehavior(unittest.TestCase):
+engine/solver/tests/test_mf_t02_cp_hypothesis.py:56:class TestMFT02CpPropertyMonotonicity(unittest.TestCase):
+engine/solver/tests/test_mf_t06.py:10:class TestMFT06(unittest.TestCase):
+engine/solver/tests/test_mf_t06.py:56:class TestMFT06SigmaOverrideAlone(unittest.TestCase):
+engine/solver/tests/test_mf_t04_hypothesis.py:19:class TestMFT04PropertyRangeInvariance(unittest.TestCase):
+engine/solver/tests/test_mf_t04_hypothesis.py:43:class TestMFT04PropertyBoundaryBehavior(unittest.TestCase):
+engine/solver/tests/test_mf_t04_hypothesis.py:60:class TestMFT04PropertyMonotonicity(unittest.TestCase):
+engine/solver/tests/test_mf_t03_hypothesis.py:21:class TestMFT03PropertyRangeInvariance(unittest.TestCase):
+engine/solver/tests/test_mf_t03_hypothesis.py:41:class TestMFT03PropertyBoundaryBehavior(unittest.TestCase):
+engine/solver/tests/test_mf_t03_hypothesis.py:55:class TestMFT03PropertyMonotonicity(unittest.TestCase):
+engine/solver/tests/test_mf_t07.py:13:class TestMFT07(unittest.TestCase):
+engine/solver/tests/test_mf_t03.py:10:class TestMFT03(unittest.TestCase):
+engine/solver/tests/test_mf_t04.py:10:class TestMFT04(unittest.TestCase):
+engine/solver/tests/test_mf_t10.py:13:class TestMFT10(unittest.TestCase):
+engine/solver/tests/test_mf_t10.py:80:class TestMFT10AbsoluteZero(unittest.TestCase):
+engine/solver/tests/test_mf_t01.py:10:class TestMFT01(unittest.TestCase):
+engine/solver/tests/test_mf_t02_rho.py:10:class TestMFT02Rho(unittest.TestCase):
+engine/solver/tests/test_mf_t01_hypothesis.py:19:class TestMFT01PropertyRangeInvariance(unittest.TestCase):
+engine/solver/tests/test_mf_t01_hypothesis.py:52:class TestMFT01PropertyBoundaryBehavior(unittest.TestCase):
+engine/solver/tests/test_mf_t01_hypothesis.py:89:class TestMFT01PropertyMonotonicity(unittest.TestCase):
+engine/solver/tests/test_mf_t05.py:10:class TestMFT05(unittest.TestCase):
+engine/solver/tests/test_mf_t02_k_hypothesis.py:21:class TestMFT02KPropertyRangeInvariance(unittest.TestCase):
+engine/solver/tests/test_mf_t02_k_hypothesis.py:42:class TestMFT02KPropertyBoundaryBehavior(unittest.TestCase):
+engine/solver/tests/test_mf_t02_k_hypothesis.py:56:class TestMFT02KPropertyMonotonicity(unittest.TestCase):
+engine/solver/tests/test_mf_t02_cp.py:10:class TestMFT02Cp(unittest.TestCase):
+scripts/l2a/etl/prefilter.py:12:  canonical_id substrings only.
+scripts/l2a/etl/prefilter.py:53:# Brand false-positive guard. Any of these substrings means "not a brand":
+scripts/l2a/etl/prompts/gemini_main_distill.txt:18:3. Cuisine_deep contamination detection (cross-taxon ingredients/dishes/recipes)
+scripts/l2a/etl/prompts/gemini_main_distill.txt:44:- cuisine_deep_taxon_mismatch — cuisine_deep ingredients/recipes belong to a different species
+scripts/l2a/etl/post_normalizer.py:7:Runs AFTER each LLM call, BEFORE the staging write. Idempotent: calling
+scripts/skill_a/benchmark/case_study_beef_boiling.py:169:    print("✅ 6 MFs chained successfully. Real food engineering recipe simulation.")
+scripts/l0_cleanup.py:105:    The LLM step is checked AFTER step 2 so that already-confirmed L0
+scripts/l2b/demo_ingredient_substitution.py:20:        # Find a real recipe with chicken
+scripts/l2b/demo_ingredient_substitution.py:24:        RETURN r.recipe_id AS rid, r.name AS name, r.book_id AS book
+scripts/l2b/demo_ingredient_substitution.py:32:        MATCH (r:CKG_L2B_TMP_Recipe {recipe_id: $rid})-[:USES_L2A_INGREDIENT]->(i:CKG_L2A_Ingredient)
+scripts/l2b/demo_ingredient_substitution.py:58:        # Bonus: full reasoning chain for one step of this recipe
+scripts/l2b/demo_ingredient_substitution.py:60:        MATCH (r:CKG_L2B_TMP_Recipe {recipe_id: $rid})-[:HAS_STEP]->(s:CKG_L2B_TMP_Step)
+scripts/l2b/demo_ft_l6_reasoning.py:2:"""Demo: L6 term → FT → PHN → MF reasoning chain.
+scripts/l2b/demo_ft_l6_reasoning.py:6:- "镬气 (wok hei) → FT bundles → cooking phenomenon"
+scripts/l2b/demo_ft_l6_reasoning.py:20:        print("DEMO: L6 (Glossary) → FT (Flavor Target) → Layer 3 reasoning")
+scripts/l2b/demo_ft_l6_reasoning.py:23:        # Query 1: L6 term + FT translation
+scripts/l2b/demo_ft_l6_reasoning.py:24:        print("\n### Q1: 'umami' L6 term → FT bundles")
+scripts/l2b/demo_ft_l6_reasoning.py:29:        OPTIONAL MATCH (l)-[:TRANSLATES_TO]->(f:CKG_FT)
+scripts/l2b/demo_ft_l6_reasoning.py:39:            print(f"  → {row['ft_count']} FT bundles")
+scripts/l2b/demo_ft_l6_reasoning.py:42:        # Query 2: FT for specific substrate
+scripts/l2b/demo_ft_l6_reasoning.py:43:        print("\n\n### Q2: FT targets for 'chicken' substrate")
+scripts/l2b/demo_ft_l6_reasoning.py:46:        MATCH (f:CKG_FT) WHERE toLower(f.substrate) CONTAINS 'chicken'
+scripts/l2b/demo_ft_l6_reasoning.py:47:        RETURN f.aesthetic_word_en AS word_en, f.aesthetic_word_zh AS word_zh,
+scripts/l2b/demo_ft_l6_reasoning.py:55:        print("\n\n### Q3: L6 terms with most FT translations (high-coverage culinary concepts)")
+scripts/l2b/demo_ft_l6_reasoning.py:58:        MATCH (l:CKG_L6_Term)-[:TRANSLATES_TO]->(f:CKG_FT)
+scripts/l2b/demo_ft_l6_reasoning.py:64:        print(f"  {'Term zh':<20} {'Term en':<20} {'#FT':>5}  Sample substrates")
+scripts/l2b/demo_ft_l6_reasoning.py:69:        # Query 4: Full chain — L6 → FT → recipe matching
+scripts/l2b/demo_ft_l6_reasoning.py:70:        print("\n\n### Q4: 'crispy' / '酥脆' → FT + which Recipes targeting that texture")
+scripts/l2b/demo_ft_l6_reasoning.py:73:        MATCH (l:CKG_L6_Term)-[:TRANSLATES_TO]->(f:CKG_FT)
+scripts/l2b/demo_ft_l6_reasoning.py:75:        RETURN f.substrate AS substrate, f.aesthetic_word_en AS word_en,
+scripts/l2b/demo_ft_l6_reasoning.py:82:        print("✅ L6 (Glossary 13K terms) + FT (7K flavor targets) UNIFIED with Layer 3 graph")
+scripts/l2b/multi_case_examples.py:2:"""Multi-case real-recipe queries through Layer 3 reasoning graph.
+scripts/l2b/multi_case_examples.py:5:1. Find recipes with HIGH temperature + LONG duration → likely Maillard heavy
+scripts/l2b/multi_case_examples.py:6:2. Find recipes with fermentation → microbial PHN
+scripts/l2b/multi_case_examples.py:7:3. Find recipes with freeze + thaw → ice crystal PHN
+scripts/l2b/multi_case_examples.py:21:        # ==== Case 1: High-heat Maillard recipes ====
+scripts/l2b/multi_case_examples.py:23:        print("Q1: Top 5 recipes with HIGH-temp Maillard browning (≥180°C bake/roast/sear)")
+scripts/l2b/multi_case_examples.py:29:        RETURN r.name AS recipe, r.book_id AS book,
+scripts/l2b/multi_case_examples.py:35:            print(f"  {(r['recipe'] or 'Unnamed')[:55]:<55} [{(r['book'] or 'unk')[:25]}]")
+scripts/l2b/multi_case_examples.py:38:        # ==== Case 2: Fermentation recipes ====
+scripts/l2b/multi_case_examples.py:40:        print("Q2: Top 5 fermentation recipes (microbial PHN)")
+scripts/l2b/multi_case_examples.py:45:        RETURN r.name AS recipe, r.book_id AS book,
+scripts/l2b/multi_case_examples.py:51:            print(f"  {(r['recipe'] or 'Unnamed')[:55]:<55} [{(r['book'] or 'unk')[:25]}]")
+scripts/l2b/multi_case_examples.py:63:        RETURN r.name AS recipe, r.book_id AS book,
+scripts/l2b/multi_case_examples.py:69:            print(f"  {(r['recipe'] or 'Unnamed')[:55]:<55} [{(r['book'] or 'unk')[:25]}]")
+scripts/l2b/multi_case_examples.py:74:        print("Q4: Most-triggered PHNs across all recipes")
+scripts/l2b/multi_case_examples.py:96:             count(DISTINCT r) AS n_recipes
+scripts/l2b/multi_case_examples.py:97:        RETURN book, unique_phn, n_recipes
+scripts/l2b/multi_case_examples.py:104:            print(f"  {r['book'][:35]:<35} {r['unique_phn']:>11} {r['n_recipes']:>9}")
+scripts/l2b/etl/apply_step_phn_rules.py:15:def step_matches_rule(step, rule, recipe_ingredients):
+scripts/l2b/etl/apply_step_phn_rules.py:45:        # Look up ingredients of this recipe
+scripts/l2b/etl/apply_step_phn_rules.py:46:        recipe_id = step.get("recipe_id")
+scripts/l2b/etl/apply_step_phn_rules.py:47:        ings = recipe_ingredients.get(recipe_id, [])
+scripts/l2b/etl/apply_step_phn_rules.py:57:    # Build recipe → ingredients lookup
+scripts/l2b/etl/apply_step_phn_rules.py:58:    recipe_ingredients = {}
+scripts/l2b/etl/apply_step_phn_rules.py:61:            recipe_ingredients.setdefault(row["recipe_id"], []).append(row["ingredient_slug"])
+scripts/l2b/etl/apply_step_phn_rules.py:73:                if step_matches_rule(step, rule, recipe_ingredients):
+scripts/l2b/etl/link_l2a_l2b_ingredients.py:8:4. Fuzzy: ingredient_slug contains L2a.canonical_id as substring (e.g. "extra_virgin_olive_oil" → "olive_oil")
+scripts/l2b/etl/link_l2a_l2b_ingredients.py:66:    method_counts = {"canonical_id": 0, "alias_exact": 0, "name_en_exact": 0, "substring": 0, "no_match": 0}
+scripts/l2b/etl/link_l2a_l2b_ingredients.py:100:                        method = "substring"
+scripts/l2b/etl/extract_recipes.py:2:"""P2-Lb1 Step 1: Extract 54K recipes from Stage5 → flat CSVs for Neo4j LOAD.
+scripts/l2b/etl/extract_recipes.py:5:- CKG_L2B_TMP_Recipe: recipe_id / name / book_id / yield_text / recipe_type
+scripts/l2b/etl/extract_recipes.py:6:- CKG_L2B_TMP_Step: step_id / recipe_id / order / text / action / duration_min / temp_c
+scripts/l2b/etl/extract_recipes.py:14:Output: output/l2b/etl/{recipes,steps,ingredients}.csv + has_step_edges.csv + uses_ingredient_edges.csv + cypher
+scripts/l2b/etl/extract_recipes.py:16:Idempotent: each recipe gets stable recipe_id (book + chunk_idx + recipe_index).
+scripts/l2b/etl/extract_recipes.py:35:    recipe_rows = []
+scripts/l2b/etl/extract_recipes.py:37:    ingredient_rows = []   # unique per (recipe_id, ingredient_slug)
+scripts/l2b/etl/extract_recipes.py:44:    total_recipes = 0
+scripts/l2b/etl/extract_recipes.py:60:                if not chunk.get("recipes"):
+scripts/l2b/etl/extract_recipes.py:63:                for rec_idx, rec in enumerate(chunk["recipes"]):
+scripts/l2b/etl/extract_recipes.py:64:                    # recipe_id: stable across runs
+scripts/l2b/etl/extract_recipes.py:69:                    recipe_id = f"{book_id}__c{chunk_idx}_r{rec_idx}_{short_hash}"
+scripts/l2b/etl/extract_recipes.py:70:                    total_recipes += 1
+scripts/l2b/etl/extract_recipes.py:71:                    recipe_rows.append({
+scripts/l2b/etl/extract_recipes.py:72:                        "recipe_id": recipe_id,
+scripts/l2b/etl/extract_recipes.py:76:                        "recipe_type": rec.get("recipe_type", "") or "",
+scripts/l2b/etl/extract_recipes.py:84:                        step_id = f"{recipe_id}__s{step_idx}"
+scripts/l2b/etl/extract_recipes.py:88:                            "recipe_id": recipe_id,
+scripts/l2b/etl/extract_recipes.py:95:                        has_step_edges.append({"recipe_id": recipe_id, "step_id": step_id, "order": order})
+scripts/l2b/etl/extract_recipes.py:112:                        # Edge: recipe → ingredient
+scripts/l2b/etl/extract_recipes.py:115:                            "recipe_id": recipe_id,
+scripts/l2b/etl/extract_recipes.py:135:    write_csv("recipes.csv", recipe_rows, ["recipe_id", "name", "book_id", "yield_text", "recipe_type", "n_steps", "n_ingredients"])
+scripts/l2b/etl/extract_recipes.py:136:    write_csv("steps.csv", step_rows, ["step_id", "recipe_id", "order", "text", "action", "duration_min", "temp_c"])
+scripts/l2b/etl/extract_recipes.py:138:    write_csv("has_step_edges.csv", has_step_edges, ["recipe_id", "step_id", "order"])
+scripts/l2b/etl/extract_recipes.py:139:    write_csv("uses_ingredient_edges.csv", uses_ingredient_edges, ["recipe_id", "ingredient_slug", "qty", "unit", "note"])
+scripts/l2b/etl/extract_recipes.py:143:    print(f"Recipes: {total_recipes:,}")
+scripts/l2b/etl/extract_ft_l6.py:2:"""P2-Ft1 + P2-L6: Extract FT (Flavor Target) + L6 (Glossary) from Skill D output.
+scripts/l2b/etl/extract_ft_l6.py:5:- 7,435 FT records (ft_id/aesthetic_word/matrix_type/substrate/target_states + l0_domains)
+scripts/l2b/etl/extract_ft_l6.py:71:                    "aesthetic_word_en": r.get("aesthetic_word_en") or "",
+scripts/l2b/etl/extract_ft_l6.py:92:w("ft_nodes.csv", ft_rows, ["ft_id","aesthetic_word_zh","aesthetic_word_en","matrix_type","substrate","target_states_json","book_id"])
+scripts/l2b/etl/extract_ft_l6.py:98:print(f"FT Targets: {len(ft_rows):,}")
+scripts/l2b/etl/extract_ft_l6.py:99:print(f"FT→domain edges: {len(ft_domain_edges):,}")
+scripts/l2b/smoke_test_recipe_reasoning.py:5:Pick 3 real recipes from L2b, traverse to MFs, invoke solvers with derived params.
+scripts/l2b/smoke_test_recipe_reasoning.py:21:def find_recipes_with_full_chain(session, limit=3):
+scripts/l2b/smoke_test_recipe_reasoning.py:22:    """Find recipes that have Recipe → Step → PHN → MF complete chain."""
+scripts/l2b/smoke_test_recipe_reasoning.py:31:    RETURN r.recipe_id AS recipe_id, r.name AS name, r.book_id AS book,
+scripts/l2b/smoke_test_recipe_reasoning.py:39:def get_recipe_full_chain(session, recipe_id):
+scripts/l2b/smoke_test_recipe_reasoning.py:40:    """Walk full chain for a specific recipe."""
+scripts/l2b/smoke_test_recipe_reasoning.py:42:    MATCH (r:CKG_L2B_TMP_Recipe {recipe_id: $rid})-[:HAS_STEP]->(s:CKG_L2B_TMP_Step)
+scripts/l2b/smoke_test_recipe_reasoning.py:52:    return list(session.run(q, rid=recipe_id))
+scripts/l2b/smoke_test_recipe_reasoning.py:90:        return None, f"No param recipe for {mf_id}"
+scripts/l2b/smoke_test_recipe_reasoning.py:106:        # Find 3 recipes with rich chain
+scripts/l2b/smoke_test_recipe_reasoning.py:107:        rich_recipes = find_recipes_with_full_chain(sess, limit=3)
+scripts/l2b/smoke_test_recipe_reasoning.py:108:        print(f"\nFound {len(rich_recipes)} recipes with full chain (≥2 steps with temp_c+duration+PHN+MF):\n")
+scripts/l2b/smoke_test_recipe_reasoning.py:110:        for r in rich_recipes:
+scripts/l2b/smoke_test_recipe_reasoning.py:116:        for r in rich_recipes:
+scripts/l2b/smoke_test_recipe_reasoning.py:119:            chain = get_recipe_full_chain(sess, r["recipe_id"])
+scripts/l2b/demo_chinese_stirfry_query.py:27:        # Find recipes with stir-fry actions
+scripts/l2b/demo_chinese_stirfry_query.py:44:        print("\n--- Q2: PHN 'wok_hei_pyrolysis' (镬气) — what recipes? ---")
+scripts/l2b/demo_chinese_stirfry_query.py:72:                   substring(s.text, 0, 80) AS text
+scripts/l2b/demo_chinese_stirfry_query.py:78:        # Ingredients in stir-fry recipes
+scripts/l2b/demo_chinese_stirfry_query.py:85:            WITH i.canonical_id AS ing, count(DISTINCT r) AS n_recipes
+scripts/l2b/demo_chinese_stirfry_query.py:86:            WHERE n_recipes >= 5
+scripts/l2b/demo_chinese_stirfry_query.py:87:            RETURN ing, n_recipes ORDER BY n_recipes DESC LIMIT 15
+scripts/l2b/demo_chinese_stirfry_query.py:89:        print(f"  {'Ingredient':<30} {'#stir-fry recipes':>17}")
+scripts/l2b/demo_chinese_stirfry_query.py:92:            print(f"  {r['ing']:<30} {r['n_recipes']:>17}")
+scripts/l2b/smoke_test_full_chain.py:4:For a real recipe, walk:
+scripts/l2b/smoke_test_full_chain.py:16:def show_recipe(session, recipe_id):
+scripts/l2b/smoke_test_full_chain.py:17:    q_recipe = """
+scripts/l2b/smoke_test_full_chain.py:18:    MATCH (r:CKG_L2B_TMP_Recipe {recipe_id: $rid})
+scripts/l2b/smoke_test_full_chain.py:23:    return session.run(q_recipe, rid=recipe_id).single()
+scripts/l2b/smoke_test_full_chain.py:26:def get_full_chain(session, recipe_id):
+scripts/l2b/smoke_test_full_chain.py:28:    MATCH (r:CKG_L2B_TMP_Recipe {recipe_id: $rid})-[:HAS_STEP]->(s:CKG_L2B_TMP_Step)
+scripts/l2b/smoke_test_full_chain.py:41:    return list(session.run(q, rid=recipe_id))
+scripts/l2b/smoke_test_full_chain.py:44:def find_richest_recipes(session, n=3):
+scripts/l2b/smoke_test_full_chain.py:52:    RETURN r.recipe_id AS recipe_id, r.name AS name, r.book_id AS book,
+scripts/l2b/smoke_test_full_chain.py:87:        recipes = find_richest_recipes(sess, 3)
+scripts/l2b/smoke_test_full_chain.py:88:        if not recipes:
+scripts/l2b/smoke_test_full_chain.py:89:            print("No recipes with L0+MF rich chain. Trying without L0 evidence filter.")
+scripts/l2b/smoke_test_full_chain.py:91:        for r in recipes:
+scripts/l2b/smoke_test_full_chain.py:95:            for row in get_full_chain(sess, r["recipe_id"]):
+scripts/food_tree/day2_taskB_deepseek.py:14:✅ 不是 dish/composite/recipe/SKU/品牌/abstract concept
+scripts/food_tree/day1_task9_gold_set.py:72:- send_to_recipe_layer: dish/recipe (红烧肉/lasagna)
+scripts/food_tree/day2_taskC_v5.py:66:6. send_to_recipe_layer — 菜肴 (红烧肉)
+scripts/food_tree/day1_task5_8_anchor_jury.py:17:✅ 不是 dish/composite/recipe
+scripts/food_tree/day2_taskC_gold_set.py:73:6. send_to_recipe_layer   dish/recipe
+scripts/food_tree/schema/init_schema_v1.sql:24:        'recipe_target'      -- e.g., 红烧肉 (kicked to recipe layer)
+scripts/food_tree/schema/init_schema_v1.sql:106:-- ─── Table 6: compound_ingredient — for kind=compound (recipes-in-bottle) ───
+scripts/food_tree/schema/init_schema_v1.sql:113:    canonical_recipe TEXT,                -- short text description of preparation
+scripts/food_tree/day2_taskC_v3.py:64:6. send_to_recipe_layer (dish)
+scripts/food_tree/day2_taskC_deepseek.py:64:6. send_to_recipe_layer (dish)
+scripts/food_tree/day2_taskB_anchor_jury_v2.py:14:✅ 不是 dish/composite/recipe
+scripts/food_tree/day2_taskB_v3.py:12:✅ 不是 dish/composite/recipe
+scripts/book_reviewer.py:70:ALL_PURPOSES = ["science+recipe", "recipe_only", "aesthetic_culture", "engineering_textbook"]
+scripts/book_reviewer.py:211:    if stats["A_pct"] >= 10 and purpose not in {"recipe_only", "aesthetic_culture"}:
+scripts/phase0/pull_datasets.py:309:        ("https://raw.githubusercontent.com/foodkg/foodkg.github.io/master/subgraphs/recipe_ttl/recipe.ttl",
+scripts/phase0/pull_datasets.py:310:         "recipe.ttl", "Recipe TTL subgraph"),
+scripts/phase0/pull_datasets.py:346:**Description**: Food Knowledge Graph with ~67M triples (FoodOn + USDA + recipe subsets).
+scripts/phase0/pull_datasets.py:355:- `recipe.ttl` — Recipe ingredient co-occurrence triples
+scripts/phase0/pull_datasets.py:389:def pull_recipe1m() -> None:
+scripts/phase0/pull_datasets.py:391:    target = RAW_DIR / "recipe1m_plus"
+scripts/phase0/pull_datasets.py:397:**Description**: 1M+ recipes with images. Text files: layer1.json (recipes), layer2.json (images), det_ingrs.json (detected ingredients).
+scripts/phase0/pull_datasets.py:398:**Source**: http://pic2recipe.csail.mit.edu/
+scripts/phase0/pull_datasets.py:404:1. Visit: http://pic2recipe.csail.mit.edu/
+scripts/phase0/pull_datasets.py:408:   - `layer1.json` (~2.7 GB) — recipe text, ingredients, instructions
+scripts/phase0/pull_datasets.py:412:The im2recipe-Pytorch repo has a smaller subset:
+scripts/phase0/pull_datasets.py:413:  https://github.com/torralba-lab/im2recipe-Pytorch
+scripts/phase0/pull_datasets.py:419:Jeff needs to register at http://pic2recipe.csail.mit.edu/ and share the download link.
+scripts/phase0/pull_datasets.py:424:- Target: data/external/raw/recipe1m_plus/layer1.json, det_ingrs.json
+scripts/phase0/pull_datasets.py:430:        "source_url": "http://pic2recipe.csail.mit.edu/",
+scripts/phase0/pull_datasets.py:435:        "notes": "Requires registration at pic2recipe.csail.mit.edu. Jeff action needed.",
+scripts/phase0/pull_datasets.py:440:           "Requires registration at http://pic2recipe.csail.mit.edu/ — Jeff action needed")
+scripts/phase0/pull_datasets.py:447:def pull_recipenlg() -> None:
+scripts/phase0/pull_datasets.py:449:    target = RAW_DIR / "recipenlg"
+scripts/phase0/pull_datasets.py:457:    # Dataset: mbien/recipe_nlg on HuggingFace
+scripts/phase0/pull_datasets.py:458:    hf_url = "https://huggingface.co/datasets/mbien/recipe_nlg/resolve/main/data/train-00000-of-00002.parquet"
+scripts/phase0/pull_datasets.py:459:    hf_url2 = "https://huggingface.co/datasets/mbien/recipe_nlg/resolve/main/data/train-00001-of-00002.parquet"
+scripts/phase0/pull_datasets.py:472:            # Try alternative: direct from recipenlg website
+scripts/phase0/pull_datasets.py:473:            print(f"  HuggingFace failed ({msg}), trying recipenlg.cs.put.poznan.pl...")
+scripts/phase0/pull_datasets.py:474:            alt_url = "https://recipenlg.cs.put.poznan.pl/dataset"
+scripts/phase0/pull_datasets.py:486:**Description**: 2.2M cooking recipes in English (NLG dataset), CSV/Parquet format.
+scripts/phase0/pull_datasets.py:487:**Source**: https://recipenlg.cs.put.poznan.pl/ | HuggingFace: mbien/recipe_nlg
+scripts/phase0/pull_datasets.py:513:        "version": "HuggingFace mbien/recipe_nlg",
+scripts/phase0/pull_datasets.py:514:        "source_url": "https://huggingface.co/datasets/mbien/recipe_nlg",
+scripts/phase0/pull_datasets.py:691:2. Recipe1M+ — Jeff to register at http://pic2recipe.csail.mit.edu/
+scripts/phase0/pull_datasets.py:735:{"- **Recipe1M+**: Register at http://pic2recipe.csail.mit.edu/ to get download link. Only need layer1.json + det_ingrs.json (~4GB text, NOT images)." if any(r["dataset"] == "Recipe1M+" for r in pending) else "No action required."}
+scripts/phase0/pull_datasets.py:769:    pull_recipe1m()
+scripts/phase0/pull_datasets.py:770:    pull_recipenlg()
+
+exec
+/bin/zsh -lc "grep -RIn \"aesthetic_word_en\" . | sed -n '1,220p'" in /Users/jeff/culinary-mind
+codex
+I’ve confirmed the FT/aesthetic-word risk is not implemented in the three review targets themselves; it lives elsewhere. I’m pulling line-numbered snippets now so the review can cleanly distinguish direct bugs in these files from inherited system risk in the shared agent path.
+exec
+/bin/zsh -lc "nl -ba scripts/benchmark/bare_vs_graph_bench.py | sed -n '1,260p'" in /Users/jeff/culinary-mind
+exec
+/bin/zsh -lc "nl -ba engine/agent/llm_agent_v2.py | sed -n '1,260p'" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+     1	#!/usr/bin/env python3
+     2	"""P4-Be Benchmark: bare LLM vs +graph+tools (culinary-mind LLM agent).
+     3	
+     4	Setup:
+     5	- Pipeline A (bare): Codex gpt-5.4 直接回答, 无 graph 无 tool
+     6	- Pipeline B (our agent): engine.agent.llm_agent.answer_query
+     7	                          (uses tool registry + Neo4j optional)
+     8	
+     9	For each query:
+    10	  - Run A, save answer + tokens
+    11	  - Run B, save answer + tokens + which tools invoked
+    12	  - Compare side-by-side (manual or auto rubric)
+    13	
+    14	Output: output/benchmark/bench_results.yaml
+    15	"""
+    16	import json
+    17	import os
+    18	import subprocess
+    19	import sys
+    20	import time
+    21	from pathlib import Path
+    22	
+    23	sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    24	
+    25	from engine.agent.llm_agent import answer_query as agent_answer
+    26	
+    27	CODEX = ["codex", "exec", "--ephemeral", "--ignore-user-config",
+    28	         "--dangerously-bypass-approvals-and-sandbox", "-s", "read-only",
+    29	         "-m", "gpt-5.4", "-c", "model_reasoning_effort=low"]
+    30	
+    31	
+    32	def bare_llm(query, timeout=90):
+    33	    """Pipeline A: bare Codex, no system prompt, no tools."""
+    34	    t0 = time.time()
+    35	    proc = subprocess.run(
+    36	        CODEX + [query],
+    37	        capture_output=True, text=True, timeout=timeout,
+    38	        env={**os.environ, "NO_PROXY": "*"},
+    39	        stdin=subprocess.DEVNULL,
+    40	    )
+    41	    elapsed = time.time() - t0
+    42	    out = proc.stdout
+    43	    idx = out.rfind("\ncodex\n")
+    44	    if idx >= 0:
+    45	        body = out[idx+len("\ncodex\n"):]
+    46	        end = body.find("\ntokens used\n")
+    47	        # capture tokens used
+    48	        toks = 0
+    49	        if end > 0:
+    50	            tail = body[end:end+200]
+    51	            import re
+    52	            m = re.search(r"tokens used\s*(\d+)", tail)
+    53	            if m: toks = int(m.group(1))
+    54	            body = body[:end]
+    55	        return {"answer": body.strip(), "tokens": toks, "elapsed_s": round(elapsed, 1)}
+    56	    return {"answer": out.strip(), "tokens": 0, "elapsed_s": round(elapsed, 1)}
+    57	
+    58	
+    59	def graph_agent(query):
+    60	    """Pipeline B: our culinary-mind LLM agent."""
+    61	    t0 = time.time()
+    62	    result = agent_answer(query, verbose=False)
+    63	    elapsed = time.time() - t0
+    64	    return {
+    65	        "answer": result.get("answer", ""),
+    66	        "mf_id": result.get("mf_id"),
+    67	        "validity": result.get("validity"),
+    68	        "tool_value": result.get("result", {}).get("value"),
+    69	        "tool_unit": result.get("result", {}).get("unit"),
+    70	        "elapsed_s": round(elapsed, 1),
+    71	    }
+    72	
+    73	
+    74	# Benchmark queries — food science questions where bare LLM may hallucinate
+    75	# but tool-augmented should give precise numbers + citations
+    76	BENCH_QUERIES = [
+    77	    {
+    78	        "id": "Q1_arrhenius",
+    79	        "category": "kinetics",
+    80	        "query": "维生素 C 在 90°C 下的降解速率常数。已知前指因子 A=1e10 s⁻¹，活化能 Ea=80 kJ/mol。",
+    81	        "expected_value": 1.45e-2,  # k = 1e10·exp(-80000/(8.314·363)) ≈ 1.45e-2
+    82	        "expected_unit": "s⁻¹",
+    83	        "expected_tool": "MF-T03",
+    84	    },
+    85	    {
+    86	        "id": "Q2_protein_denat",
+    87	        "category": "thermal",
+    88	        "query": "蛋白质 T_d=65°C, dH=400 kJ/mol, 在 70°C 时 native fraction 是多少？",
+    89	        "expected_value": 0.072,  # sigmoid at T=Td+5°C with sigma=R·T_d²/dH ≈ steep
+    90	        "expected_unit": "dimensionless",
+    91	        "expected_tool": "MF-T06",
+    92	    },
+    93	    {
+    94	        "id": "Q3_fourier_beef",
+    95	        "category": "heat_transfer",
+    96	        "query": "5cm 厚牛肉块，初温 4°C，沸水 100°C 煮 30 分钟，中心温度估算多少？热扩散率 α=1.4e-7 m²/s。",
+    97	        "expected_value": 27.8,
+    98	        "expected_unit": "°C",
+    99	        "expected_tool": "MF-T01",
+   100	    },
+   101	    {
+   102	        "id": "Q4_choi_okos_water",
+   103	        "category": "thermal_props",
+   104	        "query": "纯水在 25°C 的比热容，用 Choi-Okos 模型估算。",
+   105	        "expected_value": 4180,
+   106	        "expected_unit": "J/(kg·K)",
+   107	        "expected_tool": "MF-T02-CP",
+   108	    },
+   109	    {
+   110	        "id": "Q5_water_density",
+   111	        "category": "thermal_props",
+   112	        "query": "纯水在 25°C 密度，用 Choi-Okos 估算。",
+   113	        "expected_value": 997,
+   114	        "expected_unit": "kg/m³",
+   115	        "expected_tool": "MF-T02-RHO",
+   116	    },
+   117	    {
+   118	        "id": "Q6_microwave",
+   119	        "category": "dielectric",
+   120	        "query": "2.45 GHz 微波，电场 E=2000 V/m，ε''=15，吸收功率密度多少？",
+   121	        "expected_value": 5.46e6,
+   122	        "expected_unit": "W/m³",
+   123	        "expected_tool": "MF-T07",
+   124	    },
+   125	    {
+   126	        "id": "Q7_pasteurization_F",
+   127	        "category": "food_safety",
+   128	        "query": "T=121.1°C 持续 5 分钟的 F 值（z=10°C）",
+   129	        "expected_value": 5.0,
+   130	        "expected_unit": "min",
+   131	        "expected_tool": "MF-K04",
+   132	    },
+   133	    {
+   134	        "id": "Q8_arrhenius_q10",
+   135	        "category": "kinetics",
+   136	        "query": "什么是 Q10 法则？计算 25°C 到 35°C 反应加速倍数（k1=1.0, k2=2.0）",
+   137	        "expected_value": 2.0,
+   138	        "expected_unit": "dimensionless",
+   139	        "expected_tool": "MF-C05",
+   140	    },
+   141	]
+   142	
+   143	
+   144	def main():
+   145	    out_dir = Path("/Users/jeff/culinary-mind/output/benchmark")
+   146	    out_dir.mkdir(parents=True, exist_ok=True)
+   147	
+   148	    results = []
+   149	    print("=" * 90)
+   150	    print(f"P4-Bench: bare GPT 5.4 vs culinary-mind agent on {len(BENCH_QUERIES)} food science queries")
+   151	    print("=" * 90)
+   152	
+   153	    for q in BENCH_QUERIES:
+   154	        print(f"\n[{q['id']}] {q['query'][:80]}...")
+   155	        print(f"  Expected: {q['expected_value']} {q['expected_unit']} via {q['expected_tool']}")
+   156	
+   157	        # Pipeline A: bare
+   158	        print("  Running bare LLM...", end="", flush=True)
+   159	        bare_r = bare_llm(q["query"])
+   160	        print(f" {bare_r['elapsed_s']}s")
+   161	
+   162	        # Pipeline B: our agent
+   163	        print("  Running culinary-mind agent...", end="", flush=True)
+   164	        agent_r = graph_agent(q["query"])
+   165	        print(f" {agent_r['elapsed_s']}s, tool={agent_r.get('mf_id', '-')}")
+   166	
+   167	        # Score: tool match + value accuracy
+   168	        tool_match = agent_r.get("mf_id") == q["expected_tool"]
+   169	        v = agent_r.get("tool_value")
+   170	        if isinstance(v, (int, float)) and q["expected_value"]:
+   171	            dev_pct = abs(v - q["expected_value"]) / abs(q["expected_value"]) * 100
+   172	            value_close = dev_pct < 30
+   173	        else:
+   174	            dev_pct = None
+   175	            value_close = False
+   176	
+   177	        results.append({
+   178	            "id": q["id"],
+   179	            "category": q["category"],
+   180	            "query": q["query"],
+   181	            "expected": {"value": q["expected_value"], "unit": q["expected_unit"], "tool": q["expected_tool"]},
+   182	            "bare_llm": bare_r,
+   183	            "graph_agent": agent_r,
+   184	            "scoring": {
+   185	                "tool_match": tool_match,
+   186	                "value_deviation_pct": dev_pct,
+   187	                "value_close_30pct": value_close,
+   188	            }
+   189	        })
+   190	
+   191	    # Aggregate
+   192	    import yaml
+   193	    out_file = out_dir / "bench_bare_vs_graph.yaml"
+   194	    out_file.write_text(yaml.safe_dump({
+   195	        "version": "1.0",
+   196	        "generated_at": "2026-05-13",
+   197	        "n_queries": len(BENCH_QUERIES),
+   198	        "global": {
+   199	            "tool_match_rate": sum(1 for r in results if r["scoring"]["tool_match"]) / len(results),
+   200	            "value_close_30pct_rate": sum(1 for r in results if r["scoring"]["value_close_30pct"]) / len(results),
+   201	        },
+   202	        "results": results,
+   203	    }, allow_unicode=True, sort_keys=False))
+   204	    print()
+   205	    print("=" * 90)
+   206	    print("SUMMARY")
+   207	    print("=" * 90)
+   208	    print(f"  Tool match rate: {sum(1 for r in results if r['scoring']['tool_match'])} / {len(results)}")
+   209	    print(f"  Value close (<30%): {sum(1 for r in results if r['scoring']['value_close_30pct'])} / {len(results)}")
+   210	    print()
+   211	    print(f"{'Query':<25} {'Tool match':<11} {'Dev%':>7}  Bare LLM (truncated):")
+   212	    print(f"{'-'*25} {'-'*11} {'-'*7}")
+   213	    for r in results:
+   214	        tm = "✅" if r["scoring"]["tool_match"] else "❌"
+   215	        dp = r["scoring"]["value_deviation_pct"]
+   216	        dp_str = f"{dp:.1f}" if dp is not None else "-"
+   217	        bare_snip = (r["bare_llm"]["answer"] or "")[:50].replace("\n", " ")
+   218	        print(f"  {r['id']:<23} {tm:<11} {dp_str:>7}  {bare_snip}...")
+   219	    print(f"\n✅ {out_file}")
+   220	
+   221	
+   222	if __name__ == "__main__":
+   223	    main()
+
+ succeeded in 0ms:
+     1	#!/usr/bin/env python3
+     2	"""LLM agent v2: multi-tool ReAct chain.
+     3	
+     4	Difference from v1:
+     5	- v1: query → choose ONE tool → invoke → answer (single-step)
+     6	- v2: query → reason → invoke multiple tools in sequence (chain dependent calculations)
+     7	  e.g. "煮牛肉 30 min, 中心 protein 变性 fraction?"
+     8	       → Step 1: MF-T02-CP/RHO/K → α
+     9	       → Step 2: MF-T01 Fourier → T_center
+    10	       → Step 3: MF-T06 → f_native at T_center
+    11	  Each step's output feeds the next.
+    12	"""
+    13	import json
+    14	import os
+    15	import re
+    16	import subprocess
+    17	import sys
+    18	from pathlib import Path
+    19	
+    20	sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    21	from engine.agent.tool_registry import get_all_mf_tools, get_mf_tool
+    22	
+    23	
+    24	CODEX_CMD = [
+    25	    "codex", "exec",
+    26	    "--ephemeral",
+    27	    "--ignore-user-config",
+    28	    "--dangerously-bypass-approvals-and-sandbox",
+    29	    "-s", "read-only",
+    30	    "-m", "gpt-5.4",
+    31	    "-c", "model_reasoning_effort=medium",
+    32	]
+    33	
+    34	
+    35	def call_codex(prompt: str, timeout=180) -> str:
+    36	    proc = subprocess.run(
+    37	        CODEX_CMD + [prompt],
+    38	        capture_output=True, text=True, timeout=timeout,
+    39	        env={**os.environ, "NO_PROXY": "*"},
+    40	        stdin=subprocess.DEVNULL,
+    41	    )
+    42	    out = proc.stdout
+    43	    idx = out.rfind("\ncodex\n")
+    44	    if idx < 0: idx = out.rfind("codex\n")
+    45	    if idx >= 0:
+    46	        body = out[idx + len("\ncodex\n"):]
+    47	        end = body.find("\ntokens used\n")
+    48	        if end > 0: body = body[:end]
+    49	        return body.strip()
+    50	    return out.strip()
+    51	
+    52	
+    53	def parse_json(text: str):
+    54	    """Extract a JSON object from text using balanced braces."""
+    55	    if not text: return None
+    56	    idx = text.find('"plan"')  # outer wrapper FIRST
+    57	    if idx < 0: idx = text.find('"action"')
+    58	    if idx < 0: idx = text.find('"mf_id"')
+    59	    if idx < 0: idx = text.find("{")
+    60	    if idx < 0: return None
+    61	    start = text.rfind("{", 0, idx + 1)
+    62	    if start < 0: return None
+    63	    depth = 0; in_str = False; esc = False
+    64	    for i in range(start, len(text)):
+    65	        ch = text[i]
+    66	        if esc: esc = False; continue
+    67	        if ch == "\\": esc = True; continue
+    68	        if ch == '"' and not esc: in_str = not in_str; continue
+    69	        if in_str: continue
+    70	        if ch == "{": depth += 1
+    71	        elif ch == "}":
+    72	            depth -= 1
+    73	            if depth == 0:
+    74	                try: return json.loads(text[start:i+1])
+    75	                except: return None
+    76	    return None
+    77	
+    78	
+    79	def build_tool_catalog():
+    80	    """Build LLM-friendly catalog with USE descriptions."""
+    81	    USAGE = {
+    82	        "MF-T01": "1D heat conduction in slab; T(x,t)",
+    83	        "MF-T02-K": "Choi-Okos food thermal conductivity k from composition",
+    84	        "MF-T02-CP": "Choi-Okos food specific heat Cp from composition",
+    85	        "MF-T02-RHO": "Choi-Okos food density rho from composition",
+    86	        "MF-T03": "Arrhenius rate constant k(T) from A,Ea,T_K",
+    87	        "MF-T04": "Nusselt correlation for heat transfer",
+    88	        "MF-T05": "Plank freezing time",
+    89	        "MF-T06": "Protein denaturation sigmoid f_native(T_C, T_d, dH_d)",
+    90	        "MF-T07": "Microwave/RF volumetric heating P_abs",
+    91	        "MF-T08": "Ohmic Joule heating Q from sigma+E",
+    92	        "MF-T09": "Postharvest respiration heat Q=a·exp(b·T)",
+    93	        "MF-T10": "Starch gelatinization Avrami α(t,T)",
+    94	        "MF-K01": "Michaelis-Menten enzyme kinetics v(S,Km,Vmax)",
+    95	        "MF-K02": "Thermal D-value (microbial decimal reduction time)",
+    96	        "MF-K03": "z-value (D vs T temperature dependence)",
+    97	        "MF-K04": "F-value sterilization equivalent",
+    98	        "MF-K05": "Gompertz microbial growth log10(N/N0)",
+    99	        "MF-K06": "Microbial growth hurdle limit (boolean)",
+   100	        "MF-K07": "Ligand-protein binding equilibrium f_bound",
+   101	        "MF-M01": "Fick 2nd law diffusion C(x,t)",
+   102	        "MF-M02": "GAB sorption isotherm W(a_w)",
+   103	        "MF-M03": "Antoine vapor pressure of substance",
+   104	        "MF-M04": "Henderson-Hasselbalch pH of buffer",
+   105	        "MF-M05": "Henry law aroma volatility c_aq(p_gas)",
+   106	        "MF-M06": "Latent heat of substance",
+   107	        "MF-M07": "Octanol-water partition K=10^logP",
+   108	        "MF-M08": "Gas permeability through film Q=P·Δp/L",
+   109	        "MF-M09": "Van't Hoff osmotic pressure π=iMRT",
+   110	        "MF-M10": "Membrane solute flux J=P·ΔC/L",
+   111	        "MF-M11": "SCFE-CO2 Chrastil solubility y(ρ,T)",
+   112	        "MF-R01": "Power-law fluid viscosity τ=K·γ^n",
+   113	        "MF-R02": "Herschel-Bulkley yield-stress fluid",
+   114	        "MF-R03": "Casson model fluid",
+   115	        "MF-R04": "Gordon-Taylor Tg mix",
+   116	        "MF-R05": "WLF time-temperature superposition",
+   117	        "MF-R06": "Stevens psychophysical power law",
+   118	        "MF-R07": "Griffith fracture stress",
+   119	        "MF-C01": "Stokes sedimentation velocity v",
+   120	        "MF-C02": "HLB Griffin emulsifier balance",
+   121	        "MF-C03": "DLVO colloid stability V_T",
+   122	        "MF-C04": "Laplace pressure ΔP across curved interface",
+   123	        "MF-C05": "Q10 temperature rate doubling",
+   124	    }
+   125	    lines = ["Available MF tools (40 total). USE descriptions:"]
+   126	    for t in get_all_mf_tools():
+   127	        desc = USAGE.get(t.mf_id, t.canonical_name)
+   128	        fields = list(t.inputs_schema.keys())[:5]
+   129	        out_sym = t.output_schema.get("symbol", "?")
+   130	        lines.append(f"  - {t.mf_id}: {desc}  | inputs: {fields} → out: {out_sym}")
+   131	    return "\n".join(lines)
+   132	
+   133	
+   134	def plan_steps(user_query: str):
+   135	    """Step 1: Ask LLM to plan a sequence of MF tool invocations."""
+   136	    catalog = build_tool_catalog()
+   137	    system = f"""You are a food science reasoning planner. Decompose the user query
+   138	into a SEQUENCE of MF tool calls. Each call may use outputs from prior calls.
+   139	
+   140	{catalog}
+   141	
+   142	Output strict JSON only:
+   143	{{
+   144	  "plan": [
+   145	    {{"step": 1, "mf_id": "MF-T02-CP", "params": {{...}}, "uses": "X"}},
+   146	    {{"step": 2, "mf_id": "MF-T02-K", "params": {{...}}, "uses": "X"}},
+   147	    {{"step": 3, "mf_id": "MF-T01", "params": {{...alpha from steps 1+2...}}, "uses": "T_center"}},
+   148	    {{"step": 4, "mf_id": "MF-T06", "params": {{"T_C": "{{step3.value}}", ...}}, "uses": "f_native"}}
+   149	  ],
+   150	  "rationale": "..."
+   151	}}
+   152	
+   153	Reference prior step outputs with {{stepN.value}}.
+   154	Max 5 steps. If 1 tool suffices, plan with 1 step.
+   155	If no tool fits, plan=[]."""
+   156	    prompt = f"<system>\n{system}\n</system>\n\n<user>\n{user_query}\n</user>"
+   157	    return call_codex(prompt)
+   158	
+   159	
+   160	def execute_plan(plan, verbose=True):
+   161	    """Execute steps in sequence, substituting prior outputs."""
+   162	    history = []  # step results
+   163	    for step_def in plan:
+   164	        step_n = step_def.get("step")
+   165	        mf_id = step_def.get("mf_id")
+   166	        params = dict(step_def.get("params", {}))
+   167	        if mf_id == "none": continue
+   168	        # Substitute {stepN.value} references
+   169	        for k, v in list(params.items()):
+   170	            if isinstance(v, str) and "{step" in v:
+   171	                m = re.match(r"\{step(\d+)\.(\w+)\}", v.strip())
+   172	                if m:
+   173	                    ref_step = int(m.group(1))
+   174	                    ref_field = m.group(2)
+   175	                    if ref_step <= len(history):
+   176	                        ref_result = history[ref_step-1]
+   177	                        if ref_field == "value":
+   178	                            params[k] = ref_result["value"]
+   179	                        else:
+   180	                            params[k] = ref_result.get(ref_field)
+   181	        try:
+   182	            tool = get_mf_tool(mf_id)
+   183	        except KeyError as e:
+   184	            if verbose: print(f"  Step {step_n}: tool {mf_id} not found")
+   185	            history.append({"step": step_n, "mf_id": mf_id, "error": str(e)})
+   186	            continue
+   187	        try:
+   188	            out = tool.run(params)
+   189	            v = out["result"]["value"]
+   190	            sym = out["result"]["symbol"]
+   191	            unit = out["result"]["unit"]
+   192	            passed = out["validity"]["passed"]
+   193	            history.append({"step": step_n, "mf_id": mf_id, "value": v, "symbol": sym,
+   194	                            "unit": unit, "validity": passed, "params": params})
+   195	            if verbose:
+   196	                ok = "✅" if passed else "⚠️"
+   197	                print(f"  {ok} Step {step_n} {mf_id}: {sym} = {v} {unit}")
+   198	        except Exception as e:
+   199	            history.append({"step": step_n, "mf_id": mf_id, "error": str(e)})
+   200	            if verbose: print(f"  ❌ Step {step_n} {mf_id}: {e}")
+   201	    return history
+   202	
+   203	
+   204	def synthesize(user_query, plan_text, plan, history):
+   205	    """LLM composes final answer with chain reasoning."""
+   206	    chain_summary = "\n".join(
+   207	        f"  Step {h['step']} {h['mf_id']}: " +
+   208	        (f"{h.get('symbol','?')} = {h.get('value','?')} {h.get('unit','?')} {'✓' if h.get('validity') else '⚠ validity-fail'}" if "value" in h else f"ERROR: {h.get('error')}")
+   209	        for h in history
+   210	    )
+   211	    syn_prompt = f"""<system>
+   212	You are a food science explainer. Compose a brief natural-language answer
+   213	(in the user's language) for this multi-step MF chain.
+   214	Cite each MF tool used. Note any validity issues.
+   215	</system>
+   216	
+   217	<user>
+   218	Query: {user_query}
+   219	
+   220	Reasoning chain executed:
+   221	{chain_summary}
+   222	
+   223	Compose answer.
+   224	</user>"""
+   225	    return call_codex(syn_prompt)
+   226	
+   227	
+   228	def answer_multistep(user_query, verbose=True):
+   229	    if verbose:
+   230	        print(f"\n{'='*90}\nUSER: {user_query}\n{'='*90}")
+   231	        print("\n[Step 1] Planning multi-MF chain...")
+   232	    plan_text = plan_steps(user_query)
+   233	    p = parse_json(plan_text)
+   234	    if not p or not p.get("plan"):
+   235	        return {"answer": "Cannot decompose query", "plan_raw": plan_text}
+   236	    plan = p["plan"]
+   237	    if verbose:
+   238	        print(f"Plan: {len(plan)} step(s)")
+   239	        for s in plan:
+   240	            print(f"  Step {s.get('step')}: {s.get('mf_id')} — {s.get('uses')}")
+   241	    history = execute_plan(plan, verbose=verbose)
+   242	    if verbose: print(f"\n[Step 2] Synthesizing answer...")
+   243	    final = synthesize(user_query, plan_text, plan, history)
+   244	    return {"answer": final, "plan": plan, "history": history}
+   245	
+   246	
+   247	def main():
+   248	    queries = [
+   249	        "5cm 牛肉块沸水煮 30 分钟，中心蛋白质变性大概几成？(用 Choi-Okos 算 α，再 Fourier 算中心温度，最后 sigmoid 估变性)",
+   250	        "75°C 鸡蛋蛋白质 (T_d=70°C dH=400) 多久达到 95% 变性？",
+   251	    ]
+   252	    for q in queries:
+   253	        r = answer_multistep(q, verbose=True)
+   254	        print(f"\n{'='*90}\nFINAL ANSWER:\n{r.get('answer','')[:800]}")
+   255	        print('='*90)
+   256	
+   257	
+   258	if __name__ == "__main__":
+   259	    main()
+
+exec
+/bin/zsh -lc "nl -ba engine/agent/web_chat.py | sed -n '1,240p'" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+     1	#!/usr/bin/env python3
+     2	"""Minimal Flask chat UI for culinary-mind LLM agent.
+     3	
+     4	Usage:
+     5	  pip install flask
+     6	  python engine/agent/web_chat.py
+     7	  open http://localhost:5001
+     8	"""
+     9	import json
+    10	import sys
+    11	from pathlib import Path
+    12	
+    13	sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    14	
+    15	from flask import Flask, request, jsonify, render_template_string
+    16	from engine.agent.llm_agent import answer_query
+    17	
+    18	app = Flask(__name__)
+    19	
+    20	HTML = """
+    21	<!DOCTYPE html>
+    22	<html lang="zh">
+    23	<head><meta charset="UTF-8"><title>Culinary Mind 推理引擎</title>
+    24	<style>
+    25	body { font-family: -apple-system, "PingFang SC", sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; background: #1a1a1a; color: #f3efe3; }
+    26	h1 { font-size: 1.4rem; }
+    27	.subtitle { color: #888; font-size: 0.85rem; margin-bottom: 1.5rem; }
+    28	.chat { background: #252525; border-radius: 8px; padding: 1rem; min-height: 300px; max-height: 600px; overflow-y: auto; margin-bottom: 1rem; }
+    29	.msg { margin: 0.8rem 0; padding: 0.6rem 0.9rem; border-radius: 6px; font-size: 0.95rem; line-height: 1.5; }
+    30	.user { background: #003a4a; color: #66d9ff; }
+    31	.bot { background: #1a4d2e; color: #a3f7bf; white-space: pre-wrap; }
+    32	.bot .meta { color: #888; font-size: 0.75rem; margin-top: 0.5rem; }
+    33	.input-row { display: flex; gap: 0.5rem; }
+    34	input { flex: 1; padding: 0.7rem; background: #252525; color: #f3efe3; border: 1px solid #444; border-radius: 5px; font-size: 0.95rem; }
+    35	button { padding: 0.7rem 1.2rem; background: #1a4d2e; color: #a3f7bf; border: 1px solid #2a8d4e; border-radius: 5px; cursor: pointer; }
+    36	button:disabled { opacity: 0.5; cursor: not-allowed; }
+    37	.examples { color: #888; font-size: 0.8rem; margin: 0.8rem 0; }
+    38	.examples a { color: #66d9ff; cursor: pointer; margin-right: 1rem; }
+    39	</style></head>
+    40	<body>
+    41	<h1>🍳 Culinary Mind 推理引擎</h1>
+    42	<div class="subtitle">42 MF tools + 24K 食材树 + 23K 食谱 + 12K L0 因果链 + 81 PHN + 7K FT</div>
+    43	
+    44	<div class="chat" id="chat"></div>
+    45	
+    46	<div class="input-row">
+    47	  <input id="q" type="text" placeholder="问一个食品科学问题...(Enter 发送)" autofocus>
+    48	  <button id="send" onclick="ask()">发送</button>
+    49	</div>
+    50	
+    51	<div class="examples">
+    52	  示例：
+    53	  <a onclick="setQ(this)">维生素 C 在 90°C 降解速率？A=1e10, Ea=80kJ/mol</a>
+    54	  <a onclick="setQ(this)">蛋白质 T_d=65 dH=400 在 70°C native fraction?</a>
+    55	  <a onclick="setQ(this)">2.45 GHz E=2000 ε''=15 微波吸收功率?</a>
+    56	  <a onclick="setQ(this)">25°C 纯水比热多少 Choi-Okos?</a>
+    57	</div>
+    58	
+    59	<script>
+    60	const chat = document.getElementById('chat');
+    61	const q = document.getElementById('q');
+    62	const btn = document.getElementById('send');
+    63	
+    64	function add(text, cls, meta) {
+    65	  const d = document.createElement('div');
+    66	  d.className = 'msg ' + cls;
+    67	  d.textContent = text;
+    68	  if (meta) {
+    69	    const m = document.createElement('div');
+    70	    m.className = 'meta';
+    71	    m.textContent = meta;
+    72	    d.appendChild(m);
+    73	  }
+    74	  chat.appendChild(d);
+    75	  chat.scrollTop = chat.scrollHeight;
+    76	}
+    77	
+    78	function setQ(el) { q.value = el.textContent; q.focus(); }
+    79	
+    80	async function ask() {
+    81	  const text = q.value.trim();
+    82	  if (!text) return;
+    83	  add(text, 'user');
+    84	  q.value = '';
+    85	  btn.disabled = true; btn.textContent = '思考中...';
+    86	  try {
+    87	    const r = await fetch('/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ q: text }) });
+    88	    const data = await r.json();
+    89	    const meta = data.mf_id ? `工具: ${data.mf_id} → ${data.value} ${data.unit || ''}` : '';
+    90	    add(data.answer || '(无回答)', 'bot', meta);
+    91	  } catch (e) {
+    92	    add('错误: ' + e.message, 'bot');
+    93	  } finally {
+    94	    btn.disabled = false; btn.textContent = '发送';
+    95	    q.focus();
+    96	  }
+    97	}
+    98	
+    99	q.addEventListener('keydown', e => { if (e.key === 'Enter') ask(); });
+   100	</script>
+   101	</body></html>
+   102	"""
+   103	
+   104	
+   105	@app.route("/")
+   106	def index():
+   107	    return render_template_string(HTML)
+   108	
+   109	
+   110	@app.route("/ask", methods=["POST"])
+   111	def ask():
+   112	    data = request.get_json() or {}
+   113	    query = (data.get("q") or "").strip()
+   114	    if not query:
+   115	        return jsonify({"answer": "Empty query"})
+   116	    try:
+   117	        result = answer_query(query, verbose=False)
+   118	        return jsonify({
+   119	            "answer": result.get("answer", ""),
+   120	            "mf_id": result.get("mf_id"),
+   121	            "value": result.get("result", {}).get("value"),
+   122	            "unit": result.get("result", {}).get("unit"),
+   123	        })
+   124	    except Exception as e:
+   125	        return jsonify({"answer": f"Error: {e}"}), 500
+   126	
+   127	
+   128	if __name__ == "__main__":
+   129	    print("Starting Culinary Mind chat at http://localhost:5001")
+   130	    app.run(host="0.0.0.0", port=5001, debug=False)
+
+exec
+/bin/zsh -lc "nl -ba engine/agent/llm_agent.py | sed -n '1,240p'" in /Users/jeff/culinary-mind
+ succeeded in 0ms:
+     1	#!/usr/bin/env python3
+     2	"""Real LLM agent using Codex CLI + MF Tool Registry.
+     3	
+     4	Architecture (ReAct-style):
+     5	  user query → LLM (Codex) chooses MF tool + extracts params
+     6	  → execute via engine.agent.tool_registry → tool result
+     7	  → LLM synthesizes answer with citations + reasoning chain
+     8	
+     9	No LangGraph dependency — uses subprocess + Codex CLI.
+    10	For 真实 LangGraph upgrade later: drop in any LLM agent framework.
+    11	"""
+    12	import json
+    13	import os
+    14	import re
+    15	import subprocess
+    16	import sys
+    17	from pathlib import Path
+    18	
+    19	sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    20	
+    21	from engine.agent.tool_registry import get_all_mf_tools, get_mf_tool
+    22	
+    23	
+    24	CODEX_CMD = [
+    25	    "codex", "exec",
+    26	    "--ephemeral",
+    27	    "--ignore-user-config",
+    28	    "--dangerously-bypass-approvals-and-sandbox",
+    29	    "-s", "read-only",
+    30	    "-m", "gpt-5.4",
+    31	    "-c", "model_reasoning_effort=low",
+    32	]
+    33	
+    34	
+    35	def build_tool_catalog():
+    36	    """Return text description of all 39 MF tools for LLM prompt."""
+    37	    lines = ["Available MF (Mother Formula) tools (40 physical/chemical solvers):"]
+    38	    for t in get_all_mf_tools():
+    39	        # Skip aliases — show one entry per canonical MF
+    40	        fields = [f for f in t.inputs_schema.keys() if not f.startswith("_")][:5]
+    41	        lines.append(f"  - {t.mf_id} {t.canonical_name}: inputs={fields}")
+    42	    return "\n".join(lines)
+    43	
+    44	
+    45	def call_codex(prompt: str, timeout=120) -> str:
+    46	    """Run Codex CLI with prompt, return stdout."""
+    47	    proc = subprocess.run(
+    48	        CODEX_CMD + [prompt],
+    49	        capture_output=True, text=True, timeout=timeout,
+    50	        env={**os.environ, "NO_PROXY": "*"},
+    51	        stdin=subprocess.DEVNULL,
+    52	    )
+    53	    # Extract LLM body after "codex" marker
+    54	    out = proc.stdout
+    55	    idx = out.rfind("\ncodex\n")
+    56	    if idx < 0: idx = out.rfind("codex\n")
+    57	    if idx >= 0:
+    58	        body = out[idx + len("\ncodex\n"):]
+    59	        end = body.find("\ntokens used\n")
+    60	        if end > 0: body = body[:end]
+    61	        return body.strip()
+    62	    return out.strip()
+    63	
+    64	
+    65	def parse_tool_call(llm_response: str):
+    66	    """Extract JSON tool_call from LLM response (balanced brace)."""
+    67	    if not llm_response: return None
+    68	    # Find first { containing mf_id, then balance-match
+    69	    idx = llm_response.find('"mf_id"')
+    70	    if idx < 0: return None
+    71	    # Walk back to find opening {
+    72	    start = llm_response.rfind("{", 0, idx)
+    73	    if start < 0: return None
+    74	    # Forward balanced-brace match
+    75	    depth = 0
+    76	    in_str = False
+    77	    esc = False
+    78	    for i in range(start, len(llm_response)):
+    79	        ch = llm_response[i]
+    80	        if esc: esc = False; continue
+    81	        if ch == "\\": esc = True; continue
+    82	        if ch == '"' and not esc: in_str = not in_str; continue
+    83	        if in_str: continue
+    84	        if ch == "{": depth += 1
+    85	        elif ch == "}":
+    86	            depth -= 1
+    87	            if depth == 0:
+    88	                try:
+    89	                    return json.loads(llm_response[start:i+1])
+    90	                except json.JSONDecodeError:
+    91	                    return None
+    92	    return None
+    93	
+    94	
+    95	def answer_query(user_query: str, verbose=True) -> dict:
+    96	    """End-to-end: query → tool selection → execute → synthesize answer."""
+    97	    if verbose:
+    98	        print(f"\n{'='*80}")
+    99	        print(f"USER: {user_query}")
+   100	        print('='*80)
+   101	
+   102	    # Step 1: LLM chooses tool + params
+   103	    catalog = build_tool_catalog()
+   104	    system = f"""You are a food science reasoning agent. You have access to 40 MF solver tools.
+   105	
+   106	{catalog}
+   107	
+   108	Task: Given a user query, decide ONE tool to invoke and what params.
+   109	Reply with strict JSON only (no prose, no markdown):
+   110	{{"mf_id": "MF-T03", "params": {{"A": 1e10, "Ea": 50000, "T_K": 363}}, "reason": "Arrhenius rate at 90°C"}}
+   111	
+   112	If no tool fits, reply: {{"mf_id": "none", "reason": "..."}}"""
+   113	
+   114	    prompt = f"<system>\n{system}\n</system>\n\n<user>\n{user_query}\n</user>"
+   115	    if verbose: print(f"\nStep 1: Asking LLM to choose tool...")
+   116	    llm_out = call_codex(prompt)
+   117	    if verbose: print(f"LLM reply: {llm_out[:300]}")
+   118	
+   119	    call = parse_tool_call(llm_out)
+   120	    if not call or call.get("mf_id") == "none":
+   121	        return {"answer": "Cannot determine tool", "llm_raw": llm_out}
+   122	
+   123	    mf_id = call["mf_id"]
+   124	    params = call.get("params", {})
+   125	    reason = call.get("reason", "")
+   126	
+   127	    if verbose: print(f"\nStep 2: Invoke {mf_id} with {params}")
+   128	
+   129	    # Step 2: invoke
+   130	    try:
+   131	        tool = get_mf_tool(mf_id)
+   132	        result = tool.run(params)
+   133	    except Exception as e:
+   134	        return {"answer": f"Tool error: {e}", "mf_id": mf_id, "params": params}
+   135	
+   136	    if verbose:
+   137	        print(f"\nResult: validity={result['validity']['passed']}")
+   138	        print(f"        value={result['result']['value']} {result['result']['unit']}")
+   139	
+   140	    # Step 3: synthesize answer
+   141	    syn_prompt = f"""<system>
+   142	You are a food science explainer. Convert this tool result into a natural-language answer in {'Chinese' if any(ord(c)>127 for c in user_query) else 'English'}.
+   143	</system>
+   144	
+   145	<user>
+   146	Query: {user_query}
+   147	Tool: {mf_id} ({tool.canonical_name})
+   148	Reason for choosing: {reason}
+   149	Params: {json.dumps(params, ensure_ascii=False)}
+   150	Result: {result['result']['symbol']} = {result['result']['value']:.4g} {result['result']['unit']}
+   151	Validity: {result['validity']['passed']}
+   152	Assumptions: {result['assumptions']}
+   153	
+   154	Compose a short answer with citation to {mf_id}.
+   155	</user>"""
+   156	
+   157	    if verbose: print(f"\nStep 3: Synthesize answer...")
+   158	    final = call_codex(syn_prompt)
+   159	
+   160	    return {
+   161	        "answer": final,
+   162	        "mf_id": mf_id,
+   163	        "canonical_name": tool.canonical_name,
+   164	        "params": params,
+   165	        "result": result["result"],
+   166	        "validity": result["validity"]["passed"],
+   167	    }
+   168	
+   169	
+   170	def main():
+   171	    queries = [
+   172	        "若以 90°C 加热酶，活化能 60 kJ/mol，速率常数是多少？",
+   173	        "5cm 牛肉块沸水煮 30 分钟，中心温度估计是多少？",
+   174	        "凝固蛋白的 sigmoid 温度范围，T_d=65°C dH=400 kJ/mol，65°C 时 native fraction?",
+   175	    ]
+   176	    for q in queries:
+   177	        result = answer_query(q, verbose=True)
+   178	        print(f"\n{'='*80}\nFINAL ANSWER:\n{result.get('answer', 'N/A')[:500]}")
+   179	        print('='*80)
+   180	
+   181	
+   182	if __name__ == "__main__":
+   183	    main()
+
+codex
+## `engine/agent/llm_agent_v2.py`
+
+**VERDICT:** Needs revision before production. The overall chain shape is reasonable, and `get_mf_tool()` is used correctly at the call site, but the JSON contract, substitution engine, and failure handling are too brittle for reliable multi-step execution.
+
+**BUGS**
+- **P0** [lines 169-180](#/Users/jeff/culinary-mind/engine/agent/llm_agent_v2.py:169): step substitution can crash the whole chain when a referenced prior step exists in `history` but has no `"value"` because it failed. `ref_result["value"]` will raise `KeyError`, and this happens outside the per-step `try/except`.
+- **P1** [lines 169-180](#/Users/jeff/culinary-mind/engine/agent/llm_agent_v2.py:169): substitution is indexed by `history[ref_step-1]`, not by actual `step` number. Any skipped step, non-contiguous numbering, repeated numbering, or planner emitting `mf_id="none"` breaks referential correctness.
+- **P1** [lines 170-172](#/Users/jeff/culinary-mind/engine/agent/llm_agent_v2.py:170): substitution only handles a full-string exact token like `"{step3.value}"`. It does not handle embedded strings, nested dicts/lists, or multiple references in one value, so realistic planner outputs will silently pass unresolved placeholders into tools.
+- **P1** [lines 142-155](#/Users/jeff/culinary-mind/engine/agent/llm_agent_v2.py:142): the planning prompt asks for “strict JSON” but the example body contains non-JSON ellipsis placeholders (`...`) and loosely specified params. That weakens structured-output reliability and makes `parse_json()` do recovery work it should not need to do.
+- **P1** [lines 35-50](#/Users/jeff/culinary-mind/engine/agent/llm_agent_v2.py:35): `call_codex()` ignores nonzero exit status and stderr, and does not catch `subprocess.TimeoutExpired`. A timeout or CLI failure can terminate the request path instead of returning a controlled error.
+- **P2** [lines 53-76](#/Users/jeff/culinary-mind/engine/agent/llm_agent_v2.py:53): `parse_json()` is a best-effort brace extractor with silent `except:`. If Codex returns multiple JSON objects or malformed-but-recoverable text, failure is opaque and hard to debug.
+- **P2** Recipe→FT substring risk: not implemented in this file.
+
+**IMPROVEMENTS**
+- Replace free-form JSON prompting with a tighter schema: require `plan` only, forbid extra text, require `step` to be contiguous starting at 1, and require every `params` value to be either a literal or a reference token.
+- Build a `step_results: dict[int, dict]` map keyed by actual step number and resolve references recursively through dicts/lists/strings.
+- Fail closed on unresolved references before invoking a tool.
+- Validate `mf_id` and parameter names against `get_mf_tool(mf_id).inputs_schema` before `tool.run()`.
+- Add timeout/retry/error normalization around both planning and synthesis, with stderr/returncode captured into the returned payload.
+
+## `scripts/benchmark/bare_vs_graph_bench.py`
+
+**VERDICT:** Fine as an ad hoc experiment harness, not production-grade benchmarking. It does not exercise the new multi-step agent, and it is weak against failures and inherited upstream selection bugs.
+
+**BUGS**
+- **P1** [lines 59-71](#/Users/jeff/culinary-mind/scripts/benchmark/bare_vs_graph_bench.py:59): `graph_agent()` has no error handling. Any exception from `answer_query()` aborts the entire benchmark run.
+- **P1** [lines 32-56](#/Users/jeff/culinary-mind/scripts/benchmark/bare_vs_graph_bench.py:32): `bare_llm()` ignores nonzero exit status and stderr, and does not catch timeouts explicitly. A CLI failure is recorded as an empty/partial answer instead of a benchmark failure mode.
+- **P1** [line 25](#/Users/jeff/culinary-mind/scripts/benchmark/bare_vs_graph_bench.py:25): this benchmarks `engine.agent.llm_agent.answer_query`, not `llm_agent_v2.answer_multistep`. So it does not validate the new chain planner, step substitution logic, or structured multi-step JSON behavior at all.
+- **P2** [lines 9-14, 64-70](#/Users/jeff/culinary-mind/scripts/benchmark/bare_vs_graph_bench.py:9): docstring says Pipeline B saves tokens, but the implementation does not collect or emit tokens for the agent path.
+- **P2** Recipe→FT substring risk: no local matching here, but this benchmark set is all MF numeric queries, so it would not catch over-matching on short `aesthetic_word_en` even if the upstream agent path regressed.
+
+**IMPROVEMENTS**
+- Catch and record per-query failures for both pipelines instead of aborting the run.
+- Benchmark `llm_agent_v2` separately; right now the script does not prove anything about the new agent.
+- Add result fields for `returncode`, `stderr`, timeout flag, and parse-success flag.
+- Add FT/recipe retrieval cases specifically designed to expose short-token over-match cases like `soft`, `hard`, `dry`, `firm`.
+- Add repeated runs or seeded controls if you want comparative stats instead of anecdotal outputs.
+
+## `engine/agent/web_chat.py`
+
+**VERDICT:** Acceptable as a minimal local demo UI, not hardened for production exposure. Tool-registry usage is indirect through `answer_query()`, so correctness is inherited from that agent path rather than enforced here.
+
+**BUGS**
+- **P1** [lines 116-125](#/Users/jeff/culinary-mind/engine/agent/web_chat.py:116): raw exception text is returned to clients. That leaks internals and makes operational behavior noisy and unstable.
+- **P1** [lines 117-123, 128-130](#/Users/jeff/culinary-mind/engine/agent/web_chat.py:117): request handling has no timeout, retry, cancellation, or concurrency protection around the downstream LLM/tool call. A hung Codex subprocess can tie up the Flask worker indefinitely.
+- **P1** [line 130](#/Users/jeff/culinary-mind/engine/agent/web_chat.py:130): `app.run(host="0.0.0.0", ...)` exposes the dev server broadly with no auth or rate limiting. Fine for a controlled LAN demo, not okay for production.
+- **P2** [line 42](#/Users/jeff/culinary-mind/engine/agent/web_chat.py:42): the UI claims `42 MF tools`, while the registry/comments elsewhere say `40`. That undermines trust in the system description.
+- **P2** Recipe→FT substring risk: not implemented in this file; any such risk would be inherited from the agent/query backend, not the web shell.
+
+**IMPROVEMENTS**
+- Return structured error JSON with a stable error code and generic message; log the exception server-side.
+- Put the LLM/tool call behind a bounded timeout and surface timeout separately from generic failure.
+- Run behind a real WSGI/ASGI server if this is meant for shared use.
+- Add basic input length limits and request logging.
+- If FT-backed recipe retrieval is added later, do not expose substring-matched FT results in the UI without backend confidence thresholds or exact-match/token-match guards.
+
+## Cross-cutting note on Recipe→FT substring risk
+
+**VERDICT:** I do not see Recipe→FT substring matching implemented in the three reviewed files. The risk is therefore **not local here**.
+
+**BUGS**
+- **P1** Inherited-system risk: both `bare_vs_graph_bench.py` and `web_chat.py` call [`engine/agent/llm_agent.py`](#/Users/jeff/culinary-mind/engine/agent/llm_agent.py:95), so if FT retrieval is later added there using naive substring matching on `aesthetic_word_en`, these wrappers will propagate the bug without detection.
+- **P2** The current benchmark suite does not contain adversarial FT cases, so it would miss over-matching on short descriptors.
+
+**IMPROVEMENTS**
+- Guard FT matching with token-boundary or embedding/rerank logic, not raw substring on short adjectives.
+- Special-case short/high-frequency words such as `soft`, `hard`, `dry`, `firm`, `wet`, `smooth`.
+- Add negative tests where recipe text contains common adjectives unrelated to the intended FT node.
+tokens used
+58,504
+## `engine/agent/llm_agent_v2.py`
+
+**VERDICT:** Needs revision before production. The overall chain shape is reasonable, and `get_mf_tool()` is used correctly at the call site, but the JSON contract, substitution engine, and failure handling are too brittle for reliable multi-step execution.
+
+**BUGS**
+- **P0** [lines 169-180](#/Users/jeff/culinary-mind/engine/agent/llm_agent_v2.py:169): step substitution can crash the whole chain when a referenced prior step exists in `history` but has no `"value"` because it failed. `ref_result["value"]` will raise `KeyError`, and this happens outside the per-step `try/except`.
+- **P1** [lines 169-180](#/Users/jeff/culinary-mind/engine/agent/llm_agent_v2.py:169): substitution is indexed by `history[ref_step-1]`, not by actual `step` number. Any skipped step, non-contiguous numbering, repeated numbering, or planner emitting `mf_id="none"` breaks referential correctness.
+- **P1** [lines 170-172](#/Users/jeff/culinary-mind/engine/agent/llm_agent_v2.py:170): substitution only handles a full-string exact token like `"{step3.value}"`. It does not handle embedded strings, nested dicts/lists, or multiple references in one value, so realistic planner outputs will silently pass unresolved placeholders into tools.
+- **P1** [lines 142-155](#/Users/jeff/culinary-mind/engine/agent/llm_agent_v2.py:142): the planning prompt asks for “strict JSON” but the example body contains non-JSON ellipsis placeholders (`...`) and loosely specified params. That weakens structured-output reliability and makes `parse_json()` do recovery work it should not need to do.
+- **P1** [lines 35-50](#/Users/jeff/culinary-mind/engine/agent/llm_agent_v2.py:35): `call_codex()` ignores nonzero exit status and stderr, and does not catch `subprocess.TimeoutExpired`. A timeout or CLI failure can terminate the request path instead of returning a controlled error.
+- **P2** [lines 53-76](#/Users/jeff/culinary-mind/engine/agent/llm_agent_v2.py:53): `parse_json()` is a best-effort brace extractor with silent `except:`. If Codex returns multiple JSON objects or malformed-but-recoverable text, failure is opaque and hard to debug.
+- **P2** Recipe→FT substring risk: not implemented in this file.
+
+**IMPROVEMENTS**
+- Replace free-form JSON prompting with a tighter schema: require `plan` only, forbid extra text, require `step` to be contiguous starting at 1, and require every `params` value to be either a literal or a reference token.
+- Build a `step_results: dict[int, dict]` map keyed by actual step number and resolve references recursively through dicts/lists/strings.
+- Fail closed on unresolved references before invoking a tool.
+- Validate `mf_id` and parameter names against `get_mf_tool(mf_id).inputs_schema` before `tool.run()`.
+- Add timeout/retry/error normalization around both planning and synthesis, with stderr/returncode captured into the returned payload.
+
+## `scripts/benchmark/bare_vs_graph_bench.py`
+
+**VERDICT:** Fine as an ad hoc experiment harness, not production-grade benchmarking. It does not exercise the new multi-step agent, and it is weak against failures and inherited upstream selection bugs.
+
+**BUGS**
+- **P1** [lines 59-71](#/Users/jeff/culinary-mind/scripts/benchmark/bare_vs_graph_bench.py:59): `graph_agent()` has no error handling. Any exception from `answer_query()` aborts the entire benchmark run.
+- **P1** [lines 32-56](#/Users/jeff/culinary-mind/scripts/benchmark/bare_vs_graph_bench.py:32): `bare_llm()` ignores nonzero exit status and stderr, and does not catch timeouts explicitly. A CLI failure is recorded as an empty/partial answer instead of a benchmark failure mode.
+- **P1** [line 25](#/Users/jeff/culinary-mind/scripts/benchmark/bare_vs_graph_bench.py:25): this benchmarks `engine.agent.llm_agent.answer_query`, not `llm_agent_v2.answer_multistep`. So it does not validate the new chain planner, step substitution logic, or structured multi-step JSON behavior at all.
+- **P2** [lines 9-14, 64-70](#/Users/jeff/culinary-mind/scripts/benchmark/bare_vs_graph_bench.py:9): docstring says Pipeline B saves tokens, but the implementation does not collect or emit tokens for the agent path.
+- **P2** Recipe→FT substring risk: no local matching here, but this benchmark set is all MF numeric queries, so it would not catch over-matching on short `aesthetic_word_en` even if the upstream agent path regressed.
+
+**IMPROVEMENTS**
+- Catch and record per-query failures for both pipelines instead of aborting the run.
+- Benchmark `llm_agent_v2` separately; right now the script does not prove anything about the new agent.
+- Add result fields for `returncode`, `stderr`, timeout flag, and parse-success flag.
+- Add FT/recipe retrieval cases specifically designed to expose short-token over-match cases like `soft`, `hard`, `dry`, `firm`.
+- Add repeated runs or seeded controls if you want comparative stats instead of anecdotal outputs.
+
+## `engine/agent/web_chat.py`
+
+**VERDICT:** Acceptable as a minimal local demo UI, not hardened for production exposure. Tool-registry usage is indirect through `answer_query()`, so correctness is inherited from that agent path rather than enforced here.
+
+**BUGS**
+- **P1** [lines 116-125](#/Users/jeff/culinary-mind/engine/agent/web_chat.py:116): raw exception text is returned to clients. That leaks internals and makes operational behavior noisy and unstable.
+- **P1** [lines 117-123, 128-130](#/Users/jeff/culinary-mind/engine/agent/web_chat.py:117): request handling has no timeout, retry, cancellation, or concurrency protection around the downstream LLM/tool call. A hung Codex subprocess can tie up the Flask worker indefinitely.
+- **P1** [line 130](#/Users/jeff/culinary-mind/engine/agent/web_chat.py:130): `app.run(host="0.0.0.0", ...)` exposes the dev server broadly with no auth or rate limiting. Fine for a controlled LAN demo, not okay for production.
+- **P2** [line 42](#/Users/jeff/culinary-mind/engine/agent/web_chat.py:42): the UI claims `42 MF tools`, while the registry/comments elsewhere say `40`. That undermines trust in the system description.
+- **P2** Recipe→FT substring risk: not implemented in this file; any such risk would be inherited from the agent/query backend, not the web shell.
+
+**IMPROVEMENTS**
+- Return structured error JSON with a stable error code and generic message; log the exception server-side.
+- Put the LLM/tool call behind a bounded timeout and surface timeout separately from generic failure.
+- Run behind a real WSGI/ASGI server if this is meant for shared use.
+- Add basic input length limits and request logging.
+- If FT-backed recipe retrieval is added later, do not expose substring-matched FT results in the UI without backend confidence thresholds or exact-match/token-match guards.
+
+## Cross-cutting note on Recipe→FT substring risk
+
+**VERDICT:** I do not see Recipe→FT substring matching implemented in the three reviewed files. The risk is therefore **not local here**.
+
+**BUGS**
+- **P1** Inherited-system risk: both `bare_vs_graph_bench.py` and `web_chat.py` call [`engine/agent/llm_agent.py`](#/Users/jeff/culinary-mind/engine/agent/llm_agent.py:95), so if FT retrieval is later added there using naive substring matching on `aesthetic_word_en`, these wrappers will propagate the bug without detection.
+- **P2** The current benchmark suite does not contain adversarial FT cases, so it would miss over-matching on short descriptors.
+
+**IMPROVEMENTS**
+- Guard FT matching with token-boundary or embedding/rerank logic, not raw substring on short adjectives.
+- Special-case short/high-frequency words such as `soft`, `hard`, `dry`, `firm`, `wet`, `smooth`.
+- Add negative tests where recipe text contains common adjectives unrelated to the intended FT node.
