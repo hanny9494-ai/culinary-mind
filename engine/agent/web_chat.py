@@ -107,22 +107,77 @@ def index():
     return render_template_string(HTML)
 
 
+import time as _time
+import json as _json
+from pathlib import Path as _Path
+
+# Log path: output/web_chat_history.jsonl (one JSON per query)
+_LOG_DIR = _Path("/Users/jeff/culinary-mind/output")
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+_LOG_FILE = _LOG_DIR / "web_chat_history.jsonl"
+
+
+def _log_query(record):
+    """Append structured record to history JSONL."""
+    try:
+        with open(_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 @app.route("/ask", methods=["POST"])
 def ask():
     data = request.get_json() or {}
     query = (data.get("q") or "").strip()
     if not query:
         return jsonify({"answer": "Empty query"})
+    t0 = _time.time()
     try:
         result = answer_query(query, verbose=False)
+        elapsed_s = round(_time.time() - t0, 2)
+        record = {
+            "ts": _time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "query": query,
+            "mode": result.get("mode") or ("mf_tool" if result.get("mf_id") else "unknown"),
+            "mf_id": result.get("mf_id"),
+            "tool_value": result.get("result", {}).get("value"),
+            "tool_unit": result.get("result", {}).get("unit"),
+            "tool_validity": result.get("validity"),
+            "keywords": result.get("keywords"),
+            "context_n": result.get("context_n"),
+            "elapsed_s": elapsed_s,
+            "answer_preview": (result.get("answer") or "")[:200],
+        }
+        _log_query(record)
+        # Print to stdout so /tmp/web_chat.log captures it
+        print(f"[QUERY {elapsed_s}s] mode={record['mode']} tool={record['mf_id']} ctx={record.get('context_n')} kw={record.get('keywords')}")
+        print(f"  Q: {query[:120]}")
+        print(f"  A: {record['answer_preview'][:120]}")
         return jsonify({
             "answer": result.get("answer", ""),
             "mf_id": result.get("mf_id"),
+            "mode": result.get("mode"),
             "value": result.get("result", {}).get("value"),
             "unit": result.get("result", {}).get("unit"),
+            "keywords": result.get("keywords"),
         })
     except Exception as e:
+        _log_query({"ts": _time.strftime("%Y-%m-%dT%H:%M:%S"), "query": query, "error": str(e)})
+        print(f"[ERROR] Q: {query[:100]} → {e}")
         return jsonify({"answer": f"Error: {e}"}), 500
+
+
+@app.route("/history")
+def history():
+    """Browse query history JSONL."""
+    items = []
+    if _LOG_FILE.exists():
+        for line in _LOG_FILE.read_text(encoding="utf-8").splitlines()[-50:]:
+            try:
+                items.append(_json.loads(line))
+            except: pass
+    return jsonify({"items": items, "total": len(items)})
 
 
 if __name__ == "__main__":
