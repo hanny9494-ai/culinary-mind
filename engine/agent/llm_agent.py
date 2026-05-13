@@ -172,87 +172,178 @@ Compose a short answer with citation to {mf_id}.
 
 
 def knowledge_query_fallback(user_query: str, verbose=True) -> dict:
-    """Knowledge query path: lookup graph context + Codex synthesizes natural answer.
+    """Science-grounded knowledge query.
 
-    Used when no MF tool fits (e.g., comparison, technique, recipe lookup).
-    Pulls relevant Recipe/Step/PHN/Ingredient context via Neo4j keyword match.
+    Strategy:
+    1. Extract keywords + map to PHN (Chinese culinary terms → phn_id)
+    2. For each PHN, pull MF tools + L0 evidence + parameter ranges
+    3. Match recipes by name (loose)
+    4. LLM synthesizes answer USING graph science, not fallback to general knowledge
     """
-    # 1. Extract noun keywords (Chinese terms + English)
     import re
-    chinese_terms = re.findall(r"[\u4e00-\u9fff]{2,8}", user_query)
-    english_terms = re.findall(r"[a-zA-Z]{3,20}", user_query)
-    keywords = list(set(chinese_terms + english_terms))[:8]
-    if verbose: print(f"  Keywords extracted: {keywords}")
+    import json as _json
 
-    # 2. Query Neo4j for relevant context
-    context_pieces = []
+    # 1. PHN keyword mapping (Chinese + English → real phn_id in graph)
+    PHN_KEYWORDS = [
+        (r"腌渍|腌|盐渍|盐腌|brining|brine|cure|curing|salt[- ]cure", "brining_curing"),
+        (r"风干|挂水|脱水|干燥|dehydrate|drying|air[- ]?dry", "moisture_migration"),
+        (r"炸|油炸|deep[- ]?fry|frying", "deep_frying_dynamics"),
+        (r"美拉德|焦|褐变|maillard|browning|焦化", "maillard_browning"),
+        (r"焦糖|caramel|caramelize", "caramelization"),
+        (r"脆|crisp|crunch|脆度", "crispness_fracture_mechanics"),
+        (r"蛋白质.*变性|protein.*denat|protein.*coag|凝固", "protein_thermal_denaturation"),
+        (r"水活度|water activity|\baw\b|a_w", "water_activity_preservation"),
+        (r"巴氏|pasteur|灭菌|sterilize|杀菌|thermal kill", "thermal_microbial_inactivation"),
+        (r"发酵|ferment|leaven|乳酸", "lactic_acid_fermentation"),
+        (r"乳化|emulsion|乳浊", "emulsion_formation_stability"),
+        (r"冷冻|freeze|结冰|ice crystal", "freezing_ice_crystal_formation"),
+        (r"淀粉.*糊化|starch.*gel|gelatinization", "starch_gelatinization"),
+        (r"sous[- ]?vide|低温慢煮|低温烹饪", "sous_vide_precision_cooking"),
+        (r"扩散|diffusion", "osmotic_diffusion"),
+        (r"鲜味|umami", "umami_taste_synergy"),
+        (r"弹性|texture|质构|firm", "texture_firming_window"),
+        (r"glutamate|MSG|味精", "umami_taste_synergy"),
+    ]
+
+    matched_phns = []
+    for pat, phn_id in PHN_KEYWORDS:
+        if re.search(pat, user_query, re.IGNORECASE):
+            if phn_id not in matched_phns:
+                matched_phns.append(phn_id)
+    if verbose: print(f"  PHN matched: {matched_phns}")
+
+    # 2. Extract general keywords (for Recipe / L0 / L2A name search)
+    chinese = re.findall(r"[\u4e00-\u9fff]{2,8}", user_query)
+    english = re.findall(r"[a-zA-Z]{3,20}", user_query)
+    keywords = list(dict.fromkeys(chinese + english))[:6]
+
+    science_blocks = []
+    recipe_examples = []
+    l2a_pieces = []
+
     try:
         from neo4j import GraphDatabase
         driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "cmind_p1_33_proto"))
         with driver.session() as sess:
-            # 2a. Match recipes by name
-            for kw in keywords[:5]:
-                if len(kw) < 2: continue
-                recipes = sess.run(
-                    "MATCH (r:CKG_L2B_TMP_Recipe) WHERE r.name CONTAINS $kw "
-                    "RETURN r.name AS name, r.book_id AS book LIMIT 3",
-                    kw=kw
+            # 3. For each matched PHN, pull governing MFs + L0 evidence
+            for phn_id in matched_phns:
+                phn_node = sess.run(
+                    "MATCH (p:CKG_PHN {phn_id: $phn}) RETURN p.phn_id AS phn, p.name_en AS name_en, p.l0_atom_count AS n_l0",
+                    phn=phn_id
+                ).single()
+                if not phn_node: continue
+                mfs = sess.run(
+                    "MATCH (m:CKG_MF)-[:GOVERNS_PHN]->(p:CKG_PHN {phn_id: $phn}) "
+                    "RETURN m.mf_id AS mf_id, m.canonical_name AS name",
+                    phn=phn_id
                 ).data()
-                for r in recipes:
-                    context_pieces.append(f"Recipe '{r['name']}' ({r['book']})")
-            
-            # 2b. Match L0 causal-chain evidence
-            for kw in keywords[:3]:
-                if len(kw) < 2: continue
                 l0s = sess.run(
-                    "MATCH (l:CKG_L0_TMP_Principle) WHERE l.scientific_statement CONTAINS $kw "
-                    "RETURN l.scientific_statement AS stmt, l.book_id AS book LIMIT 3",
-                    kw=kw
+                    "MATCH (l:CKG_L0_TMP_Principle)-[:TAGGED_BY_PHN]->(p:CKG_PHN {phn_id: $phn}) "
+                    "RETURN l.scientific_statement AS stmt, l.book_id AS book LIMIT 4",
+                    phn=phn_id
                 ).data()
-                for l in l0s:
-                    context_pieces.append(f"L0 principle ({l['book']}): {(l['stmt'] or '')[:150]}")
+                # Sample real recipe steps that trigger this PHN
+                steps = sess.run(
+                    "MATCH (s:CKG_L2B_TMP_Step)-[:TRIGGERS_PHN]->(p:CKG_PHN {phn_id: $phn}) "
+                    "WHERE s.temp_c IS NOT NULL "
+                    "RETURN s.action AS action, s.temp_c AS T, s.duration_min AS dur LIMIT 3",
+                    phn=phn_id
+                ).data()
+                science_blocks.append({
+                    "phn": phn_id,
+                    "n_l0_total": phn_node.get("n_l0"),
+                    "governing_mfs": mfs,
+                    "l0_evidence": l0s,
+                    "real_recipe_examples": steps,
+                })
 
-            # 2c. Match L2A ingredient
+            # 4. L2A ingredient lookup (chicken/duck/etc)
             for kw in keywords[:3]:
                 if len(kw) < 2: continue
                 ings = sess.run(
-                    "MATCH (i:CKG_L2A_Ingredient) WHERE i.display_name_zh CONTAINS $kw OR i.display_name_en CONTAINS $kw "
+                    "MATCH (i:CKG_L2A_Ingredient) "
+                    "WHERE i.display_name_zh CONTAINS $kw OR i.display_name_en CONTAINS $kw "
                     "OPTIONAL MATCH (i)-[:IS_A]->(p) "
-                    "RETURN i.canonical_id AS cid, i.display_name_zh AS zh, collect(DISTINCT p.canonical_id) AS parents LIMIT 3",
+                    "RETURN i.canonical_id AS cid, i.display_name_zh AS zh, collect(DISTINCT p.canonical_id) AS parents LIMIT 2",
                     kw=kw
                 ).data()
                 for i in ings:
-                    context_pieces.append(f"L2A ingredient '{i['cid']}' ({i['zh']}) IS_A {i['parents']}")
+                    l2a_pieces.append(f"{i['cid']} ({i.get('zh','')}) IS_A {i['parents']}")
+
+            # 5. Recipe examples (existing)
+            for kw in keywords[:3]:
+                if len(kw) < 2: continue
+                recipes = sess.run(
+                    "MATCH (r:CKG_L2B_TMP_Recipe) WHERE r.name CONTAINS $kw "
+                    "RETURN r.name AS name, r.book_id AS book LIMIT 2",
+                    kw=kw
+                ).data()
+                for r in recipes:
+                    recipe_examples.append(f"{r['name']} ({r['book']})")
+
         driver.close()
     except Exception as e:
         if verbose: print(f"  Neo4j unreachable: {e}")
-    
-    # Deduplicate + cap
-    context_pieces = list(dict.fromkeys(context_pieces))[:15]
-    if verbose: print(f"  Context pieces: {len(context_pieces)}")
 
-    # 3. Codex synthesizes answer with context
-    context_text = "\n".join(f"- {c}" for c in context_pieces) if context_pieces else "(无相关图数据)"
+    # 6. Build prompt with structured science context
+    science_text = ""
+    for sb in science_blocks:
+        science_text += f"\n\n### PHN: {sb['phn']}\n"
+        if sb.get('governing_mfs'):
+            mfs_str = ", ".join(f"{m['mf_id']} ({m['name']})" for m in sb['governing_mfs'])
+            science_text += f"  Governing MF tools: {mfs_str}\n"
+        if sb.get('real_recipe_examples'):
+            ex = ", ".join(f"{e['action']}@{e['T']}°C×{e['dur']}min" for e in sb['real_recipe_examples'] if e['T'])
+            science_text += f"  Real recipe examples: {ex}\n"
+        if sb.get('l0_evidence'):
+            science_text += "  L0 scientific evidence:\n"
+            for e in sb['l0_evidence'][:3]:
+                science_text += f"    - {(e['stmt'] or '')[:200]} ({e.get('book','')})\n"
+
+    if not science_blocks:
+        science_text = "(No PHN matched in graph; will use general knowledge)"
+
+    recipes_text = "\n".join(f"- {r}" for r in recipe_examples[:5]) if recipe_examples else "(无 direct recipe match)"
+    l2a_text = "\n".join(f"- {l}" for l in l2a_pieces[:5]) if l2a_pieces else ""
+
     syn_prompt = f"""<system>
-You are a food-science explainer with access to a knowledge graph.
-The user asked a culinary question. Use the graph context below to answer naturally.
-If graph context is insufficient, answer based on general culinary knowledge but note "(从通用知识)".
-Reply in user's language (中文 if 中文 query). Cite specific recipes/L0 principles where relevant.
+You are a food-science assistant grounded in a knowledge graph (PHN/MF/L0).
+
+REQUIRED behavior:
+1. For each step or claim, identify which PHN (phenomenon) governs it
+2. Cite the MF tool(s) that model that PHN
+3. Provide specific numerical ranges (temperature, time, concentration) — pull from L0 evidence or real recipe examples in the context
+4. Reference L0 evidence in the format: "(L0: book_id - statement excerpt)"
+5. Only mark "(从通用知识)" for things NOT in the graph context
+6. Reply in 中文 if 中文 query, else English
+
+Available graph science:
+{science_text}
+
+Real recipe examples (by name match):
+{recipes_text}
+
+L2A ingredient context (if relevant):
+{l2a_text}
 </system>
 
 <user>
-Question: {user_query}
-
-Graph context:
-{context_text}
+{user_query}
 </user>"""
-    final = call_codex(syn_prompt)
+
+    if verbose: print(f"  Graph science blocks: {len(science_blocks)} PHNs, {len(recipe_examples)} recipes, {len(l2a_pieces)} L2A pieces")
+
+    final = call_codex(syn_prompt, timeout=180)
     return {
         "answer": final,
-        "mode": "knowledge_query",
+        "mode": "knowledge_query_science",
+        "matched_phns": matched_phns,
+        "n_governing_mfs": sum(len(sb.get('governing_mfs') or []) for sb in science_blocks),
+        "n_l0_evidence": sum(len(sb.get('l0_evidence') or []) for sb in science_blocks),
+        "n_recipe_examples": len(recipe_examples),
         "keywords": keywords,
-        "context_n": len(context_pieces),
     }
+
 
 
 def main():
